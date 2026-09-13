@@ -4,6 +4,14 @@ from pathlib import Path
 path = Path("Shirox/Services/NetworkFetch.swift")
 text = path.read_text(encoding="utf-8")
 
+# NetworkFetch.swift contains an earlier Simple monitor with similarly named methods.
+# Only patch the full NetworkFetchMonitor section after this marker so helper methods
+# land in the class that owns interactiveSerienStream/originalUrlString.
+section_marker = "// MARK: - NetworkFetchManager"
+if section_marker not in text:
+    raise SystemExit("v3: NetworkFetchManager marker not found")
+head, tail = text.split(section_marker, 1)
+
 # 1) After showing the exact episode page, automatically press the matching provider button
 #    (NOT the CAPTCHA). This triggers SerienStream's own Turnstile modal on the episode page.
 old = '''            webView.load(request)
@@ -30,10 +38,11 @@ new = '''            webView.load(request)
                 }
             }
         }'''
-if old not in text:
-    raise SystemExit("v3: interaction block not found")
-text = text.replace(old, new, 1)
+if old not in tail:
+    raise SystemExit("v3: interaction block not found in NetworkFetchMonitor")
+tail = tail.replace(old, new, 1)
 
+# Insert the helper into NetworkFetchMonitor, never into NetworkFetchSimpleMonitor.
 marker = '''    private func setupWebView() {
         let config = WKWebViewConfiguration()'''
 method = '''    private func armSerienStreamProviderButton() {
@@ -48,19 +57,18 @@ method = '''    private func armSerienStreamProviderButton() {
             let attempts = 0;
             const timer = setInterval(function() {
                 attempts++;
+                const challengeVisible = !!document.querySelector('iframe[src*="challenges.cloudflare.com"], iframe[src*="turnstile"], .cf-turnstile');
                 const nodes = Array.from(document.querySelectorAll('[data-play-url],[data-playurl],a[href]'));
                 const hit = nodes.find(function(el) {
                     const raw = el.getAttribute('data-play-url') || el.getAttribute('data-playurl') || el.getAttribute('href') || '';
                     if (!raw) return false;
                     try { return new URL(raw, location.origin).href === target; } catch(e) { return false; }
                 });
-                if (hit) {
-                    clearInterval(timer);
+                if (hit && !challengeVisible) {
                     try { hit.click(); } catch(e) {}
-                } else if (attempts >= 30) {
-                    clearInterval(timer);
                 }
-            }, 350);
+                if (attempts >= 180) clearInterval(timer);
+            }, 500);
         })();
         """
         webView.evaluateJavaScript(js, completionHandler: nil)
@@ -68,9 +76,9 @@ method = '''    private func armSerienStreamProviderButton() {
 
     private func setupWebView() {
         let config = WKWebViewConfiguration()'''
-if marker not in text:
-    raise SystemExit("v3: setupWebView marker not found")
-text = text.replace(marker, method, 1)
+if marker not in tail:
+    raise SystemExit("v3: setupWebView marker not found in NetworkFetchMonitor")
+tail = tail.replace(marker, method, 1)
 
 # 2) Strengthen the visible ad blocker without touching Cloudflare's challenge frame.
 needle = '''                document.querySelectorAll('.adsbygoogle,.advertisement,.ad-container,[data-ad],[id^="ad-"] ,[class^="ad-"]').forEach(function(el) {
@@ -95,12 +103,12 @@ replacement = '''                document.querySelectorAll('.adsbygoogle,.advert
                     try { if (box && box !== document.body) box.remove(); } catch(e) {}
                 });
             };'''
-if needle not in text:
-    raise SystemExit("v3: ad clean block not found")
-text = text.replace(needle, replacement, 1)
+if needle not in tail:
+    raise SystemExit("v3: ad clean block not found in NetworkFetchMonitor")
+tail = tail.replace(needle, replacement, 1)
 
-# 3) Keep external provider redirects blocked from display, but because addRequest() runs first,
-#    the existing cutoff logic still captures the provider URL and closes the resolver when found.
+# 3) External provider redirects remain blocked from the visible WebView by the first patch.
+#    addRequest() still sees them first, so the existing cutoff logic can return the provider URL.
 
-path.write_text(text, encoding="utf-8")
-print("Applied SerienStream v3 provider-trigger + stronger adblock patch")
+path.write_text(head + section_marker + tail, encoding="utf-8")
+print("Applied SerienStream v3 provider-trigger + stronger adblock patch (NetworkFetchMonitor only)")
