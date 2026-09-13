@@ -12,6 +12,8 @@ SCHEME_NAME="Shirox_iOS"
 
 echo "--- Applying SerienStream interactive verification patch ---"
 python3 "$WORKING_LOCATION/patch_serienstream_interactive.py"
+echo "--- Applying SerienStream continuation/adblock patch ---"
+python3 "$WORKING_LOCATION/patch_serienstream_interactive_v3.py"
 
 if [ ! -d "build" ]; then
    mkdir build
