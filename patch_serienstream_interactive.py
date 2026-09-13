@@ -50,8 +50,8 @@ new = '''            if interactiveSerienStream {
             loadURL(url: url, headers: options.headers)
             #if os(iOS)
             if interactiveSerienStream, let webView {
-                // Shirox already has a high-level visible browser window used for manual
-                // Cloudflare verification. Reuse it; no CAPTCHA is solved automatically.
+                // Reuse Shirox's existing high-level verification window. The page is fully
+                // user-controlled: no CAPTCHA/Turnstile click is automated.
                 CloudflareBypassManager.shared.activeBypassWebView = webView
             }
             #endif
@@ -69,36 +69,15 @@ needle = '''    private func setupWebView() {
 interactive_method = '''    private func setupInteractiveSerienStreamWebView() {
         #if !os(tvOS)
         let config = WKWebViewConfiguration()
-        // Use the shared store so a login/session established by earlier networkFetch calls
-        // remains available while the user manually completes the provider verification.
+        // Use the shared store so login/session cookies from earlier networkFetch calls survive.
         config.websiteDataStore = .default()
         #if os(iOS)
         config.allowsInlineMediaPlayback = true
         #endif
         config.mediaTypesRequiringUserActionForPlayback = []
 
-        // Do not spoof navigator properties or auto-click anything here. Turnstile should see
-        // a normal WKWebView and the user performs the verification themselves.
-        let bridge = WKUserScript(source: """
-        (function() {
-            const report = function(type, value) {
-                try {
-                    if (value) window.webkit.messageHandlers.networkLogger.postMessage({type:type, url:String(value)});
-                } catch(e) {}
-            };
-            const originalOpen = window.open;
-            window.open = function(url) {
-                report('window-open', url);
-                if (url) { try { window.location.href = url; } catch(e) {} }
-                return null;
-            };
-            document.addEventListener('click', function(e) {
-                const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-                if (a && a.href) report('link-click', a.href);
-            }, true);
-        })();
-        """, injectionTime: .atDocumentStart, forMainFrameOnly: false)
-        config.userContentController.addUserScript(bridge)
+        // Deliberately no navigator spoofing, no auto-click script and no custom UA here.
+        // Turnstile sees a normal WKWebView and the user completes it manually.
         config.userContentController.add(self, name: "networkLogger")
 
         let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
@@ -115,6 +94,32 @@ interactive_method = '''    private func setupInteractiveSerienStreamWebView() {
 if needle not in tail:
     raise SystemExit("setupWebView insertion point not found")
 tail = tail.replace(needle, interactive_method, 1)
+
+# The normal hidden resolver deliberately simulates clicks after two seconds. Never do that for
+# the visible SerienStream verification browser; only the user should interact with the challenge.
+old = '''            webView.load(request)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                self?.performCustomInteractions()
+                if self?.options?.returnCookies == true {
+                    self?.captureCookies {}
+                }
+            }
+        }'''
+new = '''            webView.load(request)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                if self?.interactiveSerienStream != true {
+                    self?.performCustomInteractions()
+                }
+                if self?.options?.returnCookies == true {
+                    self?.captureCookies {}
+                }
+            }
+        }'''
+if old not in tail:
+    raise SystemExit("doLoad interaction insertion point not found")
+tail = tail.replace(old, new, 1)
 
 old = '''        webView?.stopLoading()
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "networkLogger")
@@ -135,8 +140,8 @@ if old not in tail:
     raise SystemExit("stopMonitoring insertion point not found")
 tail = tail.replace(old, new, 1)
 
-# Let target=_blank provider navigations continue in the same visible WebView so they can be
-# observed by the existing cutoff/request tracker.
+# target=_blank/provider popups are loaded into the same visible WebView so the existing request
+# tracker and provider cutoff can observe the destination and return it to the module.
 append_marker = '''#if !os(tvOS)
 extension NetworkFetchMonitor: WKScriptMessageHandler {'''
 ui_delegate = '''#if !os(tvOS)
