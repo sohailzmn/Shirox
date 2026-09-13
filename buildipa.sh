@@ -10,6 +10,9 @@ WORKING_LOCATION="$(pwd)"
 APPLICATION_NAME=Shirox
 SCHEME_NAME="Shirox_iOS"
 
+echo "--- Applying SerienStream interactive verification patch ---"
+python3 "$WORKING_LOCATION/patch_serienstream_interactive.py"
+
 if [ ! -d "build" ]; then
    mkdir build
 fi
