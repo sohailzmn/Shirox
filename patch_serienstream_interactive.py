@@ -15,6 +15,11 @@ new = '''    private var originalUrlString: String = ""
     /// For that one flow we surface the same WKWebView so the user can verify manually.
     private var interactiveSerienStream = false
 
+    private func isSerienStreamHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased() else { return false }
+        return host == "serienstream.to" || host == "www.serienstream.to" || host == "s.to"
+    }
+
     @Published private(set) var networkRequests: [String] = []'''
 if old not in tail:
     raise SystemExit("interactive property insertion point not found")
@@ -25,10 +30,8 @@ old = '''        self.options = options
         completionHandler = completion'''
 new = '''        self.options = options
         originalUrlString = urlString
-        if let candidate = URL(string: urlString),
-           let host = candidate.host?.lowercased() {
-            interactiveSerienStream = (host == "serienstream.to" || host == "www.serienstream.to" || host == "s.to")
-                && candidate.path == "/r"
+        if let candidate = URL(string: urlString) {
+            interactiveSerienStream = isSerienStreamHost(candidate.host) && candidate.path == "/r"
         } else {
             interactiveSerienStream = false
         }
@@ -57,7 +60,7 @@ new = '''            if interactiveSerienStream {
             #endif
         }
 
-        let effectiveTimeout = interactiveSerienStream ? max(options.timeoutSeconds, 90) : options.timeoutSeconds
+        let effectiveTimeout = interactiveSerienStream ? max(options.timeoutSeconds, 120) : options.timeoutSeconds
         timer = Timer.scheduledTimer(withTimeInterval: TimeInterval(effectiveTimeout), repeats: false) { [weak self] _ in'''
 if old not in tail:
     raise SystemExit("interactive setup/timer insertion point not found")
@@ -76,8 +79,54 @@ interactive_method = '''    private func setupInteractiveSerienStreamWebView() {
         #endif
         config.mediaTypesRequiringUserActionForPlayback = []
 
-        // Deliberately no navigator spoofing, no auto-click script and no custom UA here.
-        // Turnstile sees a normal WKWebView and the user completes it manually.
+        // Lightweight ad/popup blocker for the visible verification browser. We intentionally
+        // keep Cloudflare challenge frames intact, because the user must complete Turnstile.
+        let adBlockJS = """
+        (function() {
+            const allowedHost = function(host) {
+                host = (host || '').toLowerCase();
+                return host === 'serienstream.to' || host === 'www.serienstream.to' || host === 's.to';
+            };
+            const allowedFrameHost = function(host) {
+                host = (host || '').toLowerCase();
+                return allowedHost(host) || host === 'challenges.cloudflare.com' || host.endsWith('.cloudflare.com');
+            };
+            const clean = function() {
+                document.querySelectorAll('iframe[src]').forEach(function(frame) {
+                    try {
+                        const u = new URL(frame.src, location.href);
+                        if (!allowedFrameHost(u.hostname)) frame.remove();
+                    } catch(e) {}
+                });
+                document.querySelectorAll('.adsbygoogle,.advertisement,.ad-container,[data-ad],[id^="ad-"] ,[class^="ad-"]').forEach(function(el) {
+                    try { el.remove(); } catch(e) {}
+                });
+            };
+            const nativeOpen = window.open;
+            window.open = function(url) {
+                try {
+                    const u = new URL(url, location.href);
+                    if (allowedHost(u.hostname)) location.href = u.href;
+                } catch(e) {}
+                return null;
+            };
+            document.addEventListener('click', function(e) {
+                const a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+                if (!a) return;
+                try {
+                    const u = new URL(a.href, location.href);
+                    if (!allowedHost(u.hostname)) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                    }
+                } catch(err) {}
+            }, true);
+            new MutationObserver(clean).observe(document.documentElement, {childList:true, subtree:true});
+            if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', clean);
+            else clean();
+        })();
+        """
+        config.userContentController.addUserScript(WKUserScript(source: adBlockJS, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         config.userContentController.add(self, name: "networkLogger")
 
         let wv = WKWebView(frame: CGRect(x: 0, y: 0, width: 390, height: 844), configuration: config)
@@ -94,6 +143,31 @@ interactive_method = '''    private func setupInteractiveSerienStreamWebView() {
 if needle not in tail:
     raise SystemExit("setupWebView insertion point not found")
 tail = tail.replace(needle, interactive_method, 1)
+
+# When the module passes the current episode as Referer, show that exact episode in the visible
+# browser instead of the SerienStream homepage/provider bridge. The pending /r?t= URL remains the
+# resolver's logical request and is still used for request tracking/cutoff.
+old = '''    private func loadURL(url: URL, headers: [String: String]) {
+        guard let webView = webView, options != nil else { return }
+        addRequest(url.absoluteString)
+        var request = URLRequest(url: url)'''
+new = '''    private func loadURL(url: URL, headers: [String: String]) {
+        guard let webView = webView, options != nil else { return }
+        addRequest(url.absoluteString)
+
+        var visibleURL = url
+        if interactiveSerienStream,
+           let refererEntry = headers.first(where: { $0.key.lowercased() == "referer" }),
+           let refererURL = URL(string: refererEntry.value),
+           isSerienStreamHost(refererURL.host),
+           refererURL.path.hasPrefix("/serie/") {
+            visibleURL = refererURL
+        }
+
+        var request = URLRequest(url: visibleURL)'''
+if old not in tail:
+    raise SystemExit("loadURL start insertion point not found")
+tail = tail.replace(old, new, 1)
 
 # The normal hidden resolver deliberately simulates clicks after two seconds. Never do that for
 # the visible SerienStream verification browser; only the user should interact with the challenge.
@@ -140,8 +214,39 @@ if old not in tail:
     raise SystemExit("stopMonitoring insertion point not found")
 tail = tail.replace(old, new, 1)
 
-# target=_blank/provider popups are loaded into the same visible WebView so the existing request
-# tracker and provider cutoff can observe the destination and return it to the module.
+# Keep the visible verification WebView on serienstream.to. External provider/ad navigations are
+# still recorded so the resolver can capture the provider URL, but the browser never leaves site.
+old = '''    @available(iOS 15.0, macOS 13.0, *)
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        if let url = navigationAction.request.url {
+            if HostBlocklist.shared.isBlocked(url) { return .cancel }
+            addRequest(url.absoluteString)
+        }
+        return .allow
+    }'''
+new = '''    @available(iOS 15.0, macOS 13.0, *)
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        if let url = navigationAction.request.url {
+            if HostBlocklist.shared.isBlocked(url) { return .cancel }
+            addRequest(url.absoluteString)
+
+            if interactiveSerienStream {
+                // Only constrain top-level/new-window navigation. Cloudflare Turnstile is allowed
+                // to load in a subframe, while ads/provider redirects cannot replace the page.
+                let isTopLevel = navigationAction.targetFrame == nil || navigationAction.targetFrame?.isMainFrame == true
+                if isTopLevel && !isSerienStreamHost(url.host) {
+                    return .cancel
+                }
+            }
+        }
+        return .allow
+    }'''
+if old not in tail:
+    raise SystemExit("navigation policy insertion point not found")
+tail = tail.replace(old, new, 1)
+
+# target=_blank popups are only allowed for internal SerienStream links. External destinations are
+# recorded (so provider resolution still works) and then blocked from opening in the visible UI.
 append_marker = '''#if !os(tvOS)
 extension NetworkFetchMonitor: WKScriptMessageHandler {'''
 ui_delegate = '''#if !os(tvOS)
@@ -154,7 +259,9 @@ extension NetworkFetchMonitor: WKUIDelegate {
     ) -> WKWebView? {
         guard interactiveSerienStream, let url = navigationAction.request.url else { return nil }
         addRequest(url.absoluteString)
-        webView.load(navigationAction.request)
+        if isSerienStreamHost(url.host) {
+            webView.load(navigationAction.request)
+        }
         return nil
     }
 }
@@ -167,4 +274,4 @@ if append_marker not in tail:
 tail = tail.replace(append_marker, ui_delegate, 1)
 
 path.write_text(head + marker + tail, encoding="utf-8")
-print("Applied SerienStream interactive verification patch to NetworkFetch.swift")
+print("Applied SerienStream episode-focused verification/adblock patch to NetworkFetch.swift")
