@@ -3,80 +3,81 @@
 name: Build and upload nightly
 
 on:
- push:
-   branches:
-     - main
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
 env:
- FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
- build-ios:
-   name: Build iOS IPA
-   runs-on: macos-26
-   permissions:
-     contents: write
-   steps:
-     - name: Checkout repository
-       uses: actions/checkout@v6
+  build-ios:
+    name: Build iOS IPA
+    runs-on: macos-26
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-     - name: Make build script executable
-       run: chmod +x ./buildipa.sh
+      - name: Make build script executable
+        run: chmod +x ./buildipa.sh
 
-     - name: Build iOS IPA
-       run: ./buildipa.sh
+      - name: Build iOS IPA
+        run: ./buildipa.sh
 
-     - name: Upload IPA
-       uses: actions/upload-artifact@v7
-       with:
-         name: Shirox-Nightly-IPA
-         path: build/Shirox.ipa
+      - name: Upload IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: Shirox-Nightly-IPA
+          path: build/Shirox.ipa
 
-     - name: Upload IPA to beta release
-       env:
-         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-       run: |
-         gh release create beta --title "beta" --notes "Latest nightly build" 2>/dev/null || true
-         gh release upload beta build/Shirox.ipa --clobber
+      - name: Upload IPA to beta release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create beta --title "beta" --notes "Latest nightly build" 2>/dev/null || true
+          gh release upload beta build/Shirox.ipa --clobber
 
-     - name: Update apps.json
-       env:
-         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-       run: |
-         IPA_SIZE=$(wc -c < build/Shirox.ipa | tr -d ' ')
-         BUILD_DATE=$(date -u +%Y-%m-%d)
-         jq --argjson size "$IPA_SIZE" --arg date "$BUILD_DATE" \
-           '.apps[0].versions[0].size = $size | .apps[0].versions[0].date = $date' \
-           apps.json > apps.json.tmp && mv apps.json.tmp apps.json
-         git config user.name "github-actions[bot]"
-         git config user.email "github-actions[bot]@users.noreply.github.com"
-         git add apps.json
-         git diff --cached --quiet || (git commit -m "chore: update apps.json [skip ci]" && git push origin HEAD:main)
+      - name: Update apps.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IPA_SIZE=$(wc -c < build/Shirox.ipa | tr -d ' ')
+          BUILD_DATE=$(date -u +%Y-%m-%d)
+          jq --argjson size "$IPA_SIZE" --arg date "$BUILD_DATE" \
+            '.apps[0].versions[0].size = $size | .apps[0].versions[0].date = $date' \
+            apps.json > apps.json.tmp && mv apps.json.tmp apps.json
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add apps.json
+          git diff --cached --quiet || (git commit -m "chore: update apps.json [skip ci]" && git push origin HEAD:main)
 
- build-catalyst:
-   name: Build Mac Catalyst DMG
-   runs-on: macos-26
-   permissions:
-     contents: write
-   steps:
-     - name: Checkout repository
-       uses: actions/checkout@v6
+  build-catalyst:
+    name: Build Mac Catalyst DMG
+    runs-on: macos-26
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
 
-     - name: Make build script executable
-       run: chmod +x ./buildcatalyst.sh
+      - name: Make build script executable
+        run: chmod +x ./buildcatalyst.sh
 
-     - name: Build Mac Catalyst DMG
-       run: ./buildcatalyst.sh
+      - name: Build Mac Catalyst DMG
+        run: ./buildcatalyst.sh
 
-     - name: Upload Catalyst DMG
-       uses: actions/upload-artifact@v7
-       with:
-         name: Shirox-Nightly-Catalyst-DMG
-         path: build/Shirox-Catalyst.dmg
+      - name: Upload Catalyst DMG
+        uses: actions/upload-artifact@v7
+        with:
+          name: Shirox-Nightly-Catalyst-DMG
+          path: build/Shirox-Catalyst.dmg
 
-     - name: Upload Catalyst DMG to beta release
-       env:
-         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-       run: |
-         gh release create beta --title "beta" --notes "Latest nightly build" 2>/dev/null || true
-         gh release upload beta build/Shirox-Catalyst.dmg --clobber
+      - name: Upload Catalyst DMG to beta release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create beta --title "beta" --notes "Latest nightly build" 2>/dev/null || true
+          gh release upload beta build/Shirox-Catalyst.dmg --clobber
