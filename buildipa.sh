@@ -14,6 +14,9 @@ echo "--- Applying SerienStream interactive verification patch ---"
 python3 "$WORKING_LOCATION/patch_serienstream_interactive.py"
 echo "--- Applying SerienStream continuation/adblock patch ---"
 python3 "$WORKING_LOCATION/patch_serienstream_interactive_v3.py"
+# Shirox supports iOS 15; SwiftUI's fontWeight modifier used by the generated
+# toolbar button is unavailable for this deployment target in the current SDK.
+sed -i '' '/\.fontWeight(.semibold)/d' "$WORKING_LOCATION/Shirox/Views/Shared/CloudflareBypassSheetView.swift"
 
 if [ ! -d "build" ]; then
    mkdir build
