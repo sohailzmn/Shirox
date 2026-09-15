@@ -16,6 +16,8 @@ echo "--- Applying SerienStream continuation/adblock patch ---"
 python3 "$WORKING_LOCATION/patch_serienstream_interactive_v3.py"
 echo "--- Applying SerienStream session reuse fast-path patch ---"
 python3 "$WORKING_LOCATION/patch_serienstream_session_v5.py"
+echo "--- Applying SerienStream exact episode verification patch ---"
+python3 "$WORKING_LOCATION/patch_serienstream_exact_episode_v6.py"
 # Shirox supports iOS 15; SwiftUI's fontWeight modifier used by the generated
 # toolbar button is unavailable for this deployment target in the current SDK.
 sed -i '' '/\.fontWeight(.semibold)/d' "$WORKING_LOCATION/Shirox/Views/Shared/CloudflareBypassSheetView.swift"
@@ -47,8 +49,8 @@ DD_APP_PATH="$WORKING_LOCATION/build/DerivedDataApp/Build/Products/Release-iphon
 TARGET_APP="$WORKING_LOCATION/build/$APPLICATION_NAME.app"
 
 if [ ! -d "$DD_APP_PATH" ]; then
-    echo "Error: Build failed, .app not found at $DD_APP_PATH"
-    exit 1
+   echo "Error: Build failed, .app not found at $DD_APP_PATH"
+   exit 1
 fi
 
 cp -r "$DD_APP_PATH" "$TARGET_APP"
