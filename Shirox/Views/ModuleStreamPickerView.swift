@@ -15,6 +15,60 @@ private final class ModuleStreamVMStore: ObservableObject {
     }
 }
 
+// MARK: - Season-aware module matching
+//
+// AniList often names a second season "Blue Lock Season 2" while AniWorld stores
+// every season under "Blue Lock". Keep the requested season when choosing an episode:
+// simplifying the search title must never silently play S1E1 for S2E1.
+private enum ModuleSeasonFallback {
+    static func parsedSuffix(in title: String) -> (base: String, season: Int)? {
+        let patterns = [
+            #"(?i)(?:\s*[\(\[:–—-]\s*|\s+)(?:season|staffel)\s*(\d{1,2})\s*[\)\]]?\s*$"#,
+            #"(?i)\s+(\d{1,2})(?:st|nd|rd|th)\s+season\s*$"#,
+            #"(?i)\s+s(\d{1,2})\s*$"#
+        ]
+        let whole = NSRange(title.startIndex..<title.endIndex, in: title)
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: title, range: whole),
+                  let suffixRange = Range(match.range, in: title),
+                  let seasonRange = Range(match.range(at: 1), in: title),
+                  let season = Int(title[seasonRange]), season > 0 else { continue }
+            let base = String(title[..<suffixRange.lowerBound])
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines
+                    .union(CharacterSet(charactersIn: ":-–—([ ")))
+            guard base.count > 1 else { continue }
+            return (base, season)
+        }
+        return nil
+    }
+
+    static func queries(for title: String) -> [String] {
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else { return [] }
+        guard let parsed = parsedSuffix(in: title),
+              parsed.base.caseInsensitiveCompare(title) != .orderedSame else { return [title] }
+        return [title, parsed.base]
+    }
+
+    /// For a grouped AniWorld listing, match the actual season URL. When S2 is
+    /// missing, report no match instead of accidentally selecting S1E1.
+    static func aniWorldEpisode(
+        from episodes: [EpisodeLink], title: String, module: ModuleDefinition, number: Int
+    ) -> (handled: Bool, episode: EpisodeLink?) {
+        guard module.sourceName.localizedCaseInsensitiveContains("AniWorld"),
+              let season = parsedSuffix(in: title)?.season else { return (false, nil) }
+        let hasSeasonPaths = episodes.contains { $0.href.localizedCaseInsensitiveContains("/staffel-") }
+        guard hasSeasonPaths else { return (false, nil) }
+        let ending = "/staffel-\(season)/episode-\(number)"
+        let found = episodes.first { item in
+            let path = URL(string: item.href)?.path.lowercased() ?? item.href.lowercased()
+            return path.hasSuffix(ending)
+        }
+        return (true, found)
+    }
+}
+
 // MARK: - Sheet
 
 struct ModuleStreamPickerView: View {
@@ -158,16 +212,19 @@ struct ModuleStreamPickerView: View {
                         hrefs.append(previous)
                     }
 
-                    // Pass 1: cached match, no extra network search.
-                    // Pass 2: search as a fallback if the saved link went stale.
-                    for searchPass in 0..<2 {
+                    // Pass 0: reuse a known result. Search the AniList title, then
+                    // retry a seasonless title (e.g. "Blue Lock" for "Blue Lock Season 2").
+                    let alias = ModuleSearchAliasManager.shared.getAlias(
+                        mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id)
+                    let queries = ModuleSeasonFallback.queries(for: alias ?? animeTitle)
+                    for searchPass in 0...queries.count {
+                        guard !Task.isCancelled else { return }
                         if searchPass == 0 && hrefs.isEmpty { continue }
-                        if searchPass == 1 {
-                            let alias = ModuleSearchAliasManager.shared.getAlias(
-                                mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id)
-                            let results = try await runner.search(keyword: alias ?? animeTitle)
+                        if searchPass > 0 {
+                            let query = queries[searchPass - 1]
+                            let results = (try? await runner.search(keyword: query)) ?? []
                             hrefs = SearchResultMatcher.ranked(
-                                query: animeTitle, items: results, title: { $0.title })
+                                query: query, items: results, title: { $0.title })
                                 .prefix(3).map { $0.href }
                         }
                         var visited = Set<String>()
@@ -176,9 +233,13 @@ struct ModuleStreamPickerView: View {
                         let episodes: [EpisodeLink]
                         do { episodes = try await runner.fetchEpisodes(url: href) }
                         catch { continue }
+                        let seasonMatch = ModuleSeasonFallback.aniWorldEpisode(
+                            from: episodes, title: animeTitle, module: module, number: episodeNumber)
                         let absoluteIndex = offset + episodeNumber - 1
                         let episode: EpisodeLink?
-                        if offset > 0 && episodes.indices.contains(absoluteIndex) {
+                        if seasonMatch.handled {
+                            episode = seasonMatch.episode
+                        } else if offset > 0 && episodes.indices.contains(absoluteIndex) {
                             episode = episodes[absoluteIndex]
                         } else {
                             episode = episodes.first { Int($0.number) == episodeNumber }
@@ -426,22 +487,35 @@ private final class ModuleStreamRowViewModel: ObservableObject {
 
         do {
             try await r.load(module: module)
-            var results = try await r.search(keyword: keyword)
+            let queries = ModuleSeasonFallback.queries(for: keyword)
+            var results: [SearchItem] = []
+            var matchedQuery = keyword
+            for query in queries {
+                guard !Task.isCancelled else { return }
+                let candidate = (try? await r.search(keyword: query)) ?? []
+                if !candidate.isEmpty {
+                    results = candidate
+                    matchedQuery = query
+                    break
+                }
+            }
 
             if results.isEmpty {
-                // Some modules (e.g. animepahe) need a warm session before search works;
-                // retry once automatically before showing "Not Found".
+                // Retry only after trying the shorter title; don't add an 800ms
+                // delay before the "Blue Lock" fallback.
                 try await Task.sleep(nanoseconds: 800_000_000)
-                if Task.isCancelled { return }
-                results = try await r.search(keyword: keyword)
+                guard !Task.isCancelled else { return }
+                if let last = queries.last {
+                    matchedQuery = last
+                    results = (try? await r.search(keyword: last)) ?? []
+                }
             }
 
             if results.isEmpty {
                 settle(.notFound)
             } else {
-                // Surface the entry that matches the AniList title's season first, so multi-season
-                // shows (separate per-season entries) don't bury the right one behind look-alikes.
-                let ordered = SearchResultMatcher.ranked(query: originalAnimeTitle, items: results, title: { $0.title })
+                let ordered = SearchResultMatcher.ranked(
+                    query: matchedQuery, items: results, title: { $0.title })
                 settle(.searchResults(ordered))
             }
         } catch {
@@ -493,6 +567,10 @@ private final class ModuleStreamRowViewModel: ObservableObject {
     /// absolute position instead — but only when the list is actually long enough to contain
     /// that season, so single-season lists fall straight through to the existing logic.
     private func matchEpisode(from episodes: [EpisodeLink], target: Int, seasonOffset: Int = 0) -> EpisodeLink? {
+        let seasonMatch = ModuleSeasonFallback.aniWorldEpisode(
+            from: episodes, title: originalAnimeTitle, module: module, number: target)
+        if seasonMatch.handled { return seasonMatch.episode }
+
         let targetDouble = Double(target)
 
         // 0. Combined multi-season list: pick by absolute position.
