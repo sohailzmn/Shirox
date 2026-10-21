@@ -249,17 +249,23 @@ final class DetailViewModel: ObservableObject {
                 let streams = try await JSEngine.shared.fetchStreams(episodeUrl: episode.href)
                 guard !Task.isCancelled else { return }
                 let sorted = streams.sorted { $0.title < $1.title }
-                if sorted.count == 1 {
-                    pendingStream = sorted[0]
-                    showStreamPicker = false
-                } else if UserDefaults.standard.bool(forKey: "autoPickLastStream"),
-                          let moduleId = ModuleManager.shared.activeModule?.id,
-                          let savedTitle = ModuleSearchAliasManager.shared.getLastStreamTitle(moduleId: moduleId),
-                          let match = sorted.first(where: { $0.title == savedTitle }) {
-                    pendingStream = match
-                    showStreamPicker = false
-                } else {
+                if !sorted.isEmpty {
+                    // Play immediately. Keep the choice of hoster/quality available
+                    // inside the player, but never force a second selection sheet.
                     streamOptions = sorted
+                    let savedTitle = ModuleManager.shared.activeModule.flatMap {
+                        ModuleSearchAliasManager.shared.getLastStreamTitle(moduleId: $0.id)
+                    }
+                    let saved = sorted.first { $0.title == savedTitle }
+                    let lowBitrate = sorted.first {
+                        $0.title.localizedCaseInsensitiveContains("480p") ||
+                        $0.title.localizedCaseInsensitiveContains("Schnell")
+                    }
+                    pendingStream = saved ?? lowBitrate ?? sorted[0]
+                    if let module = ModuleManager.shared.activeModule, let stream = pendingStream {
+                        ModuleSearchAliasManager.shared.setLastStreamTitle(moduleId: module.id, title: stream.title)
+                    }
+                    showStreamPicker = false
                 }
             } catch {
                 if !Task.isCancelled {
