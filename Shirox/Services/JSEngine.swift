@@ -436,16 +436,24 @@ final class JSEngine: ObservableObject {
     }
 
     static func isTurnstileResponse(status: Int, body: String) -> Bool {
+        // Some sites return a 200 HTML "Just a moment" page or a 403
+        // challenge without the word "Cloudflare". Never treat a normal
+        // series page or an ordinary HTTP 403 as a challenge.
+        guard status == 200 || status == 403 || status == 503 else { return false }
         let lower = body.lowercased()
-        guard lower.contains("cloudflare") else { return false }
-        let hasChallenge = lower.contains("cf-turnstile") ||
-               lower.contains("challenges.cloudflare.com") ||
-               lower.contains("__cf_chl_") ||
-               lower.contains("jschl") ||
-               lower.contains("challenge-platform") ||
-               lower.contains("cf-spinner")
-        guard hasChallenge else { return false }
-        return status == 403 || status == 503 || (status == 200 && lower.contains("just a moment"))
+        let challengeMarkers = lower.contains("cf-turnstile") ||
+            lower.contains("challenges.cloudflare.com") ||
+            lower.contains("__cf_chl_") ||
+            lower.contains("jschl") ||
+            lower.contains("challenge-platform") ||
+            lower.contains("cf-spinner") ||
+            lower.contains("cf-mitigated")
+        let challengePage = (lower.contains("just a moment") ||
+            lower.contains("checking your browser") ||
+            lower.contains("verify you are human") ||
+            lower.contains("security check")) &&
+            (lower.contains("cloudflare") || lower.contains("challenge"))
+        return challengeMarkers || challengePage
     }
 
     static func jsStringLiteral(_ string: String) -> String {
