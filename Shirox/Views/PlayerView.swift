@@ -160,6 +160,8 @@ struct PlayerView: View {
     @State private var stallRecoveryAttempts = 0
     @State private var isRecoveringStall = false
     @State private var showStallRetry = false
+    /// A session-only cap after repeated CDN stalls; never changes the user's saved preference.
+    @State private var stallQualityReduced = false
     // When we were truly backgrounded (home/app-switch/lock), so foreground can tell a
     // brief resign-active from a suspension long enough to have killed the source.
     @State private var backgroundedAt: Date? = nil
@@ -1627,6 +1629,7 @@ struct PlayerView: View {
         bufferProgress = 0
         hlsQualities = []
         selectedQualityBandwidth = nil
+        stallQualityReduced = false
         let qualityURL = currentStream.url
         let qualityHeaders = currentStream.headers
         Task {
@@ -2042,7 +2045,10 @@ struct PlayerView: View {
 
     /// Whether wedged/failed playback can be auto-recovered. Network streams re-extract a fresh
     /// URL via `onStreamExpired`; offline copies re-resolve the local file and restart the proxy.
-    private var canRecoverStream: Bool { onStreamExpired != nil || isLocalPlayback }
+    private var canRecoverStream: Bool {
+        onStreamExpired != nil || isLocalPlayback ||
+            availableStreams.contains(where: { $0.url != currentStream.url })
+    }
 
     /// Re-resolves the currently-playing downloaded episode to a fresh, server-backed local
     /// stream. The localhost HLS proxy's loopback sockets die across a long background, so the
@@ -2087,7 +2093,16 @@ struct PlayerView: View {
             swapStream(stream, episodeNumber: currentContext?.episodeNumber ?? 1, episodeHref: currentContext?.episodeHref)
             return
         }
-        guard let loader = onStreamExpired else { return }
+        guard let loader = onStreamExpired else {
+            // Modules that already returned several streams still have a recovery path.
+            if let alternative = preferredRecoveryStream(from: availableStreams) {
+                swapStream(alternative, episodeNumber: currentContext?.episodeNumber ?? 1,
+                           allStreams: availableStreams, episodeHref: currentContext?.episodeHref)
+            } else {
+                surfaceUnrecoverablePlayback()
+            }
+            return
+        }
         isRefetchingStream = true
         do {
             // Refetch the episode currently on screen, not the one the player launched with —
@@ -2102,24 +2117,47 @@ struct PlayerView: View {
                 surfaceUnrecoverablePlayback()
                 return
             }
-            let isSub = currentStream.subtitle != nil
-            
-            // Break down complex expression for compiler
-            let matchingStreams = streams.filter { $0.title == currentStream.title && ($0.subtitle != nil) == isSub }
-            let fallbackStreams = streams.filter { ($0.subtitle != nil) == isSub }
-            let titleMatchingStreams = streams.filter { $0.title == currentStream.title }
-            
-            let match = matchingStreams.first
-                ?? fallbackStreams.first
-                ?? titleMatchingStreams.first
-                ?? streams[0]
-
-            swapStream(match, episodeNumber: currentContext?.episodeNumber ?? 1, episodeHref: currentContext?.episodeHref)
+            // After a dead CDN, don't immediately retry the same hoster if another
+            // playable host was provided. Keep subtitle/audio mode when possible.
+            let match = preferredRecoveryStream(from: streams) ?? streams[0]
+            swapStream(match, episodeNumber: currentContext?.episodeNumber ?? 1,
+                       allStreams: streams, episodeHref: currentContext?.episodeHref)
         } catch {
             Logger.shared.log("[StreamExpiry] Refetch failed: \(error.localizedDescription)", type: "Error")
             isRefetchingStream = false
             surfaceUnrecoverablePlayback()
         }
+    }
+
+    /// Select a different host first, then a fresh URL from the current host.
+    /// Avoid switching subtitle mode while recovering German dubbed playback.
+    private func preferredRecoveryStream(from candidates: [StreamResult]) -> StreamResult? {
+        let sameMode = candidates.filter { ($0.subtitle != nil) == (currentStream.subtitle != nil) }
+        let pool = sameMode.isEmpty ? candidates : sameMode
+        return pool.first(where: { $0.url.host != currentStream.url.host })
+            ?? pool.first(where: { $0.url != currentStream.url })
+            ?? pool.first
+    }
+
+    /// Temporarily lower HLS bandwidth on the first persistent stall.
+    /// This leaves saved/manual quality settings intact and skips casting/offline playback.
+    @MainActor
+    private func reduceQualityAfterStall() -> Bool {
+        guard !isLocalPlayback, !castManager.isConnected, !stallQualityReduced,
+              let item = player?.currentItem, !hlsQualities.isEmpty else { return false }
+        let sorted = hlsQualities.sorted { $0.bandwidth < $1.bandwidth }
+        let lower = sorted.filter {
+            (HLSQualityParser.height(of: $0) ?? Int.max) <= 480
+        }
+        let preferred = lower.last ?? sorted.first!
+        guard selectedQualityBandwidth == nil ||
+              selectedQualityBandwidth! > preferred.bandwidth else { return false }
+        stallQualityReduced = true
+        selectQuality(preferred.bandwidth)
+        Logger.shared.log("[StallRecovery] Temporary quality cap -> \(preferred.label)", type: "Player")
+        // AVPlayer can now request smaller HLS segments without rebuilding the stream.
+        _ = item
+        return true
     }
 
     /// Ends the "we're still trying" state and offers a manual retry. Used wherever automatic
@@ -2179,14 +2217,15 @@ struct PlayerView: View {
         Logger.shared.log("[StallRecovery] Stall detected at \(currentTime)s — attempt \(attempt)", type: "Player")
 
         if attempt == 1 {
-            // Step 1: nudge. A zero-distance seek + playImmediately re-issues the
-            // segment requests that wedged, clearing most transient CDN stalls.
+            // 1. Brief network nudge, without switching URLs.
             nudgePlayer()
-            startStallWatchdog() // re-arm to escalate if the nudge didn't take
-        } else if attempt <= 3, canRecoverStream {
-            // Step 2: the source is likely dead — re-resolve it, preserving position. For a
-            // network stream this re-runs the extractor; for a downloaded copy it does a full
-            // clean rebuild (restart the local HLS proxy, fresh AVPlayer + reactivated session).
+            startStallWatchdog()
+        } else if attempt == 2 && reduceQualityAfterStall() {
+            // 2. Adaptive HLS downshift; only escalate if the player remains stuck.
+            nudgePlayer()
+            startStallWatchdog()
+        } else if attempt <= 4, canRecoverStream {
+            // 3. Re-resolve and prefer a different hoster when the previous one is dead.
             await recoverPlayback()
         } else {
             // Step 3: give up auto-recovery; let the user retry manually.
@@ -2678,6 +2717,7 @@ struct PlayerView: View {
         // otherwise keep network buffering armed on a file already sitting on disk.
         player?.automaticallyWaitsToMinimizeStalling = !isLocalPlayback
         if !allStreams.isEmpty { availableStreams = allStreams }
+        stallQualityReduced = false
         if let ctx = currentContext {
             // Don't carry the bumped availableEpisodes into the new episode's context — it makes
             // the new episode look like the last available, causing saveProgress() to skip the
