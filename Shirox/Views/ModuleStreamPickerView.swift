@@ -140,7 +140,7 @@ struct ModuleStreamPickerView: View {
 
             for module in modules {
                 guard !Task.isCancelled else { return }
-                autoPlayMessage = "Checking \\(module.sourceName)…"
+                autoPlayMessage = "Checking \(module.sourceName)…"
                 let runner = ModuleJSRunner()
                 do {
                     try await runner.load(module: module)
@@ -158,20 +158,20 @@ struct ModuleStreamPickerView: View {
                         hrefs.append(previous)
                     }
 
-                    // Prefer known links to avoid searching on every playback.
-                    // Search remains the fallback for stale links and first-time titles.
-                    if hrefs.isEmpty {
-                        let alias = ModuleSearchAliasManager.shared.getAlias(
-                            mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id)
-                        let results = try await runner.search(keyword: alias ?? animeTitle)
-                        hrefs += SearchResultMatcher.ranked(
-                            query: animeTitle, items: results, title: { $0.title })
-                            .prefix(3).map { $0.href }
-                    }
-
-                    for href in Array(Set(hrefs)).sorted(by: { a, b in
-                        (hrefs.firstIndex(of: a) ?? 999) < (hrefs.firstIndex(of: b) ?? 999)
-                    }) {
+                    // Pass 1: cached match, no extra network search.
+                    // Pass 2: search as a fallback if the saved link went stale.
+                    for searchPass in 0..<2 {
+                        if searchPass == 0 && hrefs.isEmpty { continue }
+                        if searchPass == 1 {
+                            let alias = ModuleSearchAliasManager.shared.getAlias(
+                                mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id)
+                            let results = try await runner.search(keyword: alias ?? animeTitle)
+                            hrefs = SearchResultMatcher.ranked(
+                                query: animeTitle, items: results, title: { $0.title })
+                                .prefix(3).map { $0.href }
+                        }
+                        var visited = Set<String>()
+                        for href in hrefs where visited.insert(href).inserted {
                         guard !Task.isCancelled else { return }
                         let episodes: [EpisodeLink]
                         do { episodes = try await runner.fetchEpisodes(url: href) }
@@ -201,10 +201,11 @@ struct ModuleStreamPickerView: View {
                         onDismiss()
                         onStreamsLoaded(streams, winner, href, episodes.count, episode.href)
                         return
+                        }
                     }
                 } catch {
                     // A broken provider must not block playback from the next module.
-                    Logger.shared.log("[SmartPlay] \\(module.sourceName): \\(error.localizedDescription)", type: "Error")
+                    Logger.shared.log("[SmartPlay] \(module.sourceName): \(error.localizedDescription)", type: "Error")
                 }
             }
             if !Task.isCancelled {
@@ -231,6 +232,7 @@ struct ModuleStreamPickerView: View {
                 group.addTask {
                     var request = URLRequest(url: probe.url, timeoutInterval: 4)
                     request.httpMethod = probe.isMP4 ? "HEAD" : "GET"
+                    if probe.isHLS { request.setValue("bytes=0-65535", forHTTPHeaderField: "Range") }
                     probe.headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
                     let started = Date()
                     do {
