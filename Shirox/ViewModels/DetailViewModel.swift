@@ -237,8 +237,11 @@ final class DetailViewModel: ObservableObject {
     // MARK: - Streams
 
     func loadStreams(for episode: EpisodeLink) {
+        streamsTask?.cancel()
         selectedEpisode = episode
+        pendingStream = nil
         streamOptions = []
+        errorMessage = nil
         needsCloudflareVerification = false
         CloudflareBypassManager.shared.pendingVerificationURL = nil
         showStreamPicker = true
@@ -246,7 +249,12 @@ final class DetailViewModel: ObservableObject {
 
         streamsTask = Task {
             do {
-                let streams = try await JSEngine.shared.fetchStreams(episodeUrl: episode.href)
+                let isSerienStream = ModuleManager.shared.activeModule?.sourceName
+                    .localizedCaseInsensitiveContains("SerienStream") == true
+                let streams = try await JSEngine.shared.fetchStreams(
+                    episodeUrl: episode.href,
+                    timeout: isSerienStream ? 35 : 120
+                )
                 guard !Task.isCancelled else { return }
                 let sorted = streams.sorted { $0.title < $1.title }
                 if !sorted.isEmpty {
@@ -274,8 +282,15 @@ final class DetailViewModel: ObservableObject {
             }
             // A CF wall during the fetch leaves no streams but a flagged host — offer
             // a user-initiated "Verify Cloudflare" button instead of "No Streams Found".
-            needsCloudflareVerification = streamOptions.isEmpty
+            guard !Task.isCancelled else { return }
+            needsCloudflareVerification = pendingStream == nil
+                && streamOptions.isEmpty
                 && CloudflareBypassManager.shared.pendingVerificationURL != nil
+            if needsCloudflareVerification {
+                errorMessage = "This provider requires website verification before streaming."
+            } else if pendingStream == nil && streamOptions.isEmpty && errorMessage == nil {
+                errorMessage = "No playable stream was returned. Try another source or retry."
+            }
             isLoadingStreams = false
         }
     }
@@ -286,9 +301,22 @@ final class DetailViewModel: ObservableObject {
         guard let url = CloudflareBypassManager.shared.pendingVerificationURL,
               let episode = selectedEpisode else { return }
         Task {
-            try? await CloudflareBypassManager.shared.triggerBypass(for: url)
-            needsCloudflareVerification = false
-            loadStreams(for: episode)
+            do {
+                // User completes the site's challenge in the app. Re-run only
+                // after usable verification has actually been persisted.
+                try await CloudflareBypassManager.shared.triggerBypass(for: url)
+                guard let host = url.host,
+                      CloudflareBypassManager.shared.cookie(for: host) != nil else {
+                    needsCloudflareVerification = true
+                    errorMessage = "Verification was not completed. Please try again."
+                    return
+                }
+                needsCloudflareVerification = false
+                loadStreams(for: episode)
+            } catch {
+                needsCloudflareVerification = true
+                errorMessage = "Website verification failed: \(error.localizedDescription)"
+            }
         }
     }
 
