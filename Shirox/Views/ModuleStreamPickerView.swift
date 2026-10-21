@@ -84,6 +84,7 @@ struct ModuleStreamPickerView: View {
     @State private var autoPlayTask: Task<Void, Never>?
     @State private var autoPlayLoading = false
     @State private var autoPlayMessage: String?
+    @State private var didAutoStart = false
 
     private var visibleModules: [ModuleDefinition] {
         if useDefaultExtension, let active = moduleManager.activeModule {
@@ -133,7 +134,8 @@ struct ModuleStreamPickerView: View {
                         mediaId: mediaId,
                         animeTitle: animeTitle,
                         episodeNumber: episodeNumber,
-                        rowVm: vmStore.get(for: module, mediaId: mediaId, animeTitle: animeTitle, episodeNumber: episodeNumber)
+                        rowVm: vmStore.get(for: module, mediaId: mediaId, animeTitle: animeTitle, episodeNumber: episodeNumber),
+                        automaticSearch: false
                     ) { streams, selectedStream, showHref, availableCount, episodeHref in
                         moduleManager.selectModule(module)
                         onDismiss()
@@ -159,6 +161,14 @@ struct ModuleStreamPickerView: View {
             }
             .tint(.primary)
         }
+        .onAppear {
+            // A single tap on Watch now starts resolving immediately: no source
+            // picker, anime search result picker, or quality picker is required.
+            if !didAutoStart {
+                didAutoStart = true
+                startSmartPlay()
+            }
+        }
         .onDisappear { autoPlayTask?.cancel() }
         #if os(iOS)
         .adaptivePresentationDetents([.medium, .large])
@@ -183,7 +193,13 @@ struct ModuleStreamPickerView: View {
             defer { autoPlayLoading = false }
             let last = UserDefaults.standard.string(forKey: "lastUsedModuleId")
             let active = moduleManager.activeModule?.id
-            let modules = moduleManager.modules.filter { !$0.isManga }.sorted { left, right in
+            let candidates: [ModuleDefinition]
+            if useDefaultExtension, let selected = moduleManager.activeModule {
+                candidates = [selected]
+            } else {
+                candidates = moduleManager.modules.filter { !$0.isManga }
+            }
+            let modules = candidates.sorted { left, right in
                 func priority(_ module: ModuleDefinition) -> Int {
                     if module.id == last { return 0 }
                     if module.id == active { return 1 }
@@ -656,6 +672,7 @@ private struct ModuleStreamRow: View {
     let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
 
     @ObservedObject var rowVm: ModuleStreamRowViewModel
+    let automaticSearch: Bool
     @State private var showAllResults = false
     @State private var showStreamPicker = false
     @AppStorage("autoPickLastStream") private var autoPickLastStream = false
@@ -666,6 +683,7 @@ private struct ModuleStreamRow: View {
         animeTitle: String,
         episodeNumber: Int,
         rowVm: ModuleStreamRowViewModel,
+        automaticSearch: Bool = true,
         onStreamsLoaded: @escaping ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
     ) {
         self.module = module
@@ -674,6 +692,7 @@ private struct ModuleStreamRow: View {
         self.episodeNumber = episodeNumber
         self.onStreamsLoaded = onStreamsLoaded
         self._rowVm = ObservedObject(wrappedValue: rowVm)
+        self.automaticSearch = automaticSearch
     }
 
     private var isPreferredModule: Bool {
@@ -693,7 +712,7 @@ private struct ModuleStreamRow: View {
         }
         .padding(.vertical, 6)
         .onAppear {
-            rowVm.startFind()
+            if automaticSearch { rowVm.startFind() }
         }
         .onDisappear {
             rowVm.cancelIfSearching()
