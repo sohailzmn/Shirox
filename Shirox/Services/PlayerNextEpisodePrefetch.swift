@@ -18,7 +18,19 @@ enum PlayerNextEpisodePrefetch {
     ///   - threshold: the `watchedPercentage` fraction (e.g. 0.90) at which to prefetch.
     ///   - hasLoader: whether a next-episode loader (`onWatchNext`) exists at all.
     ///   - alreadyStarted: whether the prefetch has already been kicked off this episode.
-    static func shouldStart(progress: Double, threshold: Double, hasLoader: Bool, alreadyStarted: Bool) -> Bool {
-        hasLoader && !alreadyStarted && progress >= threshold
+    static func shouldStart(
+        progress: Double, threshold: Double, hasLoader: Bool, alreadyStarted: Bool,
+        remainingSeconds: Double? = nil, creditsStart: Double? = nil,
+        currentTime: Double? = nil
+    ) -> Bool {
+        guard hasLoader, !alreadyStarted, progress.isFinite else { return false }
+        if progress >= threshold { return true }
+        // The next-episode resolver runs while credits are approaching, so
+        // tapping the Netflix-style Next button doesn't start from zero.
+        if let remainingSeconds, remainingSeconds.isFinite,
+           remainingSeconds >= 0, remainingSeconds <= 90 { return true }
+        if let creditsStart, let currentTime, creditsStart.isFinite,
+           currentTime.isFinite, currentTime >= max(0, creditsStart - 30) { return true }
+        return false
     }
 }
