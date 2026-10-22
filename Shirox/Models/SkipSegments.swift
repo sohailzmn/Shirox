@@ -64,7 +64,8 @@ enum PlayerChapterTiming {
     ) -> Bool {
         guard hasNext, position.isFinite, duration.isFinite,
               duration > 0, position >= 0 else { return false }
-        if let credits = segments?.credits, let start = credits.startMs {
+        if segments?.isDurationVerified == true,
+           let credits = segments?.credits, let start = credits.startMs {
             let creditsStart = start / 1_000
             // Don't show the prompt long before credits on a mismatched cut.
             if creditsStart >= 0, creditsStart <= duration,
