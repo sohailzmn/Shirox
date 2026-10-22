@@ -1807,11 +1807,11 @@ struct PlayerView: View {
                     // even when an automatic skip already happened once.
                     activeSkipSegment = newActive
                 }
-                // A verified end-credit marker can advance near the actual end.
-                // Never jump over an unknown post-credit scene or preview.
+                // Advance as soon as the verified credits start. Auto Next means
+                // post-credit scenes are intentionally skipped.
                 if autoNextEpisode && onWatchNext != nil && isPlaying,
                    !isLoadingNextEpisode && !didAdvanceAfterCredits,
-                   PlayerChapterTiming.shouldAdvanceAfterCredits(
+                   PlayerChapterTiming.shouldAdvanceAtCreditsStart(
                         at: currentTime, duration: duration, segments: segments) {
                     didAdvanceAfterCredits = true
                     autoAdvanceTask = Task { @MainActor in await loadAndAdvance() }
