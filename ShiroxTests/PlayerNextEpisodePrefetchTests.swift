@@ -50,7 +50,7 @@ final class PlayerNextEpisodePrefetchTests: XCTestCase {
     // MARK: - Chapter timing
 
     private func credits(
-        verified: Bool = true, end: Double = 1_422, preview: Bool = false
+        verified: Bool = true, end: Double = 1_424, preview: Bool = false
     ) -> SkipSegments {
         var result = SkipSegments()
         result.isDurationVerified = verified
@@ -91,13 +91,13 @@ final class PlayerNextEpisodePrefetchTests: XCTestCase {
 
     func testPostCreditsScenePreventsEarlyAutoAdvance() {
         XCTAssertTrue(PlayerChapterTiming.shouldAdvanceAfterCredits(
-            at: 1_422, duration: 1_425, segments: credits()))
+            at: 1_424, duration: 1_425, segments: credits()))
         XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAfterCredits(
             at: 1_340, duration: 1_425, segments: credits()))
         XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAfterCredits(
-            at: 1_422, duration: 1_425, segments: credits(verified: false)))
+            at: 1_424, duration: 1_425, segments: credits(verified: false)))
         XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAfterCredits(
-            at: 1_422, duration: 1_425, segments: credits(preview: true)))
+            at: 1_424, duration: 1_425, segments: credits(preview: true)))
         XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAfterCredits(
             at: 1_422, duration: 1_500, segments: credits()))
     }
