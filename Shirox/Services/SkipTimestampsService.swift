@@ -119,7 +119,7 @@ final class SkipTimestampsService {
         var result = SkipSegments()
         for entry in payload.results {
             guard let cutLength = entry.episodeLength, cutLength > 0,
-                  abs(cutLength - duration) <= max(20, duration * 0.025),
+                  abs(cutLength - duration) <= max(4, duration * 0.005),
                   let segment = validSegment(
                     .init(startMs: entry.interval.startTime * 1000,
                           endMs: entry.interval.endTime * 1000),
