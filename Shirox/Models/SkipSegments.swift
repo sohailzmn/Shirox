@@ -14,6 +14,10 @@ enum SkipSegmentType: String, CaseIterable, Hashable {
 }
 
 struct SkipSegments {
+    /// True only for segments confirmed against the current file runtime.
+    /// Unverified segments remain available as manual Skip buttons.
+    var isDurationVerified: Bool = false
+
     struct Segment {
         let startMs: Double?  // nil = from start of episode
         let endMs: Double
