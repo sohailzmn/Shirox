@@ -76,18 +76,21 @@ enum PlayerChapterTiming {
         return duration - position <= 35 && duration - position > 1
     }
 
-    static func shouldAdvanceAfterCredits(
+    static func shouldAdvanceAtCreditsStart(
         at position: Double, duration: Double, segments: SkipSegments?
     ) -> Bool {
-        guard let segments, segments.isDurationVerified, segments.preview == nil,
+        // Auto Next begins when VERIFIED end credits begin. Post-credit scenes
+        // and previews are deliberately not protected: the viewer opted into
+        // Auto Next and prefers to jump to the following episode immediately.
+        // Unknown / unverified timing never causes an early jump.
+        guard let segments, segments.isDurationVerified,
               let credits = segments.credits, let start = credits.startMs,
-              duration > 0, position.isFinite else { return false }
+              duration.isFinite, duration > 0, position.isFinite,
+              start.isFinite, credits.endMs.isFinite else { return false }
         let creditsStart = start / 1_000
         let creditsEnd = credits.endMs / 1_000
-        // Only advance when the verified credits marker reaches almost the
-        // very end. Longer remaining footage may be a post-credits scene.
-        return creditsStart < creditsEnd && creditsStart >= 0 &&
-            creditsEnd <= duration + 1.5 && duration - creditsEnd <= 2 &&
-            position >= creditsEnd - 0.4 && position < duration
+        return creditsStart >= 0 && creditsStart < creditsEnd &&
+            creditsEnd <= duration + 1.5 &&
+            position >= creditsStart && position < duration
     }
 }
