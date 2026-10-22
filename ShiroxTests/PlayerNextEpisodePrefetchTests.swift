@@ -89,17 +89,31 @@ final class PlayerNextEpisodePrefetchTests: XCTestCase {
             at: 1_410, duration: 1_425, segments: nil, hasNext: false))
     }
 
-    func testPostCreditsScenePreventsEarlyAutoAdvance() {
-        XCTAssertTrue(PlayerChapterTiming.shouldAdvanceAfterCredits(
-            at: 1_424, duration: 1_425, segments: credits()))
-        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAfterCredits(
-            at: 1_340, duration: 1_425, segments: credits()))
-        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAfterCredits(
-            at: 1_424, duration: 1_425, segments: credits(verified: false)))
-        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAfterCredits(
-            at: 1_424, duration: 1_425, segments: credits(preview: true)))
-        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAfterCredits(
-            at: 1_422, duration: 1_500, segments: credits()))
+    func testAutoNextStartsAsSoonAsVerifiedCreditsBegin() {
+        let markers = credits()
+        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_339.9, duration: 1_425, segments: markers))
+        XCTAssertTrue(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_340, duration: 1_425, segments: markers))
+        XCTAssertTrue(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_390, duration: 1_425, segments: markers))
+        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_340, duration: 1_425, segments: credits(verified: false)))
+    }
+
+    func testAutoNextIgnoresPostCreditScenesAndPreviews() {
+        // Long remaining footage does not delay Auto Next when the credits
+        // start time is verified: that is the requested behavior.
+        XCTAssertTrue(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_340, duration: 1_500, segments: credits(preview: true)))
+        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_340, duration: 1_500, segments: credits(verified: false)))
+        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_500, duration: 1_500, segments: credits()))
+        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: .nan, duration: 1_425, segments: credits()))
+        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_340, duration: 0, segments: credits()))
     }
 
     func testPrefetchBeforeCreditsOrLastNinetySeconds() {
