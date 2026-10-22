@@ -105,6 +105,9 @@ struct PlayerView: View {
     @State private var skipSegments: SkipSegments?
     @State private var activeSkipSegment: SkipSegmentType?
     @State private var skippedSegments: Set<SkipSegmentType> = []
+    @State private var skipFetchTask: Task<Void, Never>?
+    @State private var didRequestSkipSegments = false
+    @State private var didAdvanceAfterCredits = false
     @State private var skip85ButtonFrame: CGRect = .zero
     @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = true
 
@@ -297,11 +300,30 @@ struct PlayerView: View {
                 lockOverlayView
             }
 
-            if let segment = activeSkipSegment, !castManager.isConnected, skip85ButtonFrame != .zero {
+            if !castManager.isConnected, skip85ButtonFrame != .zero,
+               activeSkipSegment != nil || showNextEpisodePrompt {
                 ZStack(alignment: .topLeading) {
                     Color.clear
-                    PlayerSkipButton(segmentType: segment, onSkip: skipToSegmentEnd)
-                        .offset(x: skip85ButtonFrame.minX, y: skip85ButtonFrame.minY)
+                    HStack(spacing: 10) {
+                        if let segment = activeSkipSegment {
+                            PlayerSkipButton(segmentType: segment, onSkip: skipToSegmentEnd)
+                        }
+                        if showNextEpisodePrompt {
+                            Button {
+                                guard !isLoadingNextEpisode else { return }
+                                Task { @MainActor in await loadAndAdvance() }
+                            } label: {
+                                Label("Next Episode", systemImage: "forward.end.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 14)
+                                    .frame(height: 36)
+                                    .background(.ultraThinMaterial, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .offset(x: skip85ButtonFrame.minX, y: skip85ButtonFrame.minY)
                 }
                 .ignoresSafeArea()
                 .allowsHitTesting(true)
@@ -372,6 +394,7 @@ struct PlayerView: View {
             autoAdvanceTask?.cancel()
             autoAdvanceTask = nil
             prefetchTask?.cancel()
+            skipFetchTask?.cancel()
             cancelStallWatchdog(resetAttempts: true)
             if let obs = timeObserver { player?.removeTimeObserver(obs) }
             rateObserver?.invalidate()
@@ -1430,6 +1453,34 @@ struct PlayerView: View {
         scheduleHide()
     }
 
+    private var showNextEpisodePrompt: Bool {
+        PlayerChapterTiming.shouldOfferNext(
+            at: currentTime, duration: duration, segments: skipSegments,
+            hasNext: onWatchNext != nil || onSequelNeeded != nil
+        )
+    }
+
+    /// Request time markers after AVPlayer reports the real length of this cut.
+    /// Cancel and reject stale replies when changing episode or stream URL.
+    private func requestSkipMetadataIfNeeded() {
+        guard !didRequestSkipSegments, duration > 60, duration.isFinite,
+              let ctx = currentContext, let aniListID = ctx.aniListID else { return }
+        didRequestSkipSegments = true
+        let ep = ctx.episodeNumber
+        let malID = ctx.malID
+        let streamURL = currentStream.url
+        let length = duration
+        skipFetchTask = Task { @MainActor in
+            let result = await SkipTimestampsService.shared.fetchSegments(
+                aniListID: aniListID, episodeNumber: ep,
+                malID: malID, playbackDuration: length
+            )
+            guard !Task.isCancelled, currentContext?.episodeNumber == ep,
+                  currentStream.url == streamURL else { return }
+            skipSegments = result
+        }
+    }
+
     private func skipToSegmentEnd() {
         guard let type = activeSkipSegment,
               let seg = skipSegments?.segment(for: type) else { return }
@@ -1707,7 +1758,11 @@ struct PlayerView: View {
                         progress: progress,
                         threshold: watchedPercentage / 100.0,
                         hasLoader: onWatchNext != nil,
-                        alreadyStarted: didPrefetchNext) {
+                        alreadyStarted: didPrefetchNext,
+                        remainingSeconds: duration - currentTime,
+                        creditsStart: skipSegments?.isDurationVerified == true
+                            ? skipSegments?.credits?.startMs.map { $0 / 1_000 } : nil,
+                        currentTime: currentTime) {
                     didPrefetchNext = true
                     startPrefetchNext()
                 }
@@ -1734,30 +1789,30 @@ struct PlayerView: View {
             if let target = pendingResumeTarget, currentTime >= target - 3 {
                 pendingResumeTarget = nil
             }
+            requestSkipMetadataIfNeeded()
             if let segments = skipSegments {
-                let timeMs = currentTime * 1000
-                var newActive: SkipSegmentType? = nil
-                for type in SkipSegmentType.allCases {
-                    if let seg = segments.segment(for: type) {
-                        let start = seg.startMs ?? 0
-                        if timeMs >= start && timeMs < seg.endMs {
-                            newActive = type
-                            break
-                        }
+                let newActive = PlayerChapterTiming.activeSegment(
+                    at: currentTime, segments: segments)
+                if let type = newActive,
+                   autoSkipSegments && PlayerChapterTiming.shouldAutoSkip(type, segments: segments),
+                   !skippedSegments.contains(type), let seg = segments.segment(for: type) {
+                    skippedSegments.insert(type)
+                    activeSkipSegment = nil
+                    p?.seek(to: CMTime(seconds: seg.endMs / 1000, preferredTimescale: 600),
+                            toleranceBefore: .zero, toleranceAfter: .zero)
+                } else {
+                    activeSkipSegment = newActive.flatMap {
+                        skippedSegments.contains($0) ? nil : $0
                     }
                 }
-                if autoSkipSegments {
-                    if let type = newActive, !skippedSegments.contains(type),
-                       let seg = segments.segment(for: type) {
-                        skippedSegments.insert(type)
-                        activeSkipSegment = nil
-                        p?.seek(to: CMTime(seconds: seg.endMs / 1000, preferredTimescale: 600),
-                                toleranceBefore: .zero, toleranceAfter: .zero)
-                    } else {
-                        activeSkipSegment = newActive
-                    }
-                } else {
-                    activeSkipSegment = newActive
+                // A verified end-credit marker can advance near the actual end.
+                // Never jump over an unknown post-credit scene or preview.
+                if autoNextEpisode && onWatchNext != nil && isPlaying,
+                   !isLoadingNextEpisode && !didAdvanceAfterCredits,
+                   PlayerChapterTiming.shouldAdvanceAfterCredits(
+                        at: currentTime, duration: duration, segments: segments) {
+                    didAdvanceAfterCredits = true
+                    autoAdvanceTask = Task { @MainActor in await loadAndAdvance() }
                 }
             }
             if let p { updateNowPlaying(player: p) }
@@ -1765,15 +1820,13 @@ struct PlayerView: View {
 
         setupPlaybackEndObserver(for: item)
 
+        skipFetchTask?.cancel()
+        skipFetchTask = nil
+        didRequestSkipSegments = false
+        didAdvanceAfterCredits = false
         skipSegments = nil
         activeSkipSegment = nil
         skippedSegments = []
-        if let aid = currentContext?.aniListID, let ep = currentContext?.episodeNumber {
-            Task {
-                let result = await SkipTimestampsService.shared.fetchSegments(aniListID: aid, episodeNumber: ep)
-                skipSegments = result
-            }
-        }
 
         scheduleHide()
         #if os(iOS)
@@ -2751,16 +2804,13 @@ struct PlayerView: View {
         loadSubtitles()
         tvdbEpisodeTitle = nil
         loadTVDBTitle()
+        skipFetchTask?.cancel()
+        skipFetchTask = nil
+        didRequestSkipSegments = false
+        didAdvanceAfterCredits = false
         skipSegments = nil
         activeSkipSegment = nil
         skippedSegments = []
-        if let aid = currentContext?.aniListID {
-            let ep = episodeNumber
-            Task {
-                let result = await SkipTimestampsService.shared.fetchSegments(aniListID: aid, episodeNumber: ep)
-                skipSegments = result
-            }
-        }
         if swapTarget == .cast { castCurrentMedia(startTime: 0) }
         if let p = player { updateNowPlaying(player: p) }
         scheduleHide()
