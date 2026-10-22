@@ -21,7 +21,8 @@ final class SkipTimestampsService {
     ) async -> SkipSegments? {
         // The video is often a different cut from the database submission:
         // distinguish versions by runtime, not only the anime and episode ID.
-        let duration = playbackDuration.isFinite && playbackDuration > 0 ? playbackDuration : 0
+        let duration = playbackDuration.isFinite && playbackDuration > 0 &&
+            playbackDuration <= 14_400 ? playbackDuration : 0
         let key = CacheKey(
             aniListID: aniListID, episodeNumber: episodeNumber, malID: malID,
             durationBucket: Int((duration / 5).rounded())
@@ -141,8 +142,9 @@ final class SkipTimestampsService {
     }
 
     private func validSegment(_ segment: SkipSegments.Segment?, duration: Double) -> SkipSegments.Segment? {
-        guard let segment, let start = segment.startMs, start.isFinite,
-              segment.endMs.isFinite, start >= 0, segment.endMs > start + 3_000 else { return nil }
+        guard let segment, segment.endMs.isFinite else { return nil }
+        let start = segment.startMs ?? 0
+        guard start.isFinite, start >= 0, segment.endMs > start + 3_000 else { return nil }
         if duration > 0 && segment.endMs > duration * 1_000 + 1_500 { return nil }
         return segment
     }
