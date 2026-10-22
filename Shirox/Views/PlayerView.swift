@@ -1803,9 +1803,9 @@ struct PlayerView: View {
                     p?.seek(to: CMTime(seconds: seg.endMs / 1000, preferredTimescale: 600),
                             toleranceBefore: .zero, toleranceAfter: .zero)
                 } else {
-                    activeSkipSegment = newActive.flatMap {
-                        skippedSegments.contains($0) ? nil : $0
-                    }
+                    // Let the user see Skip Intro again after rewinding,
+                    // even when an automatic skip already happened once.
+                    activeSkipSegment = newActive
                 }
                 // A verified end-credit marker can advance near the actual end.
                 // Never jump over an unknown post-credit scene or preview.
