@@ -87,7 +87,7 @@ enum PlayerChapterTiming {
         // Only advance when the verified credits marker reaches almost the
         // very end. Longer remaining footage may be a post-credits scene.
         return creditsStart < creditsEnd && creditsStart >= 0 &&
-            creditsEnd <= duration + 1.5 && duration - creditsEnd <= 8 &&
+            creditsEnd <= duration + 1.5 && duration - creditsEnd <= 2 &&
             position >= creditsEnd - 0.4 && position < duration
     }
 }
