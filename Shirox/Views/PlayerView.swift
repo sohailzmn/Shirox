@@ -109,7 +109,9 @@ struct PlayerView: View {
     @State private var didRequestSkipSegments = false
     @State private var didAdvanceAfterCredits = false
     @State private var skip85ButtonFrame: CGRect = .zero
-    @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = true
+    // Netflix/Crunchyroll-style: show Skip Intro by default; automatic seeks
+    // remain opt-in under the existing player setting.
+    @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = false
 
     // AniList tracking
     @ObservedObject private var aniListAuth = AniListAuthManager.shared
@@ -2653,6 +2655,15 @@ struct PlayerView: View {
 
     private func switchQuality(_ next: StreamResult) {
         guard next.url != currentStream.url else { return }
+        // A different file/hoster may be a different edit, so invalidate
+        // timing marks until the new item's true duration is available.
+        skipFetchTask?.cancel()
+        skipFetchTask = nil
+        skipSegments = nil
+        activeSkipSegment = nil
+        skippedSegments = []
+        didRequestSkipSegments = false
+        didAdvanceAfterCredits = false
         let resumeAt = currentTime
         // While casting, quality is the receiver's business: rebuilding the local item would
         // leave the TV on the old rendition and (before this) start the new one on the phone.
