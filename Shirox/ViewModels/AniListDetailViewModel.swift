@@ -76,6 +76,8 @@ final class AniListDetailViewModel: ObservableObject {
             title: media.title.searchTitle,
             episode: number,
             artwork: artwork,
+            alternativeTitles: [media.title.english, media.title.romaji, media.title.native]
+                .compactMap { $0 },
             onStreamsLoaded: { [weak self] streams, chosen, showHref, available, actualHref in
                 guard let self, let stream = chosen ?? streams.first else { return }
                 self.pendingStreams = streams
