@@ -104,6 +104,12 @@ struct PlayerProgressSlider: View {
                     sampledBucket = -1
                     return
                 }
+                // Modern async image generation is unavailable on the oldest
+                // supported OS (iOS 15). Older devices still get time bubbles.
+                guard #available(iOS 16.0, tvOS 16.0, macOS 13.0, *) else {
+                    sampledFrame = nil
+                    return
+                }
                 let bucket = frameRequestID
                 guard bucket != sampledBucket else { return }
                 sampledBucket = bucket
