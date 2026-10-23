@@ -256,7 +256,7 @@ struct PlayerView: View {
                                videoGravity: isFilled ? .resizeAspectFill : .resizeAspect,
                                onFirstFrame: {
                                    guard !videoReady else { return }
-                                   if let item = player?.currentItem,
+                                   if let item = player.currentItem,
                                       rejectTruncatedEpisodeIfNeeded(item) { return }
                                    videoReady = true
                                    showStallRetry = false
