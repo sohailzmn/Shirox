@@ -1364,8 +1364,18 @@ private struct PlaybackPerformanceDashboard: View {
     var body: some View {
         List {
             Section("Cache this session") {
-                LabeledContent("Episode lists") { Text("\(performance.metadataCacheHits) hits") }
-                LabeledContent("Module scripts") { Text("\(performance.scriptCacheHits) hits") }
+                HStack {
+                    Text("Episode lists")
+                    Spacer()
+                    Text("\(performance.metadataCacheHits) hits")
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Module scripts")
+                    Spacer()
+                    Text("\(performance.scriptCacheHits) hits")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section {
