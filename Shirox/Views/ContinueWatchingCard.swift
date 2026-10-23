@@ -149,13 +149,24 @@ struct ContinueWatchingSection: View {
             allSubtitles: item.allSubtitles
         )
 
+        // Stored Continue Watching entries can retain a MAL ID even when the
+        // AniList ID is absent. The old route threw that ID away, so AniSkip
+        // never received a usable identity after resume.
+        let playbackIdentity = item.resolvedPlaybackIdentity(
+            linkedAniListID: AniListMappingManager.shared.getMapping(title: item.mediaTitle)
+        )
+        Logger.shared.log(
+            "[ContinueWatching] Skip identity: AniList=\(playbackIdentity.aniListID.map(String.init) ?? "nil"), MAL=\(playbackIdentity.malID.map(String.init) ?? "nil")",
+            type: "Debug"
+        )
+
         let context = PlayerContext(
             mediaTitle: item.mediaTitle,
             episodeNumber: item.episodeNumber,
             episodeTitle: item.episodeTitle,
             imageUrl: item.imageUrl,
-            aniListID: item.aniListID,
-            malID: item.aniListID.flatMap { IDMappingService.shared.cachedMalId(forAnilistId: $0) },
+            aniListID: playbackIdentity.aniListID,
+            malID: playbackIdentity.malID,
             moduleId: item.moduleId,
             totalEpisodes: item.totalEpisodes,
             availableEpisodes: item.availableEpisodes,
@@ -318,7 +329,7 @@ struct ContinueWatchingSection: View {
             // Use the existing headless Smart Play search to rediscover the exact episode.
             PlaybackPerformance.shared.begin(title: item.mediaTitle, episode: item.episodeNumber)
             PlayerPresenter.shared.presentResolvingPlayer(
-                mediaId: item.aniListID, title: item.mediaTitle,
+                mediaId: playbackIdentity.aniListID, title: item.mediaTitle,
                 episode: item.episodeNumber, artwork: item.imageUrl,
                 onStreamsLoaded: { fresh, preferred, resolvedHref, resolvedCount, resolvedEpisodeHref in
                     guard let selected = preferred ?? fresh.first else { return }
