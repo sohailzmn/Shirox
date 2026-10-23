@@ -1364,8 +1364,8 @@ private struct PlaybackPerformanceDashboard: View {
     var body: some View {
         List {
             Section("Cache this session") {
-                LabeledContent("Episode lists", value: "\(performance.metadataCacheHits) hits")
-                LabeledContent("Module scripts", value: "\(performance.scriptCacheHits) hits")
+                LabeledContent("Episode lists") { Text("\(performance.metadataCacheHits) hits") }
+                LabeledContent("Module scripts") { Text("\(performance.scriptCacheHits) hits") }
             }
 
             Section {
@@ -1386,9 +1386,9 @@ private struct PlaybackPerformanceDashboard: View {
                                     .font(.caption)
                             }
                             Text(sample.provider).font(.caption).foregroundStyle(.secondary)
-                            LabeledContent("Source search", value: format(sample.sourceSearchMs))
-                            LabeledContent("Stream URL ready", value: format(sample.streamReadyMs))
-                            LabeledContent("First video frame", value: format(sample.firstFrameMs))
+                            LabeledContent("Source search") { Text(format(sample.sourceSearchMs)) }
+                            LabeledContent("Stream URL ready") { Text(format(sample.streamReadyMs)) }
+                            LabeledContent("First video frame") { Text(format(sample.firstFrameMs)) }
                         }
                     }
                 }
