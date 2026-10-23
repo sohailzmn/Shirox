@@ -15,6 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Assert single loading flow and honest first-frame readiness
         run: |
+          echo "Validating commit $(git rev-parse HEAD)"
           python3 - <<'PY'
           from pathlib import Path
           player=Path("Shirox/Views/PlayerView.swift").read_text()
