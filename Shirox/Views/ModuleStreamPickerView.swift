@@ -43,12 +43,20 @@ private enum ModuleSeasonFallback {
         return nil
     }
 
-    static func queries(for title: String) -> [String] {
-        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !title.isEmpty else { return [] }
-        guard let parsed = parsedSuffix(in: title),
-              parsed.base.caseInsensitiveCompare(title) != .orderedSame else { return [title] }
-        return [title, parsed.base]
+    static func queries(for title: String, alternatives: [String] = []) -> [String] {
+        var result: [String] = []
+        var seen = Set<String>()
+        for candidate in [title] + alternatives {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.count > 1 else { continue }
+            for value in [trimmed, parsedSuffix(in: trimmed)?.base].compactMap({ $0 }) {
+                let normalized = value.folding(
+                    options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+                if seen.insert(normalized).inserted { result.append(value) }
+            }
+            if result.count >= 8 { break }
+        }
+        return Array(result.prefix(8))
     }
 
     /// For a grouped AniWorld listing, match the actual season URL. When S2 is
@@ -74,6 +82,7 @@ private enum ModuleSeasonFallback {
 struct ModuleStreamPickerView: View {
     let mediaId: Int?
     let animeTitle: String
+    let alternateTitles: [String]
     let episodeNumber: Int
     let onDismiss: () -> Void
     let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
@@ -83,6 +92,7 @@ struct ModuleStreamPickerView: View {
 
     init(
         mediaId: Int?, animeTitle: String, episodeNumber: Int,
+        alternateTitles: [String] = [],
         onDismiss: @escaping () -> Void,
         headless: Bool = false, onStatus: ((String) -> Void)? = nil,
         onFailure: (() -> Void)? = nil,
@@ -90,6 +100,7 @@ struct ModuleStreamPickerView: View {
     ) {
         self.mediaId = mediaId
         self.animeTitle = animeTitle
+        self.alternateTitles = alternateTitles
         self.episodeNumber = episodeNumber
         self.onDismiss = onDismiss
         self.onStreamsLoaded = onStreamsLoaded
@@ -266,7 +277,8 @@ struct ModuleStreamPickerView: View {
                     // retry a seasonless title (e.g. "Blue Lock" for "Blue Lock Season 2").
                     let alias = ModuleSearchAliasManager.shared.getAlias(
                         mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id)
-                    let queries = ModuleSeasonFallback.queries(for: alias ?? animeTitle)
+                    let queries = ModuleSeasonFallback.queries(
+                        for: alias ?? animeTitle, alternatives: alternateTitles + [animeTitle])
                     for searchPass in 0...queries.count {
                         guard !Task.isCancelled else { return }
                         if searchPass == 0 && hrefs.isEmpty { continue }
