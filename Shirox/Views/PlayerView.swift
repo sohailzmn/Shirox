@@ -208,6 +208,7 @@ struct PlayerView: View {
     // PiP (iOS only)
     #if os(iOS)
     @State private var pipTrigger = 0
+    @State private var miniSurfaceRefresh = 0
     #endif
 
     init(stream: StreamResult, streams: [StreamResult] = [], customDismiss: (() -> Void)? = nil, context: PlayerContext? = nil, onWatchNext: WatchNextLoader? = nil, onStreamExpired: StreamRefetchLoader? = nil, onSequelNeeded: SequelLoader? = nil, onSequelAdvanced: ((SequelNavigation) -> Void)? = nil, onFinished: ((PlayerContext) -> Void)? = nil) {
@@ -243,6 +244,7 @@ struct PlayerView: View {
             } else if let player {
                 #if os(iOS)
                 VideoLayerView(player: player, pipTrigger: pipTrigger,
+                               refreshToken: miniSurfaceRefresh,
                                videoGravity: isFilled ? .resizeAspectFill : .resizeAspect)
                     .ignoresSafeArea()
                     .overlay { videoLoadingOverlay }
@@ -448,6 +450,12 @@ struct PlayerView: View {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             #endif
         }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(
+            for: Notification.Name("ShiroxMiniPlayerRestored"))) { _ in
+            miniSurfaceRefresh += 1
+        }
+        #endif
         .onChangeOf(volume) { newVolume in
             player?.volume = newVolume
             castManager.setVolume(newVolume)
@@ -3052,11 +3060,13 @@ final class MacPlayerWindowManager {
 struct VideoLayerView: UIViewRepresentable {
     let player: AVPlayer
     var pipTrigger: Int = 0
+    var refreshToken: Int = 0
     var videoGravity: AVLayerVideoGravity = .resizeAspect
 
     class Coordinator: NSObject, AVPictureInPictureControllerDelegate, @unchecked Sendable {
         var pipController: AVPictureInPictureController?
         var lastPipTrigger: Int = 0
+        var lastRefreshToken: Int = 0
         private var foregroundObserver: NSObjectProtocol?
 
         override init() {
@@ -3093,6 +3103,12 @@ struct VideoLayerView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PlayerLayerUIView, context: Context) {
+        if refreshToken != context.coordinator.lastRefreshToken {
+            // Rebind after the separate mini AVPlayerLayer releases this
+            // playback session to avoid a black full-screen video surface.
+            context.coordinator.lastRefreshToken = refreshToken
+            uiView.player = nil
+        }
         uiView.player = player
         uiView.playerLayer.videoGravity = videoGravity
         if pipTrigger > context.coordinator.lastPipTrigger {
