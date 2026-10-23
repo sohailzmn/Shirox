@@ -87,6 +87,13 @@ enum PlaybackRouting {
         position <= 0.5 && lastSaved > 30
     }
 
+    /// Failed-item KVO, stall detection and background restoration all share one
+    /// per-episode budget. A fresh tokenized URL can otherwise refetch forever.
+    /// Only an explicit Retry or a different episode opens a new cycle.
+    static func canAttemptStreamRefetch(attempts: Int, limit: Int = 3) -> Bool {
+        attempts >= 0 && limit > 0 && attempts < limit
+    }
+
     /// The elapsed time to publish to `MPNowPlayingInfoCenter`.
     ///
     /// During a cast this must be the receiver's position: the local player's clock is frozen
