@@ -1866,6 +1866,10 @@ struct PlayerView: View {
         let qualityURL = currentStream.url
         let qualityHeaders = currentStream.headers
         Task {
+            // The quality-menu manifest is optional metadata. Do not compete with the
+            // actual video segments for bandwidth before the first displayed frame.
+            await waitForVideoReady()
+            guard !Task.isCancelled, videoReady else { return }
             let qualities = await HLSQualityParser.parse(url: qualityURL, headers: qualityHeaders)
             await MainActor.run {
                 guard player?.currentItem === item, currentStream.url == qualityURL else { return }
@@ -2932,6 +2936,8 @@ struct PlayerView: View {
         selectedQualityBandwidth = nil
         // A manual host/source change must never inherit the previous item’s HLS ladder.
         Task {
+            await waitForVideoReady()
+            guard !Task.isCancelled, videoReady else { return }
             let levels = await HLSQualityParser.parse(url: next.url, headers: next.headers)
             await MainActor.run {
                 guard player?.currentItem === newItem, currentStream.url == next.url else { return }
@@ -3063,6 +3069,8 @@ struct PlayerView: View {
         let qualityURL = next.url
         let qualityHeaders = next.headers
         Task {
+            await waitForVideoReady()
+            guard !Task.isCancelled, videoReady else { return }
             let qualities = await HLSQualityParser.parse(url: qualityURL, headers: qualityHeaders)
             await MainActor.run {
                 guard player?.currentItem === newItem, currentStream.url == qualityURL else { return }
