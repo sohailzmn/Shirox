@@ -10,11 +10,17 @@ on:
       - "Shirox/Views/DetailView.swift"
       - "Shirox/Views/ModuleStreamPickerView.swift"
       - "Shirox/Services/HLSQualityParser.swift"
+      - "Shirox/Services/ModuleSearchAliasManager.swift"
+      - "Shirox/Views/SettingsView.swift"
       - "Shirox/Services/PlaybackRouting.swift"
       - "ShiroxTests/PlaybackRoutingTests.swift"
       - "ShiroxTests/HLSQualityPreferenceTests.swift"
       - "ShiroxTests/ContinueWatchingSeasonMatchTests.swift"
       - "ShiroxTests/EpisodeNavigatorTests.swift"
+      - "ShiroxTests/HomeCacheStoreTests.swift"
+concurrency:
+  group: shirox-playback-regression-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -86,6 +92,7 @@ jobs:
             -only-testing:ShiroxTests/HLSQualityPreferenceTests \
             -only-testing:ShiroxTests/ContinueWatchingSeasonMatchTests \
             -only-testing:ShiroxTests/EpisodeNavigatorTests \
+            -only-testing:ShiroxTests/HomeCacheStoreTests \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
             > "$RUNNER_TEMP/player-tests.log" 2>&1 || {
               grep -nE '(error:|failed|TEST FAILED)' "$RUNNER_TEMP/player-tests.log" | tail -75 || true
