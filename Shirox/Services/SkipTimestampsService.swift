@@ -23,13 +23,17 @@ final class SkipTimestampsService {
     /// waiting for TVDB/TMDB/IMDB mapping. The player uses this result first;
     /// a longer secondary lookup may fill missing chapters afterwards.
     func fetchFastSegments(
-        malID: Int, episode: Int, playbackDuration: Double
+        malID: Int, episode: Int, playbackDuration: Double,
+        refreshIncomplete: Bool = false
     ) async -> SkipSegments? {
         guard malID > 0, episode > 0, playbackDuration.isFinite,
               playbackDuration >= 60, playbackDuration <= 14_400 else { return nil }
         let key = AniSkipKey(malID: malID, episode: episode,
                              durationBucket: Int((playbackDuration / 5).rounded()))
-        if let cached = fastCache[key] { return cached }
+        if let cached = fastCache[key],
+           !(refreshIncomplete && (cached.intro == nil || cached.credits == nil)) {
+            return cached
+        }
         let result = await fetchAniSkip(
             malID: malID, episode: episode, duration: playbackDuration)
         if let result {
@@ -43,7 +47,7 @@ final class SkipTimestampsService {
 
     func fetchSegments(
         aniListID: Int, episodeNumber: Int, malID: Int? = nil,
-        playbackDuration: Double = 0
+        playbackDuration: Double = 0, refreshIncomplete: Bool = false
     ) async -> SkipSegments? {
         // The video is often a different cut from the database submission:
         // distinguish versions by runtime, not only the anime and episode ID.
@@ -53,7 +57,10 @@ final class SkipTimestampsService {
             aniListID: aniListID, episodeNumber: episodeNumber, malID: malID,
             durationBucket: Int((duration / 5).rounded())
         )
-        if let cached = cache[key] { return cached }
+        if let cached = cache[key],
+           !(refreshIncomplete && (cached.intro == nil || cached.credits == nil)) {
+            return cached
+        }
 
         // Try the fast, episode-specific MAL source before expensive cross-ID
         // mapping requests. An AniSkip result may have ONLY the opening or
@@ -61,7 +68,8 @@ final class SkipTimestampsService {
         let aniSkip: SkipSegments?
         if let malID, malID > 0 {
             aniSkip = await fetchFastSegments(
-                malID: malID, episode: episodeNumber, playbackDuration: duration)
+                malID: malID, episode: episodeNumber, playbackDuration: duration,
+                refreshIncomplete: refreshIncomplete)
         } else {
             aniSkip = nil
         }
@@ -90,7 +98,8 @@ final class SkipTimestampsService {
         let preciseAniSkip: SkipSegments?
         if aniListEpisode != episodeNumber, let malID {
             preciseAniSkip = await fetchFastSegments(
-                malID: malID, episode: aniListEpisode, playbackDuration: duration)
+                malID: malID, episode: aniListEpisode, playbackDuration: duration,
+                refreshIncomplete: refreshIncomplete)
         } else {
             preciseAniSkip = nil
         }
