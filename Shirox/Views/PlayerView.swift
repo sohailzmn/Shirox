@@ -986,6 +986,7 @@ struct PlayerView: View {
             onNextEpisodeTap: (onWatchNext != nil || onSequelNeeded != nil) ? { Task { @MainActor in await loadAndAdvance() } } : nil,
             hasActiveSkipSegment: activeSkipSegment != nil,
             skipSegments: skipSegments,
+            previewAsset: player?.currentItem?.asset,
             episodeNumber: currentContext?.episodeNumber,
             tvdbEpisodeTitle: tvdbEpisodeTitle,
             mediaTitle: currentContext?.mediaTitle
