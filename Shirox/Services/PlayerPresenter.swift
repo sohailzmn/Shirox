@@ -223,6 +223,8 @@ final class PlayerPresenter: ObservableObject {
         guard let fullscreen = playerVC else { return }
         fullscreen.view.isHidden = false
         fullscreen.view.isUserInteractionEnabled = true
+        NotificationCenter.default.post(
+            name: Notification.Name("ShiroxMiniPlayerRestored"), object: nil)
         orientationLock = .allButUpsideDown
         UIView.performWithoutAnimation { refreshSupportedOrientations() }
     }
