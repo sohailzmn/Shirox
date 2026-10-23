@@ -1,0 +1,58 @@
+name: Build Shirox Playback Test IPA (Unsigned)
+on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/build-player-test-ipa-20261024.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    name: Build unsigned iPhone test IPA from current feature branch
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show exact source revision
+        run: |
+          echo "Building git commit: $(git rev-parse HEAD)"
+          echo "Branch: $GITHUB_REF_NAME"
+          xcodebuild -version
+          test "$GITHUB_REF_NAME" = "feature/smart-playback-recovery-20261021"
+      - name: Build unsigned iPhone IPA using existing project script
+        run: |
+          chmod +x ./buildipa.sh
+          ./buildipa.sh
+      - name: Verify IPA structure and record checksum
+        run: |
+          test -s build/Shirox.ipa
+          unzip -tq build/Shirox.ipa
+          unzip -Z1 build/Shirox.ipa | grep -E '^Payload/[^/]+\.app/' >/dev/null
+          shasum -a 256 build/Shirox.ipa | tee build/Shirox.ipa.sha256
+          ls -lh build/Shirox.ipa
+      - name: Upload test IPA as GitHub Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shirox-Playback-Test-IPA
+          path: |
+            build/Shirox.ipa
+            build/Shirox.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish convenient prerelease download
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="playback-test-${GITHUB_SHA:0:12}"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Shirox Playback Test (unsigned) ${GITHUB_SHA:0:12}" \
+            --notes "Unsigned iOS test IPA built from commit $GITHUB_SHA on feature/smart-playback-recovery-20261021. Includes the recent stream recovery, HLS quality and Continue Watching fixes. This is a device-test build, not verified live-stream functionality. Sign before installing on iPhone." \
+            --prerelease
+          gh release upload "$TAG" build/Shirox.ipa build/Shirox.ipa.sha256 \
+            --repo "$GITHUB_REPOSITORY" --clobber
