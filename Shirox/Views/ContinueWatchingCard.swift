@@ -351,6 +351,26 @@ struct ContinueWatchingCardDisplay: View {
         return epPart
     }
 
+    /// A familiar streaming-app summary without assuming every episode lasts
+    /// 24 minutes or incorrectly treating an Up Next placeholder as in-progress.
+    private var watchMetadata: String {
+        var fragments: [String] = []
+        if let href = item.episodeHref,
+           let range = href.range(of: #"/staffel-\d+"#, options: .regularExpression) {
+            let season = href[range].replacingOccurrences(of: "/staffel-", with: "")
+            fragments.append("S\(season) · E\(item.episodeNumber)")
+        } else {
+            fragments.append("Episode \(item.episodeNumber)")
+        }
+        if !item.streamUrl.isEmpty, item.totalSeconds > 0 {
+            let remaining = max(0, Int(ceil((item.totalSeconds - item.watchedSeconds) / 60)))
+            fragments.append(remaining == 0 ? "Almost finished" : "\(remaining) min left")
+        } else if item.streamUrl.isEmpty {
+            fragments.append("Up next")
+        }
+        return fragments.joined(separator: "  •  ")
+    }
+
     private var isWatched: Bool {
         ContinueWatchingManager.shared.isWatched(
             aniListID: item.aniListID,
@@ -437,6 +457,13 @@ struct ContinueWatchingCardDisplay: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+            HStack(spacing: 6) {
+                Image(systemName: item.streamUrl.isEmpty ? "forward.end.fill" : "play.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(watchMetadata).lineLimit(1)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
         .task(id: item.id) {
             // Resolve the episode-specific thumbnail via the same robust waterfall the
