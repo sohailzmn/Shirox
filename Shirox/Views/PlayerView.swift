@@ -148,6 +148,7 @@ struct PlayerView: View {
     @AppStorage("playerLiquidGlass") private var playerLiquidGlass = true
     @AppStorage("speedBoostTolerance") private var speedBoostTolerance: Int = 10
     @AppStorage("preferredQuality") private var preferredQuality: String = "auto"
+    @AppStorage("preferredAudioLanguage") private var preferredAudioLanguage: String = "auto"
     @State private var playbackSpeed: Double = 1.0
     @State private var volume: Float = 1.0
     @State private var showSubtitleSettings = false
@@ -1658,12 +1659,9 @@ struct PlayerView: View {
 
         Task {
             guard let group = try? await asset.loadMediaSelectionGroup(for: .audible) else { return }
-            await MainActor.run { audioGroup = group }
-            if currentStream.subtitle != nil {
-                let jaOptions = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "ja"))
-                if let jaOption = jaOptions.first {
-                    await MainActor.run { item.select(jaOption, in: group) }
-                }
+            await MainActor.run {
+                audioGroup = group
+                applyRememberedAudio(to: item, group: group, subtitle: currentStream.subtitle != nil)
             }
         }
         let p = AVPlayer(playerItem: item)
@@ -2699,7 +2697,10 @@ struct PlayerView: View {
         loadSubtitles()
         Task {
             guard let group = try? await asset.loadMediaSelectionGroup(for: .audible) else { return }
-            await MainActor.run { audioGroup = group }
+            await MainActor.run {
+                audioGroup = group
+                applyRememberedAudio(to: newItem, group: group, subtitle: next.subtitle != nil)
+            }
         }
         // Seek to same position after item is ready
         Task { @MainActor in
@@ -2793,10 +2794,9 @@ struct PlayerView: View {
         audioGroup = nil
         Task {
             guard let group = try? await asset.loadMediaSelectionGroup(for: .audible) else { return }
-            await MainActor.run { audioGroup = group }
-            if next.subtitle != nil {
-                let jaOptions = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "ja"))
-                if let jaOption = jaOptions.first { await MainActor.run { newItem.select(jaOption, in: group) } }
+            await MainActor.run {
+                audioGroup = group
+                applyRememberedAudio(to: newItem, group: group, subtitle: next.subtitle != nil)
             }
         }
         hlsQualities = []
@@ -2832,20 +2832,49 @@ struct PlayerView: View {
     // Rebuilt on every open by PlayerMenuButton's deferred element, so state stays fresh.
 
     private func qualityMenuItems() -> [PlayerMenuItem] {
-        var items = [PlayerMenuItem(title: "Auto", isOn: selectedQualityBandwidth == nil) { selectQuality(nil) }]
+        var items = [PlayerMenuItem(title: "Auto", isOn: selectedQualityBandwidth == nil) {
+            preferredQuality = "auto"
+            selectQuality(nil)
+        }]
         items += hlsQualities.map { quality in
             PlayerMenuItem(title: quality.label, isOn: selectedQualityBandwidth == quality.bandwidth) {
+                if let height = HLSQualityParser.height(of: quality) {
+                    preferredQuality = String(height)
+                }
                 selectQuality(quality.bandwidth)
             }
         }
         return items
     }
 
+    @MainActor
+    private func applyRememberedAudio(
+        to item: AVPlayerItem, group: AVMediaSelectionGroup, subtitle: Bool
+    ) {
+        let language = preferredAudioLanguage
+        if language != "auto" {
+            let preferred = AVMediaSelectionGroup.mediaSelectionOptions(
+                from: group.options, with: Locale(identifier: language))
+            if let option = preferred.first {
+                item.select(option, in: group)
+                return
+            }
+        }
+        if subtitle {
+            let japanese = AVMediaSelectionGroup.mediaSelectionOptions(
+                from: group.options, with: Locale(identifier: "ja"))
+            if let option = japanese.first { item.select(option, in: group) }
+        }
+    }
+
     private func audioMenuItems() -> [PlayerMenuItem] {
         guard let group = audioGroup, let item = player?.currentItem else { return [] }
         let selected = item.currentMediaSelection.selectedMediaOption(in: group)
         return group.options.map { option in
-            PlayerMenuItem(title: option.displayName, isOn: option == selected) { item.select(option, in: group) }
+            PlayerMenuItem(title: option.displayName, isOn: option == selected) {
+                item.select(option, in: group)
+                preferredAudioLanguage = option.locale?.identifier ?? "auto"
+            }
         }
     }
 
