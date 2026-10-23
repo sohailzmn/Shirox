@@ -249,6 +249,9 @@ struct ModuleStreamPickerView: View {
                 guard !Task.isCancelled else { return }
                 autoPlayMessage = "Checking \(module.sourceName)…"
                 onStatus?(module.sourceName)
+                if headless {
+                    PlaybackPerformance.shared.sourceSearch(provider: module.sourceName)
+                }
                 let runner = ModuleJSRunner()
                 do {
                     try await runner.load(module: module)
@@ -323,6 +326,7 @@ struct ModuleStreamPickerView: View {
                             moduleId: module.id, title: winner.title)
                         UserDefaults.standard.set(module.id, forKey: "lastUsedModuleId")
                         moduleManager.selectModule(module)
+                        if headless { PlaybackPerformance.shared.streamResolved() }
                         if !headless { onDismiss() }
                         onStreamsLoaded(streams, winner, href, episodes.count, episode.href)
                         return
@@ -335,6 +339,7 @@ struct ModuleStreamPickerView: View {
             }
             if !Task.isCancelled {
                 autoPlayMessage = "No working stream found. Choose a module below or retry."
+                if headless { PlaybackPerformance.shared.failed() }
                 onFailure?()
             }
         }
