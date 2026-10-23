@@ -2221,11 +2221,14 @@ struct PlayerView: View {
                 // the next source. Don't run the same stateful loader twice.
                 guard !didAdvanceAfterCredits && !isLoadingNextEpisode else { return }
                 didAdvanceAfterCredits = true
+                let outgoing = currentContext?.episodeNumber
                 autoAdvanceTask = Task { @MainActor in
                     isPlaying = false
                     setControlsVisible(true)
                     if autoNextEpisode { await loadAndAdvance() }
-                    if currentContext?.episodeNumber == nil { didAdvanceAfterCredits = false }
+                    if currentContext?.episodeNumber == outgoing {
+                        didAdvanceAfterCredits = false
+                    }
                 }
             }
         )
