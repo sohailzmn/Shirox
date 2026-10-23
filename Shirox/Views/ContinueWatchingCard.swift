@@ -312,6 +312,80 @@ struct ContinueWatchingSection: View {
             )
             return
         }
+        if !isLocal {
+            // Legacy Continue Watching entries may lack a detail href entirely. They still
+            // must NOT mount an expired, persisted CDN URL (the black 0:00 / short clip bug).
+            // Use the existing headless Smart Play search to rediscover the exact episode.
+            PlaybackPerformance.shared.begin(title: item.mediaTitle, episode: item.episodeNumber)
+            PlayerPresenter.shared.presentResolvingPlayer(
+                mediaId: item.aniListID, title: item.mediaTitle,
+                episode: item.episodeNumber, artwork: item.imageUrl,
+                onStreamsLoaded: { fresh, preferred, resolvedHref, resolvedCount, resolvedEpisodeHref in
+                    guard let selected = preferred ?? fresh.first else { return }
+                    let resolvedModule = ModuleManager.shared.activeModule
+                    let refreshedContext = PlayerContext(
+                        mediaTitle: context.mediaTitle,
+                        episodeNumber: context.episodeNumber,
+                        episodeTitle: context.episodeTitle,
+                        imageUrl: context.imageUrl,
+                        aniListID: context.aniListID,
+                        malID: context.malID,
+                        moduleId: resolvedModule?.id ?? context.moduleId,
+                        totalEpisodes: resolvedCount ?? context.totalEpisodes,
+                        availableEpisodes: resolvedCount ?? context.availableEpisodes,
+                        isAiring: context.isAiring,
+                        resumeFrom: context.resumeFrom,
+                        detailHref: resolvedHref,
+                        episodeHref: resolvedEpisodeHref,
+                        streamTitle: selected.title,
+                        workingDetailHref: resolvedHref,
+                        thumbnailUrl: context.thumbnailUrl
+                    )
+                    let refreshedExpired: StreamRefetchLoader? = {
+                        guard let href = resolvedHref, let module = resolvedModule else { return nil }
+                        return { episodeNumber, episodeHref in
+                            let runner = ModuleJSRunner()
+                            try await runner.load(module: module)
+                            let episodes = try await runner.fetchEpisodes(url: href)
+                            guard let target = EpisodeNavigator.resolve(
+                                href: episodeHref, orNumber: episodeNumber, in: episodes
+                            ) else { return [] }
+                            return try await runner.fetchStreams(episodeUrl: target.href)
+                        }
+                    }()
+                    let refreshedNext: WatchNextLoader? = {
+                        guard let href = resolvedHref, let module = resolvedModule else { return nil }
+                        var currentHref = resolvedEpisodeHref
+                        return { currentNumber in
+                            let runner = ModuleJSRunner()
+                            try await runner.load(module: module)
+                            let episodes = try await runner.fetchEpisodes(url: href)
+                            guard let next = EpisodeNavigator.next(
+                                afterHref: currentHref, orNumber: currentNumber, in: episodes
+                            ) else { return nil }
+                            let streams = try await runner.fetchStreams(episodeUrl: next.href)
+                            guard !streams.isEmpty else { return nil }
+                            currentHref = next.href
+                            return (streams: streams, episodeNumber: Int(next.number),
+                                    episodeHref: next.href)
+                        }
+                    }()
+                    PlayerPresenter.shared.presentPlayer(
+                        stream: selected, streams: fresh, context: refreshedContext,
+                        onWatchNext: refreshedNext, onStreamExpired: refreshedExpired)
+                },
+                onChooseSource: {
+                    if item.aniListID != nil {
+                        navTarget = .anilist(item)
+                    } else {
+                        ToastManager.shared.show(
+                            message: "Search for this series to choose a different source.",
+                            type: .error)
+                    }
+                }
+            )
+            return
+        }
         PlayerPresenter.shared.presentPlayer(
             stream: stream, streams: storedStreams, context: context,
             onWatchNext: onWatchNext, onStreamExpired: onExpired)
