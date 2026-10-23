@@ -434,6 +434,8 @@ struct PlayerView: View {
             autoAdvanceTask = nil
             prefetchTask?.cancel()
             skipFetchTask?.cancel()
+            firstFrameWatchdog?.cancel()
+            startupBitrateTask?.cancel()
             nextPreviewTask?.cancel()
             cancelStallWatchdog(resetAttempts: true)
             if let obs = timeObserver { player?.removeTimeObserver(obs) }
