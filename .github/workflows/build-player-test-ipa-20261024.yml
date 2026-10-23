@@ -18,14 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 8cd4e2eb8d07941edebba7ba5d39d4e9fef1daed
+          ref: 208eb3bb57ccd639a55e366776df3797e8bd007b
       - name: Show exact source revision
         run: |
           echo "Building git commit: $(git rev-parse HEAD)"
           echo "Branch: $GITHUB_REF_NAME"
           xcodebuild -version
           test "$GITHUB_REF_NAME" = "feature/smart-playback-recovery-20261021"
-          test "$(git rev-parse HEAD)" = "8cd4e2eb8d07941edebba7ba5d39d4e9fef1daed"
+          test "$(git rev-parse HEAD)" = "208eb3bb57ccd639a55e366776df3797e8bd007b"
       - name: Build unsigned iPhone IPA using existing project script
         run: |
           chmod +x ./buildipa.sh
@@ -51,11 +51,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="resume-intro-outro-8cd4e2eb8d07"
+          TAG="resume-intro-outro-208eb3bb57cc"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --target "8cd4e2eb8d07941edebba7ba5d39d4e9fef1daed" \
-            --title "Shirox Weiterschauen Intro Outro Fix (unsigned) 8cd4e2e" \
-            --notes "Unsigned iOS test IPA from source commit 8cd4e2eb8d07941edebba7ba5d39d4e9fef1daed. Fixes preserved MAL and AniList IDs during Continue Watching so intro/outro skip works after resume as well as search. Includes prior player repairs. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
+            --target "208eb3bb57ccd639a55e366776df3797e8bd007b" \
+            --title "Shirox Weiterschauen Intro Outro Fix (unsigned) 208eb3b" \
+            --notes "Unsigned iOS test IPA from source commit 208eb3bb57ccd639a55e366776df3797e8bd007b. Fixes preserved MAL and AniList IDs during Continue Watching so intro/outro skip works after resume as well as search. Includes prior player repairs. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
             --prerelease
           gh release upload "$TAG" build/Shirox.ipa build/Shirox.ipa.sha256 \
             --repo "$GITHUB_REPOSITORY" --clobber
