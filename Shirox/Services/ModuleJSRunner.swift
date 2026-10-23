@@ -22,6 +22,8 @@ final class ModuleJSRunner {
     // metadata is cached, never ephemeral expiring video URLs.
     private static var episodesCache: [String: (storedAt: Date, episodes: [EpisodeLink])] = [:]
     private static let episodesTTL: TimeInterval = 300
+    private static var scriptCache: [String: (text: String, loadedAt: Date)] = [:]
+    private static let scriptTTL: TimeInterval = 30 * 60
 
     /// Set when a request made by *this* runner hit a Turnstile wall with no cached cookie.
     /// Host-scoped to this module, so the picker only offers verification for the module
@@ -44,14 +46,16 @@ final class ModuleJSRunner {
 
     func load(module: ModuleDefinition) async throws {
         moduleCacheKey = module.id + "|" + module.scriptUrl
-        // Clear WKWebView cookies (used by networkFetch/extractStreamUrl) for isolation.
-        // HTTPCookieStorage.shared is NOT cleared — the ephemeral URLSession has its own
-        // isolated store, so bypass cookies from earlier calls in this runner persist.
-        NetworkFetchManager.clearCookies()
-
+        // Never globally wipe shared WKWebView cookies just because a new
+        // episode is starting. It added I/O and invalidated legitimate website
+        // verification from prior sessions. This runner still has its own session.
         let script: String
         if let cached = module.scriptContent {
             script = cached
+        } else if let cached = Self.scriptCache[moduleCacheKey],
+                  Date().timeIntervalSince(cached.loadedAt) < Self.scriptTTL {
+            script = cached.text
+            PlaybackPerformance.shared.cacheHit(script: true)
         } else {
             guard let url = URL(string: module.scriptUrl) else {
                 throw URLError(.badURL)
@@ -61,6 +65,10 @@ final class ModuleJSRunner {
                 throw URLError(.cannotDecodeContentData)
             }
             script = fetched
+            // Limit memory, and never cache executable source without version
+            // identity. Cached entries expire; edits in installed modules win.
+            if Self.scriptCache.count >= 12 { Self.scriptCache.removeAll() }
+            Self.scriptCache[moduleCacheKey] = (fetched, Date())
         }
         
         let ctx = JSContext()!
@@ -94,6 +102,7 @@ final class ModuleJSRunner {
         let key = moduleCacheKey + "|" + url
         if let cached = Self.episodesCache[key],
            Date().timeIntervalSince(cached.storedAt) < Self.episodesTTL {
+            PlaybackPerformance.shared.cacheHit(script: false)
             return cached.episodes
         }
         let json = try await callAsyncJS("extractEpisodes", args: [url])
