@@ -20,7 +20,7 @@ private final class ModuleStreamVMStore: ObservableObject {
 // AniList often names a second season "Blue Lock Season 2" while AniWorld stores
 // every season under "Blue Lock". Keep the requested season when choosing an episode:
 // simplifying the search title must never silently play S1E1 for S2E1.
-private enum ModuleSeasonFallback {
+enum ModuleSeasonFallback {
     static func parsedSuffix(in title: String) -> (base: String, season: Int)? {
         let patterns = [
             #"(?i)(?:\s*[\(\[:–—-]\s*|\s+)(?:season|staffel)\s*(\d{1,2})\s*[\)\]]?\s*$"#,
