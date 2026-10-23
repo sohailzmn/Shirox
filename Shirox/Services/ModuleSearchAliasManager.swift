@@ -97,9 +97,12 @@ struct PlaybackStartupSample: Identifiable {
     let episode: Int
     let startedAt: TimeInterval
     var provider: String = "—"
-    var sourceSearchMs: Int?
-    var streamReadyMs: Int?
-    var firstFrameMs: Int?
+    var sourceSearchMs: Int? // when provider lookup began
+    var moduleReadyMs: Int?   // module show URL chosen
+    var episodeReadyMs: Int?  // exact episode href chosen
+    var streamReadyMs: Int?   // video URL extracted
+    var playerReadyMs: Int?   // AVPlayerItem.readyToPlay (not a visible frame)
+    var firstFrameMs: Int?    // AVPlayerLayer.isReadyForDisplay
     var outcome: String = "Loading"
 }
 
@@ -134,6 +137,24 @@ final class PlaybackPerformance: ObservableObject {
         update { s, time in
             if s.sourceSearchMs == nil { s.sourceSearchMs = time }
             s.provider = provider
+        }
+    }
+
+    func moduleResolved() {
+        update { s, time in
+            if s.moduleReadyMs == nil { s.moduleReadyMs = time }
+        }
+    }
+
+    func episodeResolved() {
+        update { s, time in
+            if s.episodeReadyMs == nil { s.episodeReadyMs = time }
+        }
+    }
+
+    func playerReady() {
+        update { s, time in
+            if s.playerReadyMs == nil { s.playerReadyMs = time }
         }
     }
 
