@@ -236,7 +236,50 @@ final class DetailViewModel: ObservableObject {
 
     // MARK: - Streams
 
+    /// The normal path never presents a source picker. It shows the same
+    /// fullscreen skeleton used by AniList immediately, then resolves this
+    /// *exact* module episode URL (no duplicate title/season search).
     func loadStreams(for episode: EpisodeLink) {
+        selectedEpisode = episode
+        #if os(iOS)
+        PlaybackPerformance.shared.begin(
+            title: detail?.title ?? "Episode", episode: Int(episode.number))
+        PlayerPresenter.shared.presentResolvingEpisode(
+            title: detail?.title ?? "Episode",
+            episode: Int(episode.number),
+            artwork: detail?.image ?? "",
+            onResolve: { [weak self] in
+                guard let self else { throw CancellationError() }
+                let streams = try await self.fetchStreams(for: episode)
+                try Task.checkCancellation()
+                guard !streams.isEmpty else {
+                    throw NSError(
+                        domain: "Shirox.InstantPlayback", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            "No playable video was returned. Try another source."]
+                    )
+                }
+                self.selectedEpisode = episode
+                self.streamOptions = streams
+                let saved = ModuleManager.shared.activeModule.flatMap {
+                    ModuleSearchAliasManager.shared.getLastStreamTitle(moduleId: $0.id)
+                }
+                let preferred = streams.first(where: { $0.title == saved })
+                    ?? streams.first!
+                self.selectStream(preferred)
+            },
+            onChooseSource: { [weak self] in
+                self?.loadStreamsManually(for: episode)
+            }
+        )
+        #else
+        loadStreamsManually(for: episode)
+        #endif
+    }
+
+    /// Explicit recovery UI only: the old picker remains accessible through
+    /// "Choose Source" when a provider fails.
+    func loadStreamsManually(for episode: EpisodeLink) {
         streamsTask?.cancel()
         selectedEpisode = episode
         pendingStream = nil
