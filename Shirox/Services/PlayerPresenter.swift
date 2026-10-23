@@ -97,6 +97,7 @@ final class PlayerPresenter: ObservableObject {
     /// source picker but never displays its navigation sheet.
     func presentResolvingPlayer(
         mediaId: Int?, title: String, episode: Int, artwork: String,
+        alternativeTitles: [String] = [],
         onStreamsLoaded: @escaping ([StreamResult], StreamResult?, String?, Int?, String?) -> Void,
         onChooseSource: @escaping () -> Void
     ) {
@@ -104,6 +105,7 @@ final class PlayerPresenter: ObservableObject {
               playerVC?.viewIfLoaded?.window == nil else { return }
         let content = ShiroxInstantPlaybackScreen(
             mediaId: mediaId, title: title, episode: episode, artwork: artwork,
+            alternativeTitles: alternativeTitles,
             onCancel: { [weak self] in
                 PlaybackPerformance.shared.cancelled()
                 self?.dismissPlayer()
@@ -946,6 +948,7 @@ private struct ShiroxInstantPlaybackScreen: View {
     let title: String
     let episode: Int
     let artwork: String
+    let alternativeTitles: [String]
     let onCancel: () -> Void
     let onChooseSource: () -> Void
     let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
@@ -1020,7 +1023,7 @@ private struct ShiroxInstantPlaybackScreen: View {
                 // episode-matching behavior is reused without duplicating it.
                 ModuleStreamPickerView(
                     mediaId: mediaId, animeTitle: title, episodeNumber: episode,
-                    onDismiss: {},
+                    alternateTitles: alternativeTitles, onDismiss: {},
                     headless: true,
                     onStatus: { provider in state.provider = "Connecting to \(provider)…" },
                     onFailure: { state.failed = true },
