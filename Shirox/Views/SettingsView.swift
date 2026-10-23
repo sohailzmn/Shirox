@@ -490,6 +490,11 @@ struct SettingsView: View {
                     } label: {
                         Label("App Logs", systemImage: "terminal")
                     }
+                    NavigationLink {
+                        PlaybackPerformanceDashboard()
+                    } label: {
+                        Label("Playback Performance", systemImage: "gauge.with.dots.needle.50percent")
+                    }
                 }
                 #endif
 
@@ -1342,5 +1347,60 @@ private struct ReplacePreviewSheet: View {
             Text("\(count)")
                 .foregroundStyle(tint)
         }
+    }
+}
+
+
+// MARK: - Real session timing; no guesswork from the spinner
+@MainActor
+private struct PlaybackPerformanceDashboard: View {
+    @ObservedObject private var performance = PlaybackPerformance.shared
+
+    private func format(_ milliseconds: Int?) -> String {
+        guard let milliseconds else { return "—" }
+        return String(format: "%.2f s", Double(milliseconds) / 1_000)
+    }
+
+    var body: some View {
+        List {
+            Section("Cache this session") {
+                LabeledContent("Episode lists", value: "\(performance.metadataCacheHits) hits")
+                LabeledContent("Module scripts", value: "\(performance.scriptCacheHits) hits")
+            }
+
+            Section {
+                if performance.samples.isEmpty {
+                    ContentUnavailableView(
+                        "No playback samples yet", systemImage: "play.circle",
+                        description: Text("Start a video to measure lookup, resolution, and first frame.")
+                    )
+                } else {
+                    ForEach(performance.samples) { sample in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("\(sample.title) · Episode \(sample.episode)")
+                                    .font(.headline)
+                                Spacer()
+                                Text(sample.outcome)
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                            Text(sample.provider).font(.caption).foregroundStyle(.secondary)
+                            LabeledContent("Source search", value: format(sample.sourceSearchMs))
+                            LabeledContent("Stream URL ready", value: format(sample.streamReadyMs))
+                            LabeledContent("First video frame", value: format(sample.firstFrameMs))
+                        }
+                    }
+                }
+            } header: {
+                Text("Recent playback attempts")
+            } footer: {
+                Text("First frame is measured when AVPlayerLayer reports a displayable frame, not when a stream URL is found. These are elapsed times from the episode tap, not real-time network speeds.")
+            }
+            Section {
+                Button("Clear measurements", role: .destructive) { performance.clear() }
+            }
+        }
+        .navigationTitle("Playback Performance")
     }
 }
