@@ -28,9 +28,9 @@ enum PlayerNextEpisodePrefetch {
         // The next-episode resolver runs while credits are approaching, so
         // tapping the Netflix-style Next button doesn't start from zero.
         if let remainingSeconds, remainingSeconds.isFinite,
-           remainingSeconds >= 0, remainingSeconds <= 90 { return true }
+           remainingSeconds >= 0, remainingSeconds <= 120 { return true }
         if let creditsStart, let currentTime, creditsStart.isFinite,
-           currentTime.isFinite, currentTime >= max(0, creditsStart - 30) { return true }
+           currentTime.isFinite, currentTime >= max(0, creditsStart - 120) { return true }
         return false
     }
 }
