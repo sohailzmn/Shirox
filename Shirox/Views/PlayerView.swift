@@ -1947,10 +1947,11 @@ struct PlayerView: View {
                 }
                 // Advance as soon as the verified credits start. Auto Next means
                 // post-credit scenes are intentionally skipped.
-                if autoNextEpisode && (onWatchNext != nil || onSequelNeeded != nil)
-                   && isPlaying && !isLoadingNextEpisode && !didAdvanceAfterCredits,
-                   (lastCreditsAdvanceAttempt == nil ||
-                    Date().timeIntervalSince(lastCreditsAdvanceAttempt!) >= 12),
+                if autoNextEpisode && onWatchNext != nil && isPlaying &&
+                   !isLoadingNextEpisode && !didAdvanceAfterCredits &&
+                   (lastCreditsAdvanceAttempt.map {
+                       Date().timeIntervalSince($0) >= 12
+                   } ?? true),
                    PlayerChapterTiming.shouldAdvanceAtCreditsStart(
                         at: currentTime, duration: duration, segments: segments) {
                     didAdvanceAfterCredits = true
@@ -2216,10 +2217,15 @@ struct PlayerView: View {
                     Task { @MainActor in await recoverPlayback() }
                     return
                 }
+                // A credits-triggered transition may already be resolving
+                // the next source. Don't run the same stateful loader twice.
+                guard !didAdvanceAfterCredits && !isLoadingNextEpisode else { return }
+                didAdvanceAfterCredits = true
                 autoAdvanceTask = Task { @MainActor in
                     isPlaying = false
                     setControlsVisible(true)
                     if autoNextEpisode { await loadAndAdvance() }
+                    if currentContext?.episodeNumber == nil { didAdvanceAfterCredits = false }
                 }
             }
         )
