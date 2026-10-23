@@ -143,4 +143,36 @@ final class HomeCacheStoreTests: XCTestCase {
                                  genres: ["Sports"])]
         XCTAssertTrue(vm.recommendations(for: []).isEmpty)
     }
+    // Playback Performance must never confuse AVPlayer.readyToPlay with a visible frame.
+    func testPlaybackTimingKeepsFiveSeparateMilestones() {
+        let diagnostics = PlaybackPerformance.shared
+        diagnostics.clear()
+        diagnostics.begin(title: "Test Episode", episode: 6)
+        diagnostics.sourceSearch(provider: "Test Module")
+        diagnostics.moduleResolved()
+        diagnostics.episodeResolved()
+        diagnostics.streamResolved()
+        diagnostics.playerReady()
+
+        guard let pending = diagnostics.samples.first else {
+            XCTFail("Missing performance sample")
+            return
+        }
+        XCTAssertNotNil(pending.moduleReadyMs)
+        XCTAssertNotNil(pending.episodeReadyMs)
+        XCTAssertNotNil(pending.streamReadyMs)
+        XCTAssertNotNil(pending.playerReadyMs)
+        XCTAssertNil(pending.firstFrameMs)
+        XCTAssertEqual(pending.outcome, "Buffering", "readyToPlay must not count as video rendered")
+
+        diagnostics.firstFrameReady()
+        guard let rendered = diagnostics.samples.first else {
+            XCTFail("Missing completed performance sample")
+            return
+        }
+        XCTAssertNotNil(rendered.firstFrameMs)
+        XCTAssertEqual(rendered.outcome, "Playing")
+        diagnostics.clear()
+    }
+
 }
