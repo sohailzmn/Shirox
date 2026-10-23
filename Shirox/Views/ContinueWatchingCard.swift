@@ -277,7 +277,44 @@ struct ContinueWatchingSection: View {
             return
         }
 
-        PlayerPresenter.shared.presentPlayer(stream: stream, streams: storedStreams, context: context, onWatchNext: onWatchNext, onStreamExpired: onExpired)
+        // Saved remote URLs may already be expired. Resolving a fresh video
+        // before mounting the AVPlayer avoids a black frame / 0:00 player.
+        // The user sees the same fullscreen skeleton as a regular episode tap.
+        if !isLocal, item.detailHref != nil, let onExpired {
+            PlaybackPerformance.shared.begin(title: item.mediaTitle, episode: item.episodeNumber)
+            PlayerPresenter.shared.presentResolvingEpisode(
+                title: item.mediaTitle,
+                episode: item.episodeNumber,
+                artwork: item.imageUrl,
+                onResolve: {
+                    let fresh = try await onExpired(item.episodeNumber, item.episodeHref)
+                    try Task.checkCancellation()
+                    guard !fresh.isEmpty else {
+                        throw NSError(
+                            domain: "Shirox.Resume", code: 2,
+                            userInfo: [NSLocalizedDescriptionKey:
+                                "The saved stream expired and no replacement is available."]
+                        )
+                    }
+                    let chosen = fresh.first(where: { $0.title == item.streamTitle })
+                        ?? fresh[0]
+                    PlayerPresenter.shared.presentPlayer(
+                        stream: chosen, streams: fresh, context: context,
+                        onWatchNext: onWatchNext, onStreamExpired: onExpired)
+                },
+                onChooseSource: {
+                    if item.moduleId != nil, item.detailHref != nil {
+                        navTarget = .detail(item)
+                    } else if item.aniListID != nil {
+                        navTarget = .anilist(item)
+                    }
+                }
+            )
+            return
+        }
+        PlayerPresenter.shared.presentPlayer(
+            stream: stream, streams: storedStreams, context: context,
+            onWatchNext: onWatchNext, onStreamExpired: onExpired)
         #endif
     }
 
