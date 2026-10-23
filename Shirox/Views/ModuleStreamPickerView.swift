@@ -76,7 +76,27 @@ struct ModuleStreamPickerView: View {
     let animeTitle: String
     let episodeNumber: Int
     let onDismiss: () -> Void
-    let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void  // allStreams, selectedStream, showHref, availableCount, episodeHref
+    let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
+    let headless: Bool
+    let onStatus: ((String) -> Void)?
+    let onFailure: (() -> Void)?
+
+    init(
+        mediaId: Int?, animeTitle: String, episodeNumber: Int,
+        onDismiss: @escaping () -> Void,
+        headless: Bool = false, onStatus: ((String) -> Void)? = nil,
+        onFailure: (() -> Void)? = nil,
+        onStreamsLoaded: @escaping ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
+    ) {
+        self.mediaId = mediaId
+        self.animeTitle = animeTitle
+        self.episodeNumber = episodeNumber
+        self.onDismiss = onDismiss
+        self.onStreamsLoaded = onStreamsLoaded
+        self.headless = headless
+        self.onStatus = onStatus
+        self.onFailure = onFailure
+    }
 
     @EnvironmentObject private var moduleManager: ModuleManager
     @AppStorage("useDefaultExtension") private var useDefaultExtension = false
@@ -94,8 +114,13 @@ struct ModuleStreamPickerView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
+        Group {
+            if headless {
+                Color.clear.frame(width: 1, height: 1)
+                    .accessibilityHidden(true)
+            } else {
+                NavigationStack {
+                    List {
                 Section {
                     Button {
                         if autoPlayLoading {
@@ -159,7 +184,9 @@ struct ModuleStreamPickerView: View {
                     Button("Cancel") { onDismiss() }
                 }
             }
-            .tint(.primary)
+                    .tint(.primary)
+                }
+            }
         }
         .onAppear {
             // A single tap on Watch now starts resolving immediately: no source
@@ -221,6 +248,7 @@ struct ModuleStreamPickerView: View {
             for module in modules {
                 guard !Task.isCancelled else { return }
                 autoPlayMessage = "Checking \(module.sourceName)…"
+                onStatus?(module.sourceName)
                 let runner = ModuleJSRunner()
                 do {
                     try await runner.load(module: module)
@@ -288,7 +316,7 @@ struct ModuleStreamPickerView: View {
                             moduleId: module.id, title: winner.title)
                         UserDefaults.standard.set(module.id, forKey: "lastUsedModuleId")
                         moduleManager.selectModule(module)
-                        onDismiss()
+                        if !headless { onDismiss() }
                         onStreamsLoaded(streams, winner, href, episodes.count, episode.href)
                         return
                         }
@@ -300,6 +328,7 @@ struct ModuleStreamPickerView: View {
             }
             if !Task.isCancelled {
                 autoPlayMessage = "No working stream found. Choose a module below or retry."
+                onFailure?()
             }
         }
     }
