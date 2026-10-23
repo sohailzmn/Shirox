@@ -25,7 +25,8 @@ struct PlayerProgressSlider: View {
     @State private var sampledBucket: Int = -1
 
     private var frameRequestID: Int {
-        isDragging ? Int(max(0, dragTime) / 5) : -1
+        guard isDragging, dragTime.isFinite, dragTime >= 0 else { return -1 }
+        return Int(min(dragTime / 5, Double(Int.max / 2)))
     }
 
     private var displayTime: Double {
@@ -56,6 +57,8 @@ struct PlayerProgressSlider: View {
                             .gesture(
                                 DragGesture(minimumDistance: 0)
                                     .onChanged { value in
+                                        guard duration.isFinite, duration > 0,
+                                              geo.size.width > 0 else { return }
                                         if !isDragging {
                                             dragStartX = value.startLocation.x
                                             dragStartTime = currentTime
