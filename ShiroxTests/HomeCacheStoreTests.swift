@@ -172,6 +172,12 @@ final class HomeCacheStoreTests: XCTestCase {
         }
         XCTAssertNotNil(rendered.firstFrameMs)
         XCTAssertEqual(rendered.outcome, "Playing")
+
+        // A playable five-second placeholder can render a frame but is not
+        // the requested full episode; the metric must revoke false success.
+        diagnostics.rejectedInvalidEpisode()
+        XCTAssertNil(diagnostics.samples.first?.firstFrameMs)
+        XCTAssertEqual(diagnostics.samples.first?.outcome, "Invalid episode source")
         diagnostics.clear()
     }
 
