@@ -1678,8 +1678,11 @@ struct PlayerView: View {
               let seg = skipSegments?.segment(for: type) else { return }
         skippedSegments.insert(type)
         activeSkipSegment = nil
+        // Match the automatic skip's keyframe tolerance: frame-exact HLS
+        // seeks can wedge on CDNs even though the clip boundary is correct.
+        let tolerance = CMTime(seconds: 0.3, preferredTimescale: 600)
         player?.seek(to: CMTime(seconds: seg.endMs / 1000, preferredTimescale: 600),
-                     toleranceBefore: .zero, toleranceAfter: .zero)
+                     toleranceBefore: tolerance, toleranceAfter: tolerance)
     }
 
     private func skip(by seconds: Double) {
