@@ -256,6 +256,8 @@ struct PlayerView: View {
                                videoGravity: isFilled ? .resizeAspectFill : .resizeAspect,
                                onFirstFrame: {
                                    guard !videoReady else { return }
+                                   if let item = player?.currentItem,
+                                      rejectTruncatedEpisodeIfNeeded(item) { return }
                                    videoReady = true
                                    showStallRetry = false
                                    firstFrameWatchdog?.cancel()
@@ -1922,6 +1924,7 @@ struct PlayerView: View {
             guard !isScrubbing else { return }
             currentTime = time.seconds
             if let d = p?.currentItem?.duration, d.isNumeric { duration = d.seconds }
+            if let item = p?.currentItem, rejectTruncatedEpisodeIfNeeded(item) { return }
             if duration > 0, let ranges = p?.currentItem?.loadedTimeRanges {
                 let maxLoaded = ranges.compactMap { $0.timeRangeValue }
                     .map { $0.start.seconds + $0.duration.seconds }
@@ -2213,6 +2216,7 @@ struct PlayerView: View {
                 guard player == nil || player?.currentItem === observedItem else { return }
                 switch status {
                 case .readyToPlay:
+                    if rejectTruncatedEpisodeIfNeeded(observedItem) { return }
                     PlaybackPerformance.shared.playerReady()
                     Logger.shared.log("[Player] Item status: readyToPlay", type: "Debug")
                     // With a resume position the overlay stays up until the seek lands, so the
@@ -2449,6 +2453,33 @@ struct PlayerView: View {
         videoReady = false
         isBuffering = false
         showStallRetry = true
+    }
+
+    /// A clearly truncated remote asset (e.g. five-second placeholder) is not
+    /// a complete episode. Short locally imported user videos remain playable.
+    @MainActor
+    private func rejectTruncatedEpisodeIfNeeded(_ item: AVPlayerItem) -> Bool {
+        guard player?.currentItem === item else { return false }
+        guard PlaybackRouting.isClearlyTruncatedEpisode(
+            duration: item.duration.seconds,
+            hasEpisodeContext: currentContext?.episodeNumber != nil,
+            isLocalPlayback: isLocalPlayback
+        ) else { return false }
+        let rejectedURL = currentStream.url
+        guard !failedStreamURLs.contains(rejectedURL) else { return true }
+        failedStreamURLs.insert(rejectedURL)
+        videoReady = false
+        PlaybackPerformance.shared.rejectedInvalidEpisode()
+        Logger.shared.log(
+            "[Player] Rejected implausibly short online episode (\(item.duration.seconds)s); attempting fresh source",
+            type: "Error"
+        )
+        if canRecoverStream {
+            Task { @MainActor in await recoverPlayback() }
+        } else {
+            surfaceUnrecoverablePlayback()
+        }
+        return true
     }
 
     // MARK: - Stall Recovery
