@@ -1,0 +1,54 @@
+name: Verify Skip and Auto Next (No IPA)
+on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/skip-timing-tests.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  chapter-tests:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Xcode and scheme
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project Shirox.xcodeproj
+      - name: Compile Shirox for iOS Simulator (no IPA)
+        run: |
+          xcodebuild -project Shirox.xcodeproj \
+            -scheme Shirox -configuration Debug \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO build \
+            > /tmp/shirox-simulator-build.log 2>&1 || {
+              grep -nE '(error:|BUILD FAILED|failed)' /tmp/shirox-simulator-build.log | tail -80 || true
+              tail -65 /tmp/shirox-simulator-build.log
+              exit 1
+            }
+          tail -8 /tmp/shirox-simulator-build.log
+      - name: Run skip and next episode unit tests
+        run: |
+          SIM_ID=$(xcrun simctl list devices available -j | python3 -c '
+          import json,sys
+          data=json.load(sys.stdin)
+          for runtime, devices in data["devices"].items():
+              for device in devices:
+                  if device["name"].startswith("iPhone") and device["state"] in ("Shutdown", "Booted"):
+                      print(device["udid"]); sys.exit(0)
+          sys.exit(1)
+          ')
+          echo "Running chapter tests on simulator $SIM_ID"
+          xcodebuild test -project Shirox.xcodeproj -scheme Shirox \
+            -configuration Debug -destination "platform=iOS Simulator,id=$SIM_ID" \
+            -only-testing:ShiroxTests/PlayerNextEpisodePrefetchTests \
+            CODE_SIGNING_ALLOWED=NO \
+            > /tmp/shirox-chapter-tests.log 2>&1 || {
+              grep -nE '(error:|Test Case|Test Suite|failed|BUILD FAILED)' /tmp/shirox-chapter-tests.log | tail -100 || true
+              tail -75 /tmp/shirox-chapter-tests.log
+              exit 1
+            }
+          grep -E '(Test Case|Executed|TEST SUCCEEDED)' /tmp/shirox-chapter-tests.log | tail -35
