@@ -172,6 +172,8 @@ struct PlayerView: View {
     @State private var showStallRetry = false
     /// A session-only cap after repeated CDN stalls; never changes the user's saved preference.
     @State private var stallQualityReduced = false
+    @State private var startupBitrateTask: Task<Void, Never>?
+    @State private var failedStreamURLs: Set<URL> = []
     // When we were truly backgrounded (home/app-switch/lock), so foreground can tell a
     // brief resign-active from a suspension long enough to have killed the source.
     @State private var backgroundedAt: Date? = nil
@@ -1728,7 +1730,15 @@ struct PlayerView: View {
         } else {
             asset = AVURLAsset(url: currentStream.url)
         }
+        startupBitrateTask?.cancel()
         let item = AVPlayerItem(asset: asset)
+        // Begin automatic HLS conservatively. Expensive renditions can delay
+        // first frame significantly on mobile networks; once playback has been
+        // stable the bitrate cap is removed for normal AVPlayer adaptation.
+        if preferredQuality == "auto", !isLocalPlayback,
+           currentStream.url.pathExtension.lowercased() == "m3u8" {
+            item.preferredPeakBitRate = 2_000_000
+        }
         item.preferredForwardBufferDuration = 0 // Automatic: let AVPlayer size the buffer adaptively (YouTube-style ABR). A fixed value fights stall-minimization and prolongs stalls on flaky CDNs.
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true // Continue buffering when paused
         
@@ -1754,6 +1764,17 @@ struct PlayerView: View {
         p.play() // Ensure player starts
         isPlaying = true
         player = p
+        if item.preferredPeakBitRate == 2_000_000 {
+            startupBitrateTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                guard !Task.isCancelled, player?.currentItem === item,
+                      p.timeControlStatus == .playing, !isBuffering,
+                      selectedQualityBandwidth == nil, preferredQuality == "auto",
+                      !stallQualityReduced else { return }
+                item.preferredPeakBitRate = 0
+                Logger.shared.log("[ABR] Stable playback: restore automatic quality", type: "Player")
+            }
+        }
         bufferProgress = 0
         hlsQualities = []
         selectedQualityBandwidth = nil
@@ -2268,8 +2289,11 @@ struct PlayerView: View {
     /// Select a different host first, then a fresh URL from the current host.
     /// Avoid switching subtitle mode while recovering German dubbed playback.
     private func preferredRecoveryStream(from candidates: [StreamResult]) -> StreamResult? {
-        let sameMode = candidates.filter { ($0.subtitle != nil) == (currentStream.subtitle != nil) }
-        let pool = sameMode.isEmpty ? candidates : sameMode
+        let remaining = candidates.filter { !failedStreamURLs.contains($0.url) }
+        let unused = remaining.isEmpty ? candidates : remaining
+        let sameMode = unused.filter { ($0.subtitle != nil) == (currentStream.subtitle != nil) }
+        let pool = sameMode.isEmpty ? unused : sameMode
+        // Do not repeatedly oscillate between the same two dead URLs.
         return pool.first(where: { $0.url.host != currentStream.url.host })
             ?? pool.first(where: { $0.url != currentStream.url })
             ?? pool.first
@@ -2280,19 +2304,25 @@ struct PlayerView: View {
     @MainActor
     private func reduceQualityAfterStall() -> Bool {
         guard !isLocalPlayback, !castManager.isConnected, !stallQualityReduced,
-              let item = player?.currentItem, !hlsQualities.isEmpty else { return false }
+              let item = player?.currentItem,
+              currentStream.url.pathExtension.lowercased() == "m3u8" else { return false }
         let sorted = hlsQualities.sorted { $0.bandwidth < $1.bandwidth }
-        let lower = sorted.filter {
-            (HLSQualityParser.height(of: $0) ?? Int.max) <= 480
+        let lower = sorted.filter { (HLSQualityParser.height(of: $0) ?? Int.max) <= 480 }
+        if let preferred = lower.last ?? sorted.first {
+            guard selectedQualityBandwidth == nil ||
+                  selectedQualityBandwidth! > preferred.bandwidth else { return false }
+            stallQualityReduced = true
+            selectQuality(preferred.bandwidth)
+            Logger.shared.log("[StallRecovery] Switching to \(preferred.label)", type: "Player")
+        } else {
+            // The master playlist was unavailable, but AVPlayer can still
+            // adapt its own variants using a temporary maximum bitrate.
+            guard item.preferredPeakBitRate == 0 ||
+                  item.preferredPeakBitRate > 1_200_000 else { return false }
+            stallQualityReduced = true
+            item.preferredPeakBitRate = 1_200_000
+            Logger.shared.log("[StallRecovery] Adaptive low-bandwidth cap", type: "Player")
         }
-        let preferred = lower.last ?? sorted.first!
-        guard selectedQualityBandwidth == nil ||
-              selectedQualityBandwidth! > preferred.bandwidth else { return false }
-        stallQualityReduced = true
-        selectQuality(preferred.bandwidth)
-        Logger.shared.log("[StallRecovery] Temporary quality cap -> \(preferred.label)", type: "Player")
-        // AVPlayer can now request smaller HLS segments without rebuilding the stream.
-        _ = item
         return true
     }
 
@@ -2390,6 +2420,7 @@ struct PlayerView: View {
         isRecoveringStall = true
         defer { isRecoveringStall = false }
         let resumeAt = currentTime
+        failedStreamURLs.insert(currentStream.url)
         // swapStream unconditionally force-plays (rate up, isPlaying = true), so capture the
         // user's intent now — a recovery triggered while paused must stay paused, not start
         // playing on its own when the user returns to the app.
@@ -2637,12 +2668,12 @@ struct PlayerView: View {
             Logger.shared.log("[PlayerView] Auto-selected single stream: \(result.streams[0].title)", type: "Debug")
             swapStream(result.streams[0], episodeNumber: result.episodeNumber, allStreams: result.streams, episodeHref: result.episodeHref)
         }
-        else {
-            Logger.shared.log("[PlayerView] Showing stream picker with \(result.streams.count) streams", type: "Debug")
-            nextEpisodeNumber = result.episodeNumber
-            nextEpisodeStreams = result.streams
-            nextEpisodeHref = result.episodeHref
-            showNextEpisodePicker = true
+        else if let fallback = result.streams.first {
+            // This is Auto Next, not a manual source-selection flow. Do not
+            // interrupt a series binge with a popup on hoster title mismatch.
+            Logger.shared.log("[PlayerView] Auto Next fallback to \(fallback.title)", type: "Player")
+            swapStream(fallback, episodeNumber: result.episodeNumber,
+                       allStreams: result.streams, episodeHref: result.episodeHref)
         }
     }
 
@@ -2802,6 +2833,7 @@ struct PlayerView: View {
     }
 
     private func swapStream(_ next: StreamResult, episodeNumber: Int, allStreams: [StreamResult] = [], episodeHref: String? = nil) {
+        if currentContext?.episodeNumber != episodeNumber { failedStreamURLs.removeAll() }
         didTrackEpisode = false
         completionBox.context = nil
         // onWatchNext confirmed ep `episodeNumber` exists. If availableEpisodes is stale
