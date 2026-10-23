@@ -121,12 +121,13 @@ final class HomeViewModel: ObservableObject {
                     $0.title.displayTitle.localizedCaseInsensitiveCompare(watched.mediaTitle) == .orderedSame
                 }
             }.first
-        let favorites = anchor.flatMap { $0.genres }.map(Set.init)
-            ?? personalizedGenres
+        let localGenres = Set(anchor?.genres ?? [])
+        let favorites = localGenres.isEmpty ? personalizedGenres : localGenres
         guard !favorites.isEmpty else { return [] }
         var seen = Set<String>()
         return candidates.filter { media in
-            !media.isManga && !watchedIds.contains(media.id) &&
+            !media.isManga &&
+            !(media.provider == .anilist && watchedIds.contains(media.id)) &&
             !watchedTitles.contains(media.title.displayTitle.folding(
                 options: [.caseInsensitive, .diacriticInsensitive], locale: .current)) &&
             !Set(media.genres ?? []).isDisjoint(with: favorites) &&
