@@ -2,6 +2,11 @@ name: Smart Play IPA
 
 # Only user-triggered builds: source commits must not generate an IPA automatically.
 on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/smart-play-ipa.yml"
   workflow_dispatch:
 
 permissions:
