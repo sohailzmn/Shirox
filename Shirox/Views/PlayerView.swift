@@ -174,6 +174,7 @@ struct PlayerView: View {
     /// A session-only cap after repeated CDN stalls; never changes the user's saved preference.
     @State private var stallQualityReduced = false
     @State private var startupBitrateTask: Task<Void, Never>?
+    @State private var firstFrameWatchdog: Task<Void, Never>?
     @State private var failedStreamURLs: Set<URL> = []
     // When we were truly backgrounded (home/app-switch/lock), so foreground can tell a
     // brief resign-active from a suspension long enough to have killed the source.
@@ -251,7 +252,13 @@ struct PlayerView: View {
                 VideoLayerView(player: player, pipTrigger: pipTrigger,
                                refreshToken: miniSurfaceRefresh,
                                videoGravity: isFilled ? .resizeAspectFill : .resizeAspect,
-                               onFirstFrame: { PlaybackPerformance.shared.firstFrameReady() })
+                               onFirstFrame: {
+                                   guard !videoReady else { return }
+                                   videoReady = true
+                                   firstFrameWatchdog?.cancel()
+                                   firstFrameWatchdog = nil
+                                   PlaybackPerformance.shared.firstFrameReady()
+                               })
                     .ignoresSafeArea()
                     .overlay { videoLoadingOverlay }
                 #elseif os(tvOS)
@@ -1737,11 +1744,26 @@ struct PlayerView: View {
         }
     }
 
+    @MainActor
+    private func armFirstFrameWatchdog(for item: AVPlayerItem) {
+        firstFrameWatchdog?.cancel()
+        firstFrameWatchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled, !videoReady,
+                  player?.currentItem === item else { return }
+            Logger.shared.log("[Player] No rendered first frame: offering retry", type: "Error")
+            isBuffering = false
+            showStallRetry = true
+        }
+    }
+
     private func setupPlayer() {
         if let obs = timeObserver { player?.removeTimeObserver(obs); timeObserver = nil }
         rateObserver?.invalidate(); rateObserver = nil
         audioGroup = nil
         #if os(iOS)
+        firstFrameWatchdog?.cancel()
+        firstFrameWatchdog = nil
         videoReady = false
         // Take audio focus now that a player is actually opening. This is what
         // interrupts system music — deliberately deferred from app launch.
@@ -1835,9 +1857,8 @@ struct PlayerView: View {
                 isPlaying = status != .paused
                 isBuffering = status == .waitingToPlayAtSpecifiedRate
                 #if os(iOS)
-                if status == .playing && !videoReady && currentContext?.resumeFrom == nil {
-                    videoReady = true
-                }
+                // AVPlayer.timeControlStatus == .playing does not prove that
+                // any picture is visible. The layer's first-frame event does.
                 #endif
                 switch status {
                 case .waitingToPlayAtSpecifiedRate:
@@ -1848,7 +1869,9 @@ struct PlayerView: View {
                 case .playing:
                     // Playback resumed — clear any in-flight watchdog and reset the budget
                     // so each independent stall gets a fresh escalation.
-                    cancelStallWatchdog(resetAttempts: true)
+                    // A momentary 720p recovery must not reset the failure
+                    // budget and immediately trigger another 480p->720p loop.
+                    cancelStallWatchdog(resetAttempts: false)
                     // Sync the resume to the server for pauses that bypass togglePlayPause
                     // (Control Center, lock screen, interruption end). Skip while scrubbing
                     // (transient) and while casting (the local player is intentionally paused
@@ -1864,14 +1887,9 @@ struct PlayerView: View {
             }
         }
 
-        // Add a fallback to ensure we don't load forever
-        Task {
-            try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
-            if !videoReady {
-                Logger.shared.log("[Player] Loading timeout reached, forcing ready state", type: "Debug")
-                await MainActor.run { videoReady = true }
-            }
-        }
+        // Never hide the skeleton on a timer: an expired URL would produce
+        // the reported black 0:00 screen. Offer explicit recovery instead.
+        armFirstFrameWatchdog(for: item)
 
 
         let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
@@ -1919,8 +1937,8 @@ struct PlayerView: View {
                 // decode forward from the segment keyframe and frequently wedges in
                 // .waitingToPlayAtSpecifiedRate — the "won't stop buffering on resume" symptom.
                 p?.seek(to: CMTime(seconds: resumeFrom, preferredTimescale: 600)) { _ in
-                    // Always set ready, even if seek was interrupted
-                    DispatchQueue.main.async { videoReady = true }
+                    // A completed resume seek is not a rendered frame.
+                    // AVPlayerLayer.isReadyForDisplay ends the loading UI.
                 }
             }
             // Resume landed — stop steering nudges toward the (now reached) resume target.
@@ -2173,7 +2191,7 @@ struct PlayerView: View {
                     Logger.shared.log("[Player] Item status: readyToPlay", type: "Debug")
                     // With a resume position the overlay stays up until the seek lands, so the
                     // user never sees a frame from the wrong position.
-                    if currentContext?.resumeFrom == nil { videoReady = true }
+                    // Wait for the actual AVPlayerLayer frame callback.
                 case .failed:
                     Logger.shared.log("[Player] Item failed: \(observedItem.error?.localizedDescription ?? "unknown error")", type: "Error")
                     guard canRecoverStream, !isRefetchingStream else {
