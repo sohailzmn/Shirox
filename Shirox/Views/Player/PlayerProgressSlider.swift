@@ -1,10 +1,15 @@
 import SwiftUI
+import AVFoundation
 
 struct PlayerProgressSlider: View {
     @Binding var currentTime: Double
     let duration: Double
     var bufferProgress: Double = 0
     var skipSegments: SkipSegments? = nil
+    /// This is the actual AVPlayer item's asset, not a generic series poster.
+    /// AVAssetImageGenerator can sample MP4/local media; many remote HLS hosts
+    /// do not support frame extraction, in which case only the time bubble shows.
+    var previewAsset: AVAsset? = nil
     var onSeek: (Double) -> Void
     var onDragStart: (() -> Void)? = nil
     var onDragChange: ((Double) -> Void)? = nil
@@ -16,6 +21,12 @@ struct PlayerProgressSlider: View {
     @State private var dragTime: Double = 0
     @State private var dragStartX: CGFloat = 0
     @State private var dragStartTime: Double = 0
+    @State private var sampledFrame: CGImage?
+    @State private var sampledBucket: Int = -1
+
+    private var frameRequestID: Int {
+        isDragging ? Int(max(0, dragTime) / 5) : -1
+    }
 
     private var displayTime: Double {
         isDragging ? dragTime : currentTime
@@ -65,6 +76,50 @@ struct PlayerProgressSlider: View {
                     }
             }
             .frame(height: 28)
+            .overlay(alignment: .top) {
+                if isDragging {
+                    VStack(spacing: 4) {
+                        if let sampledFrame {
+                            Image(decorative: sampledFrame, scale: 1)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 150, height: 84)
+                                .clipped()
+                                .clipShape(RoundedRectangle(cornerRadius: 9))
+                        }
+                        Text(dragTime.playerTimeString)
+                            .font(.caption.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                    }
+                    .padding(6)
+                    .background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
+                    .offset(y: sampledFrame == nil ? -43 : -139)
+                    .allowsHitTesting(false)
+                }
+            }
+            .task(id: frameRequestID) {
+                guard isDragging, let asset = previewAsset else {
+                    sampledFrame = nil
+                    sampledBucket = -1
+                    return
+                }
+                let bucket = frameRequestID
+                guard bucket != sampledBucket else { return }
+                sampledBucket = bucket
+                // 5-second sampling and task cancellation avoid issuing an image
+                // extraction for every pixel dragged across the timeline.
+                let generator = AVAssetImageGenerator(asset: asset)
+                generator.appliesPreferredTrackTransform = true
+                generator.maximumSize = CGSize(width: 320, height: 180)
+                generator.requestedTimeToleranceBefore = CMTime(seconds: 2, preferredTimescale: 600)
+                generator.requestedTimeToleranceAfter = CMTime(seconds: 2, preferredTimescale: 600)
+                let result = try? await generator.image(
+                    at: CMTime(seconds: Double(bucket * 5), preferredTimescale: 600)
+                )
+                guard !Task.isCancelled, frameRequestID == bucket else { return }
+                sampledFrame = result?.image
+            }
 
             HStack {
                 Text(displayTime.playerTimeString)
