@@ -1361,6 +1361,11 @@ private struct PlaybackPerformanceDashboard: View {
         return String(format: "%.2f s", Double(milliseconds) / 1_000)
     }
 
+    private func elapsedBetween(_ start: Int?, _ end: Int?) -> Int? {
+        guard let start, let end, end >= start else { return nil }
+        return end - start
+    }
+
     var body: some View {
         List {
             Section("Cache this session") {
@@ -1396,16 +1401,29 @@ private struct PlaybackPerformanceDashboard: View {
                                     .font(.caption)
                             }
                             Text(sample.provider).font(.caption).foregroundStyle(.secondary)
-                            LabeledContent("Source search") { Text(format(sample.sourceSearchMs)) }
-                            LabeledContent("Stream URL ready") { Text(format(sample.streamReadyMs)) }
-                            LabeledContent("First video frame") { Text(format(sample.firstFrameMs)) }
+                            LabeledContent("Module search") {
+                                Text(format(elapsedBetween(sample.sourceSearchMs, sample.moduleReadyMs)))
+                            }
+                            LabeledContent("Episode resolution") {
+                                Text(format(elapsedBetween(sample.moduleReadyMs, sample.episodeReadyMs)))
+                            }
+                            LabeledContent("Stream URL resolution") {
+                                Text(format(elapsedBetween(sample.episodeReadyMs, sample.streamReadyMs)))
+                            }
+                            LabeledContent("AVPlayer ready") {
+                                Text(format(elapsedBetween(sample.streamReadyMs, sample.playerReadyMs)))
+                            }
+                            LabeledContent("First rendered frame") {
+                                Text(format(elapsedBetween(sample.playerReadyMs, sample.firstFrameMs)))
+                            }
+                            LabeledContent("Total startup") { Text(format(sample.firstFrameMs)) }
                         }
                     }
                 }
             } header: {
                 Text("Recent playback attempts")
             } footer: {
-                Text("First frame is measured when AVPlayerLayer reports a displayable frame, not when a stream URL is found. These are elapsed times from the episode tap, not real-time network speeds.")
+                Text("Each stage is measured independently when its events are observable; missing stages show —. Total startup is measured from the episode tap to AVPlayerLayer.isReadyForDisplay, not just an open player or animated loader.")
             }
             Section {
                 Button("Clear measurements", role: .destructive) { performance.clear() }
