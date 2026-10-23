@@ -111,7 +111,7 @@ final class HomeCacheStoreTests: XCTestCase {
     }
 
     func testPersonalRecommendationsRankSharedGenresAndExcludeWatchedAnime() {
-        let vm = HomeViewModel()
+        let vm = HomeViewModel(seedCachedFeed: false)
         vm.trending = [makeMedia(id: 10, title: "Blue Lock", provider: .anilist,
                                  genres: ["Sports", "Drama"])]
         vm.seasonal = [makeMedia(id: 11, title: "Haikyuu", provider: .anilist,
@@ -126,7 +126,7 @@ final class HomeCacheStoreTests: XCTestCase {
     }
 
     func testRecommendationsAreDeduplicatedAcrossFeedRows() {
-        let vm = HomeViewModel()
+        let vm = HomeViewModel(seedCachedFeed: false)
         vm.trending = [makeMedia(id: 10, title: "Blue Lock", provider: .anilist,
                                  genres: ["Sports"])]
         let repeated = makeMedia(id: 11, title: "Haikyuu", provider: .anilist, genres: ["Sports"])
@@ -138,7 +138,7 @@ final class HomeCacheStoreTests: XCTestCase {
     }
 
     func testRecommendationsStayEmptyWithoutViewingHistory() {
-        let vm = HomeViewModel()
+        let vm = HomeViewModel(seedCachedFeed: false)
         vm.trending = [makeMedia(id: 10, title: "Blue Lock", provider: .anilist,
                                  genres: ["Sports"])]
         XCTAssertTrue(vm.recommendations(for: []).isEmpty)
