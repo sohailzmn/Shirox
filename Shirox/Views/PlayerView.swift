@@ -108,6 +108,7 @@ struct PlayerView: View {
     @State private var skipFetchTask: Task<Void, Never>?
     @State private var didRequestSkipSegments = false
     @State private var didAdvanceAfterCredits = false
+    @State private var lastCreditsAdvanceAttempt: Date?
     @State private var upcomingEpisodeThumbnail: String?
     @State private var upcomingEpisodeTitle: String?
     @State private var previewEpisodeRequested: Int?
@@ -115,7 +116,7 @@ struct PlayerView: View {
     @State private var skip85ButtonFrame: CGRect = .zero
     // Netflix/Crunchyroll-style: show Skip Intro by default; automatic seeks
     // remain opt-in under the existing player setting.
-    @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = false
+    @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = true
 
     // AniList tracking
     @ObservedObject private var aniListAuth = AniListAuthManager.shared
@@ -1584,13 +1585,21 @@ struct PlayerView: View {
         let streamURL = currentStream.url
         let length = duration
         skipFetchTask = Task { @MainActor in
+            // Get the real-cut Anime skip markers before slower mapping lookups.
+            if let malID {
+                let fast = await SkipTimestampsService.shared.fetchFastSegments(
+                    malID: malID, episode: ep, playbackDuration: length)
+                guard !Task.isCancelled, currentContext?.episodeNumber == ep,
+                      currentStream.url == streamURL else { return }
+                if let fast { skipSegments = fast }
+                if fast?.intro != nil && fast?.credits != nil { return }
+            }
             let result = await SkipTimestampsService.shared.fetchSegments(
                 aniListID: aniListID, episodeNumber: ep,
-                malID: malID, playbackDuration: length
-            )
+                malID: malID, playbackDuration: length)
             guard !Task.isCancelled, currentContext?.episodeNumber == ep,
                   currentStream.url == streamURL else { return }
-            skipSegments = result
+            if let result { skipSegments = result }
         }
     }
 
@@ -1889,7 +1898,7 @@ struct PlayerView: View {
                         hasLoader: onWatchNext != nil,
                         alreadyStarted: didPrefetchNext,
                         remainingSeconds: duration - currentTime,
-                        creditsStart: skipSegments?.isDurationVerified == true
+                        creditsStart: skipSegments?.autoNextCredits == true
                             ? skipSegments?.credits?.startMs.map { $0 / 1_000 } : nil,
                         currentTime: currentTime) {
                     didPrefetchNext = true
@@ -1929,7 +1938,8 @@ struct PlayerView: View {
                     skippedSegments.insert(type)
                     activeSkipSegment = nil
                     p?.seek(to: CMTime(seconds: seg.endMs / 1000, preferredTimescale: 600),
-                            toleranceBefore: .zero, toleranceAfter: .zero)
+                            toleranceBefore: CMTime(seconds: 0.3, preferredTimescale: 600),
+                            toleranceAfter: CMTime(seconds: 0.3, preferredTimescale: 600))
                 } else {
                     // Let the user see Skip Intro again after rewinding,
                     // even when an automatic skip already happened once.
@@ -1937,12 +1947,23 @@ struct PlayerView: View {
                 }
                 // Advance as soon as the verified credits start. Auto Next means
                 // post-credit scenes are intentionally skipped.
-                if autoNextEpisode && onWatchNext != nil && isPlaying,
-                   !isLoadingNextEpisode && !didAdvanceAfterCredits,
+                if autoNextEpisode && (onWatchNext != nil || onSequelNeeded != nil)
+                   && isPlaying && !isLoadingNextEpisode && !didAdvanceAfterCredits,
+                   (lastCreditsAdvanceAttempt == nil ||
+                    Date().timeIntervalSince(lastCreditsAdvanceAttempt!) >= 12),
                    PlayerChapterTiming.shouldAdvanceAtCreditsStart(
                         at: currentTime, duration: duration, segments: segments) {
                     didAdvanceAfterCredits = true
-                    autoAdvanceTask = Task { @MainActor in await loadAndAdvance() }
+                    lastCreditsAdvanceAttempt = Date()
+                    let originalEpisode = currentContext?.episodeNumber
+                    autoAdvanceTask = Task { @MainActor in
+                        await loadAndAdvance()
+                        if currentContext?.episodeNumber == originalEpisode {
+                            // The provider returned no new stream: allow another
+                            // attempt in 12 seconds instead of giving up forever.
+                            didAdvanceAfterCredits = false
+                        }
+                    }
                 }
             }
             if let p { updateNowPlaying(player: p) }
@@ -1954,6 +1975,7 @@ struct PlayerView: View {
         skipFetchTask = nil
         didRequestSkipSegments = false
         didAdvanceAfterCredits = false
+        lastCreditsAdvanceAttempt = nil
         nextPreviewTask?.cancel()
         nextPreviewTask = nil
         previewEpisodeRequested = nil
@@ -2965,6 +2987,7 @@ struct PlayerView: View {
         skipFetchTask = nil
         didRequestSkipSegments = false
         didAdvanceAfterCredits = false
+        lastCreditsAdvanceAttempt = nil
         nextPreviewTask?.cancel()
         nextPreviewTask = nil
         previewEpisodeRequested = nil
