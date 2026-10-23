@@ -11,44 +11,55 @@ permissions:
 jobs:
   chapter-tests:
     runs-on: macos-26
-    timeout-minutes: 90
+    timeout-minutes: 80
     steps:
       - uses: actions/checkout@v4
-      - name: Verify Xcode and scheme
+      - name: Apply existing iOS compatibility patches
         run: |
-          xcodebuild -version
-          xcodebuild -list -project Shirox.xcodeproj
-      - name: Compile Shirox for iOS Simulator (no IPA)
+          python3 patch_serienstream_interactive.py
+          python3 patch_serienstream_interactive_v3.py
+          python3 patch_serienstream_session_v5.py
+          python3 patch_serienstream_exact_episode_v6.py
+          sed -i '' '/\.fontWeight(.semibold)/d' Shirox/Views/Shared/CloudflareBypassSheetView.swift
+      - name: Resolve package dependencies
         run: |
-          xcodebuild -project Shirox.xcodeproj \
-            -scheme Shirox -configuration Debug \
-            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO build \
-            > /tmp/shirox-simulator-build.log 2>&1 || {
-              grep -nE '(error:|BUILD FAILED|failed)' /tmp/shirox-simulator-build.log | tail -80 || true
-              tail -65 /tmp/shirox-simulator-build.log
+          xcodebuild -resolvePackageDependencies -project Shirox.xcodeproj -scheme Shirox_iOS
+      - name: Compile iOS Simulator (no IPA)
+        run: |
+          xcodebuild -project Shirox.xcodeproj -scheme Shirox_iOS \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/ShiroxChapterValidation" \
+            -skipPackagePluginValidation \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
+            build > "$RUNNER_TEMP/chapter-build.log" 2>&1 || {
+              grep -nE '(error:|BUILD FAILED|fatal error)' "$RUNNER_TEMP/chapter-build.log" | tail -90 || true
+              tail -85 "$RUNNER_TEMP/chapter-build.log"
               exit 1
             }
-          tail -8 /tmp/shirox-simulator-build.log
-      - name: Run skip and next episode unit tests
+          echo "SIMULATOR BUILD SUCCEEDED — no IPA packaged"
+      - name: Run chapter timing XCTest
         run: |
           SIM_ID=$(xcrun simctl list devices available -j | python3 -c '
           import json,sys
-          data=json.load(sys.stdin)
-          for runtime, devices in data["devices"].items():
+          for runtime, devices in json.load(sys.stdin)["devices"].items():
+              if "iOS" not in runtime: continue
               for device in devices:
-                  if device["name"].startswith("iPhone") and device["state"] in ("Shutdown", "Booted"):
-                      print(device["udid"]); sys.exit(0)
+                  if device.get("isAvailable"):
+                      print(device["udid"]);sys.exit(0)
           sys.exit(1)
           ')
-          echo "Running chapter tests on simulator $SIM_ID"
-          xcodebuild test -project Shirox.xcodeproj -scheme Shirox \
+          xcodebuild test -project Shirox.xcodeproj -scheme Shirox_iOS \
             -configuration Debug -destination "platform=iOS Simulator,id=$SIM_ID" \
+            -derivedDataPath "$RUNNER_TEMP/ShiroxChapterValidation" \
+            -skipPackagePluginValidation \
             -only-testing:ShiroxTests/PlayerNextEpisodePrefetchTests \
-            CODE_SIGNING_ALLOWED=NO \
-            > /tmp/shirox-chapter-tests.log 2>&1 || {
-              grep -nE '(error:|Test Case|Test Suite|failed|BUILD FAILED)' /tmp/shirox-chapter-tests.log | tail -100 || true
-              tail -75 /tmp/shirox-chapter-tests.log
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
+            > "$RUNNER_TEMP/chapter-tests.log" 2>&1 || {
+              grep -nE '(error:|Test Case|Test Suite|failed|BUILD FAILED)' "$RUNNER_TEMP/chapter-tests.log" | tail -100 || true
+              tail -90 "$RUNNER_TEMP/chapter-tests.log"
               exit 1
             }
-          grep -E '(Test Case|Executed|TEST SUCCEEDED)' /tmp/shirox-chapter-tests.log | tail -35
+          grep -E '(Test Case|Executed|TEST SUCCEEDED)' "$RUNNER_TEMP/chapter-tests.log" | tail -40
+      - name: Assert no IPA was produced
+        run: |
+          ! find . -name '*.ipa' -print -quit | grep -q .
