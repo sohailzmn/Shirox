@@ -65,6 +65,7 @@ final class AniListDetailViewModel: ObservableObject {
             showStreamPicker = true
             return
         }
+        PlaybackPerformance.shared.begin(title: media.title.displayTitle, episode: number)
         let artwork = media.bannerImage ?? media.coverImage.extraLarge
             ?? media.coverImage.large ?? ""
         // Present immediately. The actual source search runs headlessly inside
