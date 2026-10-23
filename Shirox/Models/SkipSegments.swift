@@ -67,6 +67,13 @@ enum PlayerChapterTiming {
         }
     }
 
+    /// Try incomplete chapter discovery once more, without endlessly polling
+    /// providers or re-seeking based on unverified timestamps.
+    static func shouldRetryMissingChapters(_ segments: SkipSegments?, attempts: Int) -> Bool {
+        guard attempts > 0, attempts < 2 else { return false }
+        return segments?.intro == nil || segments?.credits == nil
+    }
+
     static func shouldOfferNext(
         at position: Double, duration: Double, segments: SkipSegments?,
         hasNext: Bool
