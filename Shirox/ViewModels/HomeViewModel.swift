@@ -76,6 +76,38 @@ final class HomeViewModel: ObservableObject {
         await load()
     }
 
+    /// Local, privacy-preserving recommendations. Ranks the already-loaded
+    /// home feed by genres shared with a recently watched title; makes no
+    /// additional API calls or invented recommendation claims.
+    func recommendations(for history: [ContinueWatchingItem]) -> [Media] {
+        let candidates = trending + seasonal + lastSeason + popular + topRated
+        guard !history.isEmpty else { return [] }
+        let watchedIds = Set(history.compactMap { $0.aniListID })
+        let watchedTitles = Set(history.map { $0.mediaTitle.folding(
+            options: [.caseInsensitive, .diacriticInsensitive], locale: .current) })
+        let anchor = history.sorted { $0.lastWatchedAt > $1.lastWatchedAt }
+            .compactMap { watched in
+                candidates.first {
+                    ($0.provider == .anilist && $0.id == watched.aniListID) ||
+                    $0.title.displayTitle.localizedCaseInsensitiveCompare(watched.mediaTitle) == .orderedSame
+                }
+            }.first
+        guard let anchor, let genres = anchor.genres, !genres.isEmpty else { return [] }
+        let favorites = Set(genres)
+        var seen = Set<String>()
+        return candidates.filter { media in
+            !media.isManga && !watchedIds.contains(media.id) &&
+            !watchedTitles.contains(media.title.displayTitle.folding(
+                options: [.caseInsensitive, .diacriticInsensitive], locale: .current)) &&
+            !Set(media.genres ?? []).isDisjoint(with: favorites) &&
+            seen.insert(media.uniqueId).inserted
+        }.sorted { a, b in
+            let aScore = Set(a.genres ?? []).intersection(favorites).count * 100 + (a.averageScore ?? 0)
+            let bScore = Set(b.genres ?? []).intersection(favorites).count * 100 + (b.averageScore ?? 0)
+            return aScore > bScore
+        }.prefix(12).map { $0 }
+    }
+
     // MARK: - Private
 
     private func seedFromCache() {
