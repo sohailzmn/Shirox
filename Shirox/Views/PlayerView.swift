@@ -108,6 +108,10 @@ struct PlayerView: View {
     @State private var skipFetchTask: Task<Void, Never>?
     @State private var didRequestSkipSegments = false
     @State private var didAdvanceAfterCredits = false
+    @State private var upcomingEpisodeThumbnail: String?
+    @State private var upcomingEpisodeTitle: String?
+    @State private var previewEpisodeRequested: Int?
+    @State private var nextPreviewTask: Task<Void, Never>?
     @State private var skip85ButtonFrame: CGRect = .zero
     // Netflix/Crunchyroll-style: show Skip Intro by default; automatic seeks
     // remain opt-in under the existing player setting.
@@ -316,12 +320,29 @@ struct PlayerView: View {
                                 guard !isLoadingNextEpisode else { return }
                                 Task { @MainActor in await loadAndAdvance() }
                             } label: {
-                                Label("Next Episode", systemImage: "forward.end.fill")
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 14)
-                                    .frame(height: 36)
-                                    .background(.ultraThinMaterial, in: Capsule())
+                                HStack(spacing: 10) {
+                                    CachedAsyncImage(
+                                        urlString: upcomingEpisodeThumbnail
+                                            ?? currentContext?.imageUrl ?? ""
+                                    )
+                                    .frame(width: 76, height: 44)
+                                    .clipped()
+                                    .clipShape(RoundedRectangle(cornerRadius: 7))
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("UP NEXT · EP \((currentContext?.episodeNumber ?? 0) + 1)")
+                                            .font(.caption2.weight(.bold))
+                                            .foregroundStyle(.white.opacity(0.8))
+                                        Text(upcomingEpisodeTitle ?? "Play Next Episode")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(.white)
+                                            .lineLimit(1)
+                                    }
+                                    Image(systemName: "play.fill")
+                                        .foregroundStyle(.white)
+                                }
+                                .padding(7)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 13))
                             }
                             .buttonStyle(.plain)
                         }
@@ -398,6 +419,7 @@ struct PlayerView: View {
             autoAdvanceTask = nil
             prefetchTask?.cancel()
             skipFetchTask?.cancel()
+            nextPreviewTask?.cancel()
             cancelStallWatchdog(resetAttempts: true)
             if let obs = timeObserver { player?.removeTimeObserver(obs) }
             rateObserver?.invalidate()
@@ -1457,6 +1479,26 @@ struct PlayerView: View {
         scheduleHide()
     }
 
+    private func requestUpcomingPreviewIfNeeded() {
+        guard onWatchNext != nil, duration.isFinite, duration > 0,
+              duration - currentTime <= 120,
+              let context = currentContext else { return }
+        let next = context.episodeNumber + 1
+        guard previewEpisodeRequested != next else { return }
+        let id = context.aniListID ?? context.malID
+        guard let id else { return }
+        previewEpisodeRequested = next
+        let provider: ProviderType = context.aniListID == nil ? .mal : .anilist
+        nextPreviewTask?.cancel()
+        nextPreviewTask = Task { @MainActor in
+            let info = await TVDBMappingService.shared.getEpisode(
+                for: id, episodeNumber: next, provider: provider)
+            guard !Task.isCancelled, currentContext?.episodeNumber + 1 == next else { return }
+            upcomingEpisodeThumbnail = info?.thumbnail
+            upcomingEpisodeTitle = info?.title
+        }
+    }
+
     private var showNextEpisodePrompt: Bool {
         PlayerChapterTiming.shouldOfferNext(
             at: currentTime, duration: duration, segments: skipSegments,
@@ -1791,6 +1833,7 @@ struct PlayerView: View {
                 pendingResumeTarget = nil
             }
             requestSkipMetadataIfNeeded()
+            requestUpcomingPreviewIfNeeded()
             if let segments = skipSegments {
                 let newActive = PlayerChapterTiming.activeSegment(
                     at: currentTime, segments: segments)
@@ -1825,6 +1868,11 @@ struct PlayerView: View {
         skipFetchTask = nil
         didRequestSkipSegments = false
         didAdvanceAfterCredits = false
+        nextPreviewTask?.cancel()
+        nextPreviewTask = nil
+        previewEpisodeRequested = nil
+        upcomingEpisodeThumbnail = nil
+        upcomingEpisodeTitle = nil
         skipSegments = nil
         activeSkipSegment = nil
         skippedSegments = []
@@ -2820,6 +2868,11 @@ struct PlayerView: View {
         skipFetchTask = nil
         didRequestSkipSegments = false
         didAdvanceAfterCredits = false
+        nextPreviewTask?.cancel()
+        nextPreviewTask = nil
+        previewEpisodeRequested = nil
+        upcomingEpisodeThumbnail = nil
+        upcomingEpisodeTitle = nil
         skipSegments = nil
         activeSkipSegment = nil
         skippedSegments = []
