@@ -16,11 +16,10 @@ final class HomeViewModel: ObservableObject {
     private var loaded = false
     private var cancellables = Set<AnyCancellable>()
 
-    init() {
-        // Cold start: show the last-saved feed for whichever provider is primary right now,
-        // before any network request — the same cache-then-refresh shape `LibraryViewModel`
-        // already uses. The view's `.task` calls `load()` immediately after and refreshes it.
-        seedFromCache()
+    init(seedCachedFeed: Bool = true) {
+        // Production still uses cache-then-refresh. Unit tests opt out so unrelated
+        // persisted Home feed rows never leak into isolated recommendation fixtures.
+        if seedCachedFeed { seedFromCache() }
 
         ProviderManager.shared.$orderedProviders
             .map { $0.first?.providerType }
