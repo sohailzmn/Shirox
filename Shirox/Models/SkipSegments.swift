@@ -17,6 +17,11 @@ struct SkipSegments {
     /// True only for segments confirmed against the current file runtime.
     /// Unverified segments remain available as manual Skip buttons.
     var isDurationVerified: Bool = false
+    /// Trust is tracked per chapter, not per episode. A trustworthy intro
+    /// must not implicitly authorize an unrelated, incorrect credits marker.
+    var autoSkipIntro: Bool = false
+    var autoSkipRecap: Bool = false
+    var autoNextCredits: Bool = false
 
     struct Segment {
         let startMs: Double?  // nil = from start of episode
@@ -54,8 +59,12 @@ enum PlayerChapterTiming {
     }
 
     static func shouldAutoSkip(_ type: SkipSegmentType, segments: SkipSegments) -> Bool {
-        // Preview/post-credit scenes are never skipped automatically.
-        segments.isDurationVerified && type != .preview && type != .credits
+        guard segments.isDurationVerified else { return false }
+        switch type {
+        case .intro: return segments.autoSkipIntro
+        case .recap: return segments.autoSkipRecap
+        case .credits, .preview: return false
+        }
     }
 
     static func shouldOfferNext(
@@ -65,6 +74,7 @@ enum PlayerChapterTiming {
         guard hasNext, position.isFinite, duration.isFinite,
               duration > 0, position >= 0 else { return false }
         if segments?.isDurationVerified == true,
+           segments?.autoNextCredits == true,
            let credits = segments?.credits, let start = credits.startMs {
             let creditsStart = start / 1_000
             // Don't show the prompt long before credits on a mismatched cut.
@@ -83,7 +93,7 @@ enum PlayerChapterTiming {
         // and previews are deliberately not protected: the viewer opted into
         // Auto Next and prefers to jump to the following episode immediately.
         // Unknown / unverified timing never causes an early jump.
-        guard let segments, segments.isDurationVerified,
+        guard let segments, segments.isDurationVerified, segments.autoNextCredits,
               let credits = segments.credits, let start = credits.startMs,
               duration.isFinite, duration > 0, position.isFinite,
               start.isFinite, credits.endMs.isFinite else { return false }
