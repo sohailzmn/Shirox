@@ -200,6 +200,8 @@ struct PlayerView: View {
     }
 
     @State private var isSpeedBoosted = false
+    @State private var gestureHint: String?
+    @State private var gestureHintTask: Task<Void, Never>?
     @State private var isVideoScrubbing = false
     @State private var videoScrubTime: Double = 0
     @State private var videoScrubStartTime: Double = 0
@@ -794,9 +796,38 @@ struct PlayerView: View {
                 onSeekBackward: { skip(by: -Double(skipShort)); scheduleHide() },
                 onSeekForward: { skip(by: Double(skipShort)); scheduleHide() },
                 seekAmount: Double(skipShort),
-                isLocked: isLocked
+                isLocked: isLocked,
+                onVerticalSwipe: { rightSide, delta in
+                    #if os(iOS)
+                    guard !castManager.isConnected, !isLocked else { return }
+                    if rightSide {
+                        volume = min(1, max(0, volume + Float(delta)))
+                        player.volume = volume
+                        gestureHint = "Volume \(Int(volume * 100))%"
+                    } else {
+                        UIScreen.main.brightness = min(1, max(0, UIScreen.main.brightness + delta))
+                        gestureHint = "Brightness \(Int(UIScreen.main.brightness * 100))%"
+                    }
+                    gestureHintTask?.cancel()
+                    gestureHintTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 950_000_000)
+                        guard !Task.isCancelled else { return }
+                        gestureHint = nil
+                    }
+                    #endif
+                }
             )
             .ignoresSafeArea()
+
+            if let gestureHint {
+                Text(gestureHint)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(.black.opacity(0.6), in: Capsule())
+                    .allowsHitTesting(false)
+            }
 
             #if os(iOS)
             if isSpeedBoosted {
