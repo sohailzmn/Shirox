@@ -1751,11 +1751,9 @@ struct PlayerView: View {
     }
 
     /// Suspends until the player has its first frame ready (`videoReady`) or a safety timeout
-    /// elapses, so deferred background work doesn't compete with the main-actor-bound initial
-    /// load + resume seek. `videoReady` is always flipped true eventually (on readyToPlay, on
-    /// seek completion, or by setupPlayer's own load timeout), so this can't hang indefinitely;
-    /// the timeout here is just a backstop. Polling mirrors how setupPlayer's load-timeout Task
-    /// reads `videoReady`.
+    /// elapses, so optional metadata work doesn't compete with actual video decoding.
+    /// A deadline never marks a frame as displayed: callers must check `videoReady`
+    /// after this returns. Failed URLs are handled by the retry overlay.
     @MainActor
     private func waitForVideoReady(timeout: TimeInterval = 12) async {
         guard !videoReady else { return }
@@ -2215,6 +2213,7 @@ struct PlayerView: View {
                 guard player == nil || player?.currentItem === observedItem else { return }
                 switch status {
                 case .readyToPlay:
+                    PlaybackPerformance.shared.playerReady()
                     Logger.shared.log("[Player] Item status: readyToPlay", type: "Debug")
                     // With a resume position the overlay stays up until the seek lands, so the
                     // user never sees a frame from the wrong position.
