@@ -1,0 +1,40 @@
+name: Publish Optimized Shirox IPA
+on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/publish-optimized-ipa.yml"
+permissions:
+  contents: write
+  actions: read
+jobs:
+  release-ipa:
+    name: Publish verified unsigned IPA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Fetch verified compiled IPA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p downloaded
+          gh run download 39878559939 --repo sohailzmn/Shirox --name Shirox-SmartPlay-IPA --dir downloaded
+      - name: Check IPA zip and payload
+        run: |
+          test -s downloaded/Shirox.ipa
+          unzip -tq downloaded/Shirox.ipa
+          unzip -Z1 downloaded/Shirox.ipa | grep '^Payload/Shirox.app/' >/dev/null
+          ls -lh downloaded/Shirox.ipa
+      - name: Publish direct IPA download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create smartplay-optimized-20261023 \
+            --repo sohailzmn/Shirox \
+            --target 3c8a8c4e52f21a7cf57d36b81035c04f73613550 \
+            --title "Shirox Optimized Smart Play · 23 Oct 2026" \
+            --notes "Unsigned iOS IPA compiled from the Shirox Smart Playback feature branch. Includes faster automatic streaming startup, Continue Watching 2.0, cinematic details, saved playback preferences, optional scrubbing thumbnails, next-episode preview, recommendations and in-app mini-player. Built and validated in GitHub Actions run https://github.com/sohailzmn/Shirox/actions/runs/39878559939. Sign with a valid iOS signing method before installation." \
+            --prerelease
+          gh release upload smartplay-optimized-20261023 downloaded/Shirox.ipa \
+            --repo sohailzmn/Shirox --clobber
