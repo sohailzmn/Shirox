@@ -949,6 +949,13 @@ struct PlayerView: View {
                 pipTrigger += 1
                 #endif
             },
+            onMinimize: {
+                #if os(iOS)
+                if let player, !castManager.isConnected {
+                    PlayerPresenter.shared.minimizePlayer(player: player)
+                }
+                #endif
+            },
             topPadding: topPad,
             isLandscape: isLandscape
         )
