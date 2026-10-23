@@ -358,7 +358,13 @@ struct ContinueWatchingCardDisplay: View {
         if let href = item.episodeHref,
            let range = href.range(of: #"/staffel-\d+"#, options: .regularExpression) {
             let season = href[range].replacingOccurrences(of: "/staffel-", with: "")
-            fragments.append("S\(season) · E\(item.episodeNumber)")
+            // Saved episodeNumber can be an absolute index across seasons.
+            // The URL contains the true per-season episode number.
+            let episode = href.range(
+                of: #"/episode-\d+"#, options: .regularExpression
+            ).flatMap { Int(href[$0].replacingOccurrences(of: "/episode-", with: "")) }
+                ?? item.episodeNumber
+            fragments.append("S\(season) · E\(episode)")
         } else {
             fragments.append("Episode \(item.episodeNumber)")
         }
