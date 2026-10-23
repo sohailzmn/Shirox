@@ -159,4 +159,27 @@ final class PlaybackRoutingTests: XCTestCase {
         XCTAssertEqual(PlaybackRouting.nowPlayingElapsed(target: .local, castPosition: 0, localPosition: .nan), 0)
         XCTAssertEqual(PlaybackRouting.nowPlayingElapsed(target: .local, castPosition: 0, localPosition: -3), 0)
     }
+    // MARK: - Bounded automatic stream recovery
+
+    func testAutomaticRefetchBudgetIsFinite() {
+        XCTAssertTrue(PlaybackRouting.canAttemptStreamRefetch(attempts: 0))
+        XCTAssertTrue(PlaybackRouting.canAttemptStreamRefetch(attempts: 1))
+        XCTAssertTrue(PlaybackRouting.canAttemptStreamRefetch(attempts: 2))
+        XCTAssertFalse(PlaybackRouting.canAttemptStreamRefetch(attempts: 3))
+        XCTAssertFalse(PlaybackRouting.canAttemptStreamRefetch(attempts: 99))
+    }
+
+    func testInvalidRecoveryBudgetsAreRejected() {
+        XCTAssertFalse(PlaybackRouting.canAttemptStreamRefetch(attempts: -1))
+        XCTAssertFalse(PlaybackRouting.canAttemptStreamRefetch(attempts: 0, limit: 0))
+    }
+
+    func testManualRetryCanBeginNewCycle() {
+        let exhaustedAttempts = 3
+        XCTAssertFalse(PlaybackRouting.canAttemptStreamRefetch(attempts: exhaustedAttempts))
+        // The player clears its attempt counter only for user Retry/new episode.
+        let attemptsAfterExplicitRetry = 0
+        XCTAssertTrue(PlaybackRouting.canAttemptStreamRefetch(attempts: attemptsAfterExplicitRetry))
+    }
+
 }
