@@ -654,13 +654,18 @@ struct DetailView: View {
         let href = vm.detailHref ?? item.detailHref
         let currentEpCount = vm.detail?.episodes.isEmpty == false ? vm.detail?.episodes.count : nil
 
+        // Resume must preserve the saved MAL identity and recover a linked
+        // AniList identity; otherwise AniSkip silently receives neither ID.
+        let playbackIdentity = item.resolvedPlaybackIdentity(
+            linkedAniListID: vm.aniListID ?? aniListID
+        )
         let context = PlayerContext(
             mediaTitle: item.mediaTitle,
             episodeNumber: item.episodeNumber,
             episodeTitle: item.episodeTitle,
             imageUrl: item.imageUrl,
-            aniListID: item.aniListID,
-            malID: item.aniListID.flatMap { IDMappingService.shared.cachedMalId(forAnilistId: $0) },
+            aniListID: playbackIdentity.aniListID,
+            malID: playbackIdentity.malID,
             moduleId: item.moduleId,
             totalEpisodes: currentEpCount ?? item.totalEpisodes,
             availableEpisodes: currentEpCount ?? item.availableEpisodes,
@@ -1838,13 +1843,14 @@ struct DetailView: View {
                 return (s.watchedSeconds / s.totalSeconds) < 0.95 ? s.watchedSeconds : nil
             }()
 
+            let playbackIdentity = item.resolvedPlaybackIdentity(linkedAniListID: aniListID)
             let context = PlayerContext(
                 mediaTitle: item.mediaTitle,
                 episodeNumber: item.episodeNumber,
                 episodeTitle: item.episodeTitle,
                 imageUrl: item.imageUrl,
-                aniListID: item.aniListID,
-                malID: item.aniListID.flatMap { IDMappingService.shared.cachedMalId(forAnilistId: $0) },
+                aniListID: playbackIdentity.aniListID,
+                malID: playbackIdentity.malID,
                 moduleId: item.moduleId,
                 totalEpisodes: saved?.totalEpisodes,
                 availableEpisodes: saved?.availableEpisodes,
