@@ -292,6 +292,7 @@ struct ModuleStreamPickerView: View {
                         var visited = Set<String>()
                         for href in hrefs where visited.insert(href).inserted {
                         guard !Task.isCancelled else { return }
+                        if headless { PlaybackPerformance.shared.moduleResolved() }
                         let episodes: [EpisodeLink]
                         do { episodes = try await runner.fetchEpisodes(url: href) }
                         catch { continue }
@@ -307,6 +308,7 @@ struct ModuleStreamPickerView: View {
                             episode = episodes.first { Int($0.number) == episodeNumber }
                         }
                         guard let episode else { continue }
+                        if headless { PlaybackPerformance.shared.episodeResolved() }
 
                         let streams: [StreamResult]
                         do { streams = try await runner.fetchStreams(episodeUrl: episode.href) }
