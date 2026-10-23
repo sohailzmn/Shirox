@@ -460,6 +460,15 @@ struct PlayerView: View {
             player?.volume = newVolume
             castManager.setVolume(newVolume)
         }
+        #if os(iOS)
+        .onChangeOf(player) { newPlayer in
+            // Stall recovery can replace the AVPlayer instance while the
+            // floating window is open. Rebind without restarting playback.
+            if let newPlayer {
+                PlayerPresenter.shared.refreshMiniPlayer(player: newPlayer)
+            }
+        }
+        #endif
         .onChangeOf(playbackSpeed) { newSpeed in
             if castManager.isConnected {
                 castManager.setPlaybackRate(Float(newSpeed))
