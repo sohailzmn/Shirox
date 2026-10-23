@@ -8,6 +8,8 @@ final class HomeViewModel: ObservableObject {
     @Published var lastSeason: [Media] = []
     @Published var popular: [Media] = []
     @Published var topRated: [Media] = []
+    @Published private(set) var personalizedGenres: Set<String> = []
+    private var personalizedAnchorID: Int?
     @Published var isLoading = false
     @Published var error: String?
 
@@ -76,6 +78,33 @@ final class HomeViewModel: ObservableObject {
         await load()
     }
 
+    /// Resolve genres for a watched anime even when that anime is not among
+    /// today's top/trending entries. Only one existing AniList detail query
+    /// is needed, and only when the most recent watched ID changes.
+    func refreshPersonalization(from history: [ContinueWatchingItem]) async {
+        guard let recent = history.sorted(by: { $0.lastWatchedAt > $1.lastWatchedAt })
+                .first(where: { $0.aniListID != nil }),
+              let id = recent.aniListID else {
+            personalizedAnchorID = nil
+            personalizedGenres = []
+            return
+        }
+        guard personalizedAnchorID != id else { return }
+        personalizedAnchorID = id
+        let available = trending + seasonal + lastSeason + popular + topRated
+        if let known = available.first(where: { $0.provider == .anilist && $0.id == id }),
+           let genres = known.genres, !genres.isEmpty {
+            personalizedGenres = Set(genres)
+            return
+        }
+        // The API also exposes public details without a signed-in AniList
+        // account. A failure simply hides this optional row, not Home.
+        if let detail = try? await AniListProvider.shared.detail(id: id),
+           personalizedAnchorID == id {
+            personalizedGenres = Set(detail.genres ?? [])
+        }
+    }
+
     /// Local, privacy-preserving recommendations. Ranks the already-loaded
     /// home feed by genres shared with a recently watched title; makes no
     /// additional API calls or invented recommendation claims.
@@ -92,8 +121,9 @@ final class HomeViewModel: ObservableObject {
                     $0.title.displayTitle.localizedCaseInsensitiveCompare(watched.mediaTitle) == .orderedSame
                 }
             }.first
-        guard let anchor, let genres = anchor.genres, !genres.isEmpty else { return [] }
-        let favorites = Set(genres)
+        let favorites = anchor.flatMap { $0.genres }.map(Set.init)
+            ?? personalizedGenres
+        guard !favorites.isEmpty else { return [] }
         var seen = Set<String>()
         return candidates.filter { media in
             !media.isManga && !watchedIds.contains(media.id) &&
