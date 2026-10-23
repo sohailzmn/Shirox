@@ -29,6 +29,21 @@ final class SkipTimestampsService {
         )
         if let cached = cache[key] { return cached }
 
+        // Try the fast, episode-specific MAL source before expensive cross-ID
+        // mapping requests. An AniSkip result may have ONLY the opening or
+        // ending: keep it, but let slower providers fill the missing chapter.
+        let aniSkip: SkipSegments?
+        if let malID, malID > 0 {
+            aniSkip = await fetchAniSkip(
+                malID: malID, episode: episodeNumber, duration: duration)
+        } else {
+            aniSkip = nil
+        }
+        if let aniSkip, aniSkip.intro != nil, aniSkip.credits != nil {
+            cache[key] = aniSkip
+            return aniSkip
+        }
+
         let tvdbSeason: Int
         let epoffset: Int
         if let mapping = await TVDBMappingService.shared.getTVDBId(for: aniListID) {
@@ -44,14 +59,20 @@ final class SkipTimestampsService {
         let aniListEpisode = isAbsolute ? episodeNumber - epoffset : episodeNumber
         let tvdbEpisode = isAbsolute ? episodeNumber : episodeNumber + epoffset
 
-        // For anime, AniSkip uses the actual MyAnimeList ID and a media-length
-        // constraint. These intervals are suitable for precise/automatic skips.
-        // Never substitute the AniList ID: they are different ID namespaces.
-        if let malID, let accurate = await fetchAniSkip(
-            malID: malID, episode: aniListEpisode, duration: duration
-        ) {
-            cache[key] = accurate
-            return accurate
+        // With sequel seasons, a module may send a global episode index,
+        // whereas AniSkip expects the episode number local to that season.
+        let preciseAniSkip: SkipSegments?
+        if aniListEpisode != episodeNumber, let malID {
+            preciseAniSkip = await fetchAniSkip(
+                malID: malID, episode: aniListEpisode, duration: duration)
+        } else {
+            preciseAniSkip = nil
+        }
+        let verifiedAniSkip = preciseAniSkip ?? aniSkip
+        if let verifiedAniSkip,
+           verifiedAniSkip.intro != nil && verifiedAniSkip.credits != nil {
+            cache[key] = verifiedAniSkip
+            return verifiedAniSkip
         }
 
         // Anira/IntroDB are fallback timestamps. They are only manually skippable
@@ -90,10 +111,14 @@ final class SkipTimestampsService {
             theIntroDB = await fetchTheIntroDB(tmdbID: tmdb?.id, season: tvdbSeason, episode: episodeNumber, isMovie: isMovie)
         }
         var segments = validated(merge(introdb: introDB, theintrodb: theIntroDB), duration: duration)
-        // Preserve Anira marks when secondary providers have no data.
-        segments.intro = segments.intro ?? aniraSegments.intro
-        segments.recap = segments.recap ?? aniraSegments.recap
-        segments.credits = segments.credits ?? aniraSegments.credits
+        // AniSkip markers that match this video's runtime take precedence.
+        // Otherwise show independently provided chapters as manual buttons.
+        segments.intro = verifiedAniSkip?.intro ?? segments.intro ?? aniraSegments.intro
+        segments.recap = verifiedAniSkip?.recap ?? segments.recap ?? aniraSegments.recap
+        segments.credits = verifiedAniSkip?.credits ?? segments.credits ?? aniraSegments.credits
+        segments.autoSkipIntro = verifiedAniSkip?.autoSkipIntro ?? false
+        segments.autoSkipRecap = verifiedAniSkip?.autoSkipRecap ?? false
+        segments.autoNextCredits = verifiedAniSkip?.autoNextCredits ?? false
 
         // A source without runtime metadata cannot authorize automatic jumps
         // alone. However, two independent providers marking essentially the
@@ -104,14 +129,13 @@ final class SkipTimestampsService {
         let introAgrees = Self.agrees(anira.intro, database.intro)
         let endingAgrees = Self.agrees(anira.credits, database.credits)
         let recapAgrees = Self.agrees(anira.recap, database.recap)
-        if duration >= 60, introAgrees || endingAgrees || recapAgrees {
-            segments.isDurationVerified = true
-            // Trust ONLY the independently confirmed intervals for automation;
-            // leave unconfirmed marks accessible via manual buttons.
-            segments.autoSkipIntro = introAgrees
-            segments.autoSkipRecap = recapAgrees
-            segments.autoNextCredits = endingAgrees
+        if duration >= 60 {
+            segments.autoSkipIntro = segments.autoSkipIntro || introAgrees
+            segments.autoSkipRecap = segments.autoSkipRecap || recapAgrees
+            segments.autoNextCredits = segments.autoNextCredits || endingAgrees
         }
+        segments.isDurationVerified = segments.autoSkipIntro ||
+            segments.autoSkipRecap || segments.autoNextCredits
         cache[key] = segments
         return segments
     }
@@ -157,6 +181,9 @@ final class SkipTimestampsService {
             }
         }
         guard result.intro != nil || result.credits != nil || result.recap != nil else { return nil }
+        result.autoSkipIntro = result.intro != nil
+        result.autoSkipRecap = result.recap != nil
+        result.autoNextCredits = result.credits != nil
         result.isDurationVerified = true
         return result
     }
