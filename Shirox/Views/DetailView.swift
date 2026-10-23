@@ -1829,12 +1829,13 @@ struct DetailView: View {
             // where the user left off instead of restarting from 0 every time.
             // Anchor on the episode's unique href so a downloaded S2 E5 doesn't inherit
             // S1 E5's resume position when their numbers collide on a multi-season list.
-            let saved = ContinueWatchingManager.shared.items.first {
-                $0.matchesEpisode(number: item.episodeNumber, href: item.episodeHref)
-                    && (
-                        ($0.aniListID != nil && $0.aniListID == item.aniListID)
-                        || ($0.mediaTitle == item.mediaTitle && $0.moduleId == item.moduleId)
-                    )
+            let saved: ContinueWatchingItem? = ContinueWatchingManager.shared.items.first { cw in
+                guard cw.matchesEpisode(number: item.episodeNumber, href: item.episodeHref) else {
+                    return false
+                }
+                let matchingAniList = cw.aniListID != nil && cw.aniListID == item.aniListID
+                let matchingModule = cw.mediaTitle == item.mediaTitle && cw.moduleId == item.moduleId
+                return matchingAniList || matchingModule
             }
             // Don't auto-resume if the user has already finished the episode —
             // tapping a completed row should restart it.
@@ -1843,14 +1844,22 @@ struct DetailView: View {
                 return (s.watchedSeconds / s.totalSeconds) < 0.95 ? s.watchedSeconds : nil
             }()
 
-            let playbackIdentity = item.resolvedPlaybackIdentity(linkedAniListID: aniListID)
+            // DownloadItem is not ContinueWatchingItem. Recover the cached
+            // chapter identity from saved progress when it exists.
+            let savedIdentity = saved?.resolvedPlaybackIdentity(
+                linkedAniListID: item.aniListID ?? aniListID
+            )
+            let playbackAniListID = savedIdentity?.aniListID ?? item.aniListID ?? aniListID
+            let playbackMALID = savedIdentity?.malID ?? playbackAniListID.flatMap {
+                IDMappingService.shared.cachedMalId(forAnilistId: $0)
+            }
             let context = PlayerContext(
                 mediaTitle: item.mediaTitle,
                 episodeNumber: item.episodeNumber,
                 episodeTitle: item.episodeTitle,
                 imageUrl: item.imageUrl,
-                aniListID: playbackIdentity.aniListID,
-                malID: playbackIdentity.malID,
+                aniListID: playbackAniListID,
+                malID: playbackMALID,
                 moduleId: item.moduleId,
                 totalEpisodes: saved?.totalEpisodes,
                 availableEpisodes: saved?.availableEpisodes,
