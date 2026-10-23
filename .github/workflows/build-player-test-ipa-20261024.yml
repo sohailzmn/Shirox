@@ -1,4 +1,4 @@
-name: Build Shirox Playback Test IPA (Unsigned)
+name: Build Shirox Intro-Outro Playback Test IPA (Unsigned)
 on:
   push:
     branches:
@@ -52,7 +52,7 @@ jobs:
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Shirox Playback Test (unsigned) ${GITHUB_SHA:0:12}" \
-            --notes "Unsigned iOS test IPA built from commit $GITHUB_SHA on feature/smart-playback-recovery-20261021. Includes the recent stream recovery, HLS quality and Continue Watching fixes. This is a device-test build, not verified live-stream functionality. Sign before installing on iPhone." \
+            --notes "Unsigned iOS test IPA from commit $GITHUB_SHA. Adds faster intro/outro timestamp detection, missing MAL mapping recovery, bounded outro refresh and safer manual chapter seeks. Includes previous playback and Continue Watching fixes. Experimental iPhone test build, not a guarantee of working streams. Sign before installing." \
             --prerelease
           gh release upload "$TAG" build/Shirox.ipa build/Shirox.ipa.sha256 \
             --repo "$GITHUB_REPOSITORY" --clobber
