@@ -58,20 +58,18 @@ final class SkipTimestampsService {
         // when the exact cut cannot be verified (no guessed automatic seeks).
         // 1. Try Anira per-episode endpoint (has intro/outro in seconds)
         let aniraEp = await TVDBMappingService.shared.fetchAniraEpisode(id: aniListID, episodeNumber: aniListEpisode)
+        var aniraSegments = SkipSegments()
         if let skips = aniraEp?.skips, !skips.isEmpty {
-            var result = SkipSegments()
             for skip in skips {
                 let seg = SkipSegments.Segment(startMs: skip.start * 1000, endMs: skip.end * 1000)
                 switch skip.type {
-                case "op", "mixed-op": result.intro = seg
-                case "ed", "mixed-ed": result.credits = seg
-                case "recap": result.recap = seg
+                case "op", "mixed-op": aniraSegments.intro = seg
+                case "ed", "mixed-ed": aniraSegments.credits = seg
+                case "recap": aniraSegments.recap = seg
                 default: break
                 }
             }
-            result = validated(result, duration: duration)
-            cache[key] = result
-            return result
+            aniraSegments = validated(aniraSegments, duration: duration)
         }
 
         // 2. Fall back to introdb / theIntroDB
@@ -91,7 +89,29 @@ final class SkipTimestampsService {
         if theIntroDB == nil && tvdbEpisode != episodeNumber {
             theIntroDB = await fetchTheIntroDB(tmdbID: tmdb?.id, season: tvdbSeason, episode: episodeNumber, isMovie: isMovie)
         }
-        let segments = validated(merge(introdb: introDB, theintrodb: theIntroDB), duration: duration)
+        var segments = validated(merge(introdb: introDB, theintrodb: theIntroDB), duration: duration)
+        // Preserve Anira marks when secondary providers have no data.
+        segments.intro = segments.intro ?? aniraSegments.intro
+        segments.recap = segments.recap ?? aniraSegments.recap
+        segments.credits = segments.credits ?? aniraSegments.credits
+
+        // A source without runtime metadata cannot authorize automatic jumps
+        // alone. However, two independent providers marking essentially the
+        // same scene within the actual runtime is a strong second signal.
+        // This is intentionally strict to avoid skipping dialogue.
+        let anira = aniraSegments
+        let database = validated(merge(introdb: introDB, theintrodb: theIntroDB), duration: duration)
+        let introAgrees = Self.agrees(anira.intro, database.intro)
+        let endingAgrees = Self.agrees(anira.credits, database.credits)
+        let recapAgrees = Self.agrees(anira.recap, database.recap)
+        if duration >= 60, introAgrees || endingAgrees || recapAgrees {
+            segments.isDurationVerified = true
+            // Trust ONLY the independently confirmed intervals for automation;
+            // leave unconfirmed marks accessible via manual buttons.
+            segments.autoSkipIntro = introAgrees
+            segments.autoSkipRecap = recapAgrees
+            segments.autoNextCredits = endingAgrees
+        }
         cache[key] = segments
         return segments
     }
@@ -139,6 +159,14 @@ final class SkipTimestampsService {
         guard result.intro != nil || result.credits != nil || result.recap != nil else { return nil }
         result.isDurationVerified = true
         return result
+    }
+
+    private static func agrees(
+        _ lhs: SkipSegments.Segment?, _ rhs: SkipSegments.Segment?
+    ) -> Bool {
+        guard let lhs, let rhs, let lStart = lhs.startMs, let rStart = rhs.startMs,
+              lStart.isFinite, rStart.isFinite, lhs.endMs.isFinite, rhs.endMs.isFinite else { return false }
+        return abs(lStart - rStart) <= 3_000 && abs(lhs.endMs - rhs.endMs) <= 3_000
     }
 
     private func validSegment(_ segment: SkipSegments.Segment?, duration: Double) -> SkipSegments.Segment? {
