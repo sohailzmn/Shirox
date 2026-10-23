@@ -306,6 +306,13 @@ struct ModuleStreamPickerView: View {
                         let winner: StreamResult
                         if let saved = streams.first(where: { $0.title == savedTitle }) {
                             winner = saved
+                        } else if headless {
+                            // The module has already extracted working stream URLs.
+                            // Don't delay fullscreen playback with a duplicate HTTP
+                            // probe. Prefer a lighter rendition if it is offered.
+                            winner = streams.first(where: {
+                                $0.title.localizedCaseInsensitiveContains("480p")
+                            }) ?? streams[0]
                         } else {
                             winner = await Self.fastestResponsiveStream(in: streams)
                         }
