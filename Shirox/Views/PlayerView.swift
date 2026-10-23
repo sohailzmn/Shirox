@@ -176,6 +176,8 @@ struct PlayerView: View {
     @State private var startupBitrateTask: Task<Void, Never>?
     @State private var firstFrameWatchdog: Task<Void, Never>?
     @State private var failedStreamURLs: Set<URL> = []
+    /// Shared budget across failed-item notifications, background recovery and stalled streams.
+    @State private var automaticRefetchAttempts = 0
     // When we were truly backgrounded (home/app-switch/lock), so foreground can tell a
     // brief resign-active from a suspension long enough to have killed the source.
     @State private var backgroundedAt: Date? = nil
@@ -255,6 +257,7 @@ struct PlayerView: View {
                                onFirstFrame: {
                                    guard !videoReady else { return }
                                    videoReady = true
+                                   showStallRetry = false
                                    firstFrameWatchdog?.cancel()
                                    firstFrameWatchdog = nil
                                    PlaybackPerformance.shared.firstFrameReady()
@@ -1191,6 +1194,23 @@ struct PlayerView: View {
                         .background(Color.white, in: Capsule())
                 }
                 .buttonStyle(.plain)
+                if availableStreams.contains(where: { $0.url != currentStream.url }) {
+                    Menu {
+                        ForEach(availableStreams.filter { $0.url != currentStream.url }) { stream in
+                            Button(stream.title) {
+                                showStallRetry = false
+                                failedStreamURLs.removeAll()
+                                automaticRefetchAttempts = 0
+                                stallRecoveryAttempts = 0
+                                switchQuality(stream)
+                            }
+                        }
+                    } label: {
+                        Text("Choose Source")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                }
             }
             .padding(32)
 
@@ -1848,6 +1868,7 @@ struct PlayerView: View {
         Task {
             let qualities = await HLSQualityParser.parse(url: qualityURL, headers: qualityHeaders)
             await MainActor.run {
+                guard player?.currentItem === item, currentStream.url == qualityURL else { return }
                 hlsQualities = qualities
                 applyPreferredQuality()
             }
@@ -2201,7 +2222,7 @@ struct PlayerView: View {
                         surfaceUnrecoverablePlayback()
                         return
                     }
-                    Task { @MainActor in await refetchStream() }
+                    Task { @MainActor in await recoverPlayback() }
                 case .unknown:
                     break
                 @unknown default:
@@ -2421,7 +2442,8 @@ struct PlayerView: View {
     /// recovery has run out of road, so playback never dead-ends on a silent black frame.
     @MainActor
     private func surfaceUnrecoverablePlayback() {
-        videoReady = true
+        // An error is not a decoded frame; keep the skeleton until a real frame arrives.
+        videoReady = false
         isBuffering = false
         showStallRetry = true
     }
@@ -2508,6 +2530,12 @@ struct PlayerView: View {
     @MainActor
     private func recoverByRefetch() async {
         guard !isRecoveringStall else { return }
+        guard PlaybackRouting.canAttemptStreamRefetch(attempts: automaticRefetchAttempts) else {
+            Logger.shared.log("[StreamRecovery] Automatic refetch budget exhausted", type: "Error")
+            surfaceUnrecoverablePlayback()
+            return
+        }
+        automaticRefetchAttempts += 1
         isRecoveringStall = true
         defer { isRecoveringStall = false }
         let resumeAt = currentTime
@@ -2609,6 +2637,8 @@ struct PlayerView: View {
         Logger.shared.log("[StallRecovery] Manual retry tapped", type: "Player")
         showStallRetry = false
         stallRecoveryAttempts = 0
+        automaticRefetchAttempts = 0
+        failedStreamURLs.removeAll() // A user-initiated retry starts a new recovery cycle.
         Task { @MainActor in
             if canRecoverStream {
                 await recoverPlayback()
@@ -2898,6 +2928,17 @@ struct PlayerView: View {
         subtitleTracks = next.allSubtitles ?? subtitleTracks
         currentStream = next
         player?.automaticallyWaitsToMinimizeStalling = !isLocalPlayback
+        hlsQualities = []
+        selectedQualityBandwidth = nil
+        // A manual host/source change must never inherit the previous item’s HLS ladder.
+        Task {
+            let levels = await HLSQualityParser.parse(url: next.url, headers: next.headers)
+            await MainActor.run {
+                guard player?.currentItem === newItem, currentStream.url == next.url else { return }
+                hlsQualities = levels
+                applyPreferredQuality()
+            }
+        }
         if let ctx = currentContext {
             currentContext = PlayerContext(mediaTitle: ctx.mediaTitle, episodeNumber: ctx.episodeNumber, episodeTitle: ctx.episodeTitle, imageUrl: ctx.imageUrl, aniListID: ctx.aniListID, malID: ctx.malID, moduleId: ctx.moduleId, totalEpisodes: ctx.totalEpisodes, availableEpisodes: ctx.availableEpisodes, isAiring: ctx.isAiring, resumeFrom: ctx.resumeFrom, detailHref: ctx.detailHref, episodeHref: ctx.episodeHref, streamTitle: next.title, workingDetailHref: ctx.workingDetailHref, thumbnailUrl: ctx.thumbnailUrl)
         }
@@ -2928,7 +2969,11 @@ struct PlayerView: View {
     }
 
     private func swapStream(_ next: StreamResult, episodeNumber: Int, allStreams: [StreamResult] = [], episodeHref: String? = nil) {
-        if currentContext?.episodeNumber != episodeNumber { failedStreamURLs.removeAll() }
+        if currentContext?.episodeNumber != episodeNumber {
+            failedStreamURLs.removeAll()
+            automaticRefetchAttempts = 0
+            stallRecoveryAttempts = 0
+        }
         didTrackEpisode = false
         completionBox.context = nil
         // onWatchNext confirmed ep `episodeNumber` exists. If availableEpisodes is stale
@@ -3020,6 +3065,7 @@ struct PlayerView: View {
         Task {
             let qualities = await HLSQualityParser.parse(url: qualityURL, headers: qualityHeaders)
             await MainActor.run {
+                guard player?.currentItem === newItem, currentStream.url == qualityURL else { return }
                 hlsQualities = qualities
                 applyPreferredQuality()
             }
