@@ -208,19 +208,22 @@ struct ModuleStreamPickerView: View {
                 return priority(left) < priority(right)
             }
 
+            // AniList -> absolute episode indexing is identical for every
+            // module. Resolving it N times serially previously delayed playback.
+            let offset: Int
+            if let mediaId {
+                offset = await SeasonChainMapper.shared.resolveOffset(
+                    anchorAniListID: mediaId, anchorMALID: nil) ?? 0
+            } else {
+                offset = 0
+            }
+
             for module in modules {
                 guard !Task.isCancelled else { return }
                 autoPlayMessage = "Checking \(module.sourceName)…"
                 let runner = ModuleJSRunner()
                 do {
                     try await runner.load(module: module)
-                    let offset: Int
-                    if let mediaId {
-                        offset = await SeasonChainMapper.shared.resolveOffset(
-                            anchorAniListID: mediaId, anchorMALID: nil) ?? 0
-                    } else {
-                        offset = 0
-                    }
 
                     var hrefs: [String] = []
                     if let previous = ModuleSearchAliasManager.shared.getLastSearchResultHref(
@@ -267,7 +270,13 @@ struct ModuleStreamPickerView: View {
                         catch { continue }
                         guard !streams.isEmpty else { continue }
 
-                        let winner = await Self.fastestResponsiveStream(in: streams)
+                        let savedTitle = ModuleSearchAliasManager.shared.getLastStreamTitle(
+                            moduleId: module.id)
+                        // A fresh resolver result is already an actual stream.
+                        // Reuse the user's last working choice immediately;
+                        // network races are only for unfamiliar hosts.
+                        let winner = streams.first(where: { $0.title == savedTitle })
+                            ?? (await Self.fastestResponsiveStream(in: streams))
                         guard !Task.isCancelled else { return }
                         ModuleSearchAliasManager.shared.setLastSearchResultHref(
                             mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id, href: href)
@@ -304,33 +313,38 @@ struct ModuleStreamPickerView: View {
             return (index, stream.url, stream.headers, ext == "m3u8", ext == "mp4")
         }
         guard !probes.isEmpty else { return streams[0] }
-        return await withTaskGroup(of: (Int, TimeInterval)?.self) { group in
+        return await withTaskGroup(of: Int?.self) { group in
             for probe in probes {
                 group.addTask {
-                    var request = URLRequest(url: probe.url, timeoutInterval: 4)
+                    guard !Task.isCancelled else { return nil }
+                    var request = URLRequest(url: probe.url, timeoutInterval: 2.5)
                     request.httpMethod = probe.isMP4 ? "HEAD" : "GET"
-                    if probe.isHLS { request.setValue("bytes=0-65535", forHTTPHeaderField: "Range") }
+                    if probe.isHLS {
+                        request.setValue("bytes=0-65535", forHTTPHeaderField: "Range")
+                    }
                     probe.headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
-                    let started = Date()
                     do {
                         let (data, response) = try await URLSession.shared.data(for: request)
-                        guard let http = response as? HTTPURLResponse,
+                        guard !Task.isCancelled, let http = response as? HTTPURLResponse,
                               (200..<300).contains(http.statusCode) else { return nil }
                         if probe.isHLS {
                             guard let text = String(data: data, encoding: .utf8),
                                   text.trimmingCharacters(in: .whitespacesAndNewlines)
                                       .hasPrefix("#EXTM3U") else { return nil }
                         }
-                        return (probe.index, Date().timeIntervalSince(started))
+                        return probe.index
                     } catch { return nil }
                 }
             }
-            var fastest: (Int, TimeInterval)?
-            for await candidate in group {
-                guard let candidate else { continue }
-                if fastest == nil || candidate.1 < fastest!.1 { fastest = candidate }
+            // Return on the first valid playlist instead of waiting for every
+            // slower source to finish. The task group cancels in-flight probes.
+            for await winner in group {
+                if let winner {
+                    group.cancelAll()
+                    return streams[winner]
+                }
             }
-            return streams[fastest?.0 ?? 0]
+            return streams[0]
         }
     }
 
