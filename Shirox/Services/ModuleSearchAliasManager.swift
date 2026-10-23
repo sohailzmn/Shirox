@@ -177,6 +177,15 @@ final class PlaybackPerformance: ObservableObject {
         }
     }
 
+    /// A decoded frame can belong to an invalid ad/preview, not the requested episode.
+    /// Remove any premature first-frame success if the actual asset is clearly too short.
+    func rejectedInvalidEpisode() {
+        update { s, _ in
+            s.firstFrameMs = nil
+            s.outcome = "Invalid episode source"
+        }
+    }
+
     func failed() {
         update { s, _ in if s.firstFrameMs == nil { s.outcome = "Failed" } }
     }
