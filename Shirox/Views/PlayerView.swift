@@ -1625,7 +1625,7 @@ struct PlayerView: View {
         skipLookupAttempts += 1
         let retryIncomplete = skipLookupAttempts > 1
         let ep = ctx.episodeNumber
-        let aniListID = ctx.aniListID
+        var aniListID = ctx.aniListID
         let initialMalID = ctx.malID ?? aniListID.flatMap {
             IDMappingService.shared.cachedMalId(forAnilistId: $0)
         }
@@ -1652,6 +1652,15 @@ struct PlayerView: View {
                     if fast.intro != nil && fast.credits != nil { return }
                 }
             }
+
+            // MAL-only saved progress (including legacy Continue Watching entries)
+            // can fetch AniSkip directly. Resolve the reverse mapping only if we
+            // still need fallback metadata; never make fast AniSkip await it.
+            if aniListID == nil, let malID {
+                aniListID = await IDMappingService.shared.anilistId(forMALId: malID)
+            }
+            guard !Task.isCancelled, player?.currentItem === item,
+                  currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
 
             // Fallback remains manually skippable unless independently verified;
             // no guessed automatic seeks or early auto-next transitions.
