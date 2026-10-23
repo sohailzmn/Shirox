@@ -94,6 +94,15 @@ enum PlaybackRouting {
         attempts >= 0 && limit > 0 && attempts < limit
     }
 
+    /// A complete online episode cannot genuinely be a single 5-second clip.
+    /// Apply this only to known episode playback, never local user videos.
+    static func isClearlyTruncatedEpisode(duration: Double,
+                                           hasEpisodeContext: Bool,
+                                           isLocalPlayback: Bool) -> Bool {
+        hasEpisodeContext && !isLocalPlayback &&
+        duration.isFinite && duration > 0 && duration < 30
+    }
+
     /// The elapsed time to publish to `MPNowPlayingInfoCenter`.
     ///
     /// During a cast this must be the receiver's position: the local player's clock is frozen
