@@ -2330,6 +2330,7 @@ struct PlayerView: View {
             swapStream(stream, episodeNumber: currentContext?.episodeNumber ?? 1, episodeHref: currentContext?.episodeHref)
             return
         }
+        failedStreamURLs.insert(currentStream.url)
         guard let loader = onStreamExpired else {
             // Modules that already returned several streams still have a recovery path.
             if let alternative = preferredRecoveryStream(from: availableStreams) {
@@ -2356,7 +2357,10 @@ struct PlayerView: View {
             }
             // After a dead CDN, don't immediately retry the same hoster if another
             // playable host was provided. Keep subtitle/audio mode when possible.
-            let match = preferredRecoveryStream(from: streams) ?? streams[0]
+            guard let match = preferredRecoveryStream(from: streams) else {
+                surfaceUnrecoverablePlayback()
+                return
+            }
             swapStream(match, episodeNumber: currentContext?.episodeNumber ?? 1,
                        allStreams: streams, episodeHref: currentContext?.episodeHref)
         } catch {
@@ -2369,8 +2373,13 @@ struct PlayerView: View {
     /// Select a different host first, then a fresh URL from the current host.
     /// Avoid switching subtitle mode while recovering German dubbed playback.
     private func preferredRecoveryStream(from candidates: [StreamResult]) -> StreamResult? {
-        let remaining = candidates.filter { !failedStreamURLs.contains($0.url) }
-        let unused = remaining.isEmpty ? candidates : remaining
+        let remaining = candidates.filter {
+            !failedStreamURLs.contains($0.url) && $0.url != currentStream.url
+        }
+        // Exhaustion is an error, not permission to oscillate between
+        // two previously failed 720p/480p stream URLs.
+        guard !remaining.isEmpty else { return nil }
+        let unused = remaining
         let sameMode = unused.filter { ($0.subtitle != nil) == (currentStream.subtitle != nil) }
         let pool = sameMode.isEmpty ? unused : sameMode
         // Do not repeatedly oscillate between the same two dead URLs.
@@ -2879,6 +2888,10 @@ struct PlayerView: View {
         // watches the item it was given, so without this a dead URL after a quality switch was
         // never noticed at all.
         observeItemStatus(newItem)
+        #if os(iOS)
+        videoReady = false
+        armFirstFrameWatchdog(for: newItem)
+        #endif
         player?.replaceCurrentItem(with: newItem)
         subtitleTracks = next.allSubtitles ?? subtitleTracks
         currentStream = next
@@ -2942,6 +2955,10 @@ struct PlayerView: View {
         // refetch recovery): without this, a dead URL on episode 2 onwards produced a black
         // screen with no refetch and no error — the launch item's observer no longer applies.
         observeItemStatus(newItem)
+        #if os(iOS)
+        videoReady = false
+        armFirstFrameWatchdog(for: newItem)
+        #endif
         player?.replaceCurrentItem(with: newItem)
         // THE BUG: this used to start the local player unconditionally. During a cast the
         // local player is deliberately parked and silent, so an auto-advance played episode 2
