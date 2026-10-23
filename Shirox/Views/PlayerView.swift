@@ -107,6 +107,8 @@ struct PlayerView: View {
     @State private var skippedSegments: Set<SkipSegmentType> = []
     @State private var skipFetchTask: Task<Void, Never>?
     @State private var didRequestSkipSegments = false
+    @State private var skipLookupAttempts = 0
+    @State private var nextSkipLookupAt: Date?
     @State private var didAdvanceAfterCredits = false
     @State private var lastCreditsAdvanceAttempt: Date?
     @State private var upcomingEpisodeThumbnail: String?
@@ -1608,29 +1610,66 @@ struct PlayerView: View {
     /// Request time markers after AVPlayer reports the real length of this cut.
     /// Cancel and reject stale replies when changing episode or stream URL.
     private func requestSkipMetadataIfNeeded() {
-        guard !didRequestSkipSegments, duration > 60, duration.isFinite,
-              let ctx = currentContext, let aniListID = ctx.aniListID else { return }
+        guard !didRequestSkipSegments, skipLookupAttempts < 2,
+              nextSkipLookupAt.map({ Date() >= $0 }) ?? true,
+              let ctx = currentContext, ctx.aniListID != nil || ctx.malID != nil,
+              let item = player?.currentItem, item.status == .readyToPlay else { return }
+
+        // A hoster swap can leave the previous episode's duration in SwiftUI until
+        // AVPlayer publishes the replacement item's duration. Using the stale value
+        // rejects perfectly valid AniSkip runtime matches and hides both buttons.
+        let actualDuration = item.duration.seconds
+        guard actualDuration.isFinite, actualDuration > 60, actualDuration <= 14_400 else { return }
+
         didRequestSkipSegments = true
+        skipLookupAttempts += 1
+        let retryIncomplete = skipLookupAttempts > 1
         let ep = ctx.episodeNumber
-        let malID = ctx.malID
+        let aniListID = ctx.aniListID
+        let initialMalID = ctx.malID ?? aniListID.flatMap {
+            IDMappingService.shared.cachedMalId(forAnilistId: $0)
+        }
         let streamURL = currentStream.url
-        let length = duration
+
         skipFetchTask = Task { @MainActor in
-            // Get the real-cut Anime skip markers before slower mapping lookups.
-            if let malID {
-                let fast = await SkipTimestampsService.shared.fetchFastSegments(
-                    malID: malID, episode: ep, playbackDuration: length)
-                guard !Task.isCancelled, currentContext?.episodeNumber == ep,
-                      currentStream.url == streamURL else { return }
-                if let fast { skipSegments = fast }
-                if fast?.intro != nil && fast?.credits != nil { return }
+            // Recover a missing MAL mapping so AniSkip can deliver verified
+            // opening/ending times. Older module contexts often carry only AniList ID.
+            var malID = initialMalID
+            if malID == nil, let aniListID {
+                malID = await IDMappingService.shared.malId(forAnilistId: aniListID)
             }
-            let result = await SkipTimestampsService.shared.fetchSegments(
-                aniListID: aniListID, episodeNumber: ep,
-                malID: malID, playbackDuration: length)
-            guard !Task.isCancelled, currentContext?.episodeNumber == ep,
-                  currentStream.url == streamURL else { return }
-            if let result { skipSegments = result }
+            guard !Task.isCancelled, player?.currentItem === item,
+                  currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+
+            if let malID, malID > 0 {
+                let fast = await SkipTimestampsService.shared.fetchFastSegments(
+                    malID: malID, episode: ep, playbackDuration: actualDuration,
+                    refreshIncomplete: retryIncomplete)
+                guard !Task.isCancelled, player?.currentItem === item,
+                      currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                if let fast {
+                    skipSegments = fast
+                    if fast.intro != nil && fast.credits != nil { return }
+                }
+            }
+
+            // Fallback remains manually skippable unless independently verified;
+            // no guessed automatic seeks or early auto-next transitions.
+            if let aniListID {
+                let result = await SkipTimestampsService.shared.fetchSegments(
+                    aniListID: aniListID, episodeNumber: ep, malID: malID,
+                    playbackDuration: actualDuration, refreshIncomplete: retryIncomplete)
+                guard !Task.isCancelled, player?.currentItem === item,
+                      currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                if let result { skipSegments = result }
+            }
+
+            if PlayerChapterTiming.shouldRetryMissingChapters(skipSegments, attempts: skipLookupAttempts) {
+                // One bounded refresh while the viewer watches. A temporary API
+                // outage or incomplete ending result no longer lasts the whole episode.
+                nextSkipLookupAt = Date().addingTimeInterval(18)
+                didRequestSkipSegments = false
+            }
         }
     }
 
@@ -2021,6 +2060,8 @@ struct PlayerView: View {
         skipFetchTask?.cancel()
         skipFetchTask = nil
         didRequestSkipSegments = false
+        skipLookupAttempts = 0
+        nextSkipLookupAt = nil
         didAdvanceAfterCredits = false
         lastCreditsAdvanceAttempt = nil
         nextPreviewTask?.cancel()
@@ -2933,8 +2974,11 @@ struct PlayerView: View {
         activeSkipSegment = nil
         skippedSegments = []
         didRequestSkipSegments = false
+        skipLookupAttempts = 0
+        nextSkipLookupAt = nil
         didAdvanceAfterCredits = false
         let resumeAt = currentTime
+        duration = 0  // Wait for the replacement item's runtime before requesting skip marks.
         // While casting, quality is the receiver's business: rebuilding the local item would
         // leave the TV on the old rendition and (before this) start the new one on the phone.
         // Re-issue the chosen stream to the receiver at the position it had reached.
@@ -3119,6 +3163,8 @@ struct PlayerView: View {
         skipFetchTask?.cancel()
         skipFetchTask = nil
         didRequestSkipSegments = false
+        skipLookupAttempts = 0
+        nextSkipLookupAt = nil
         didAdvanceAfterCredits = false
         lastCreditsAdvanceAttempt = nil
         nextPreviewTask?.cancel()
