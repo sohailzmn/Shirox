@@ -994,7 +994,8 @@ struct PlayerView: View {
             },
             onSliderDragChange: { dragTime in
                 videoScrubTime = dragTime
-                seekSmoothly(to: dragTime)
+                // Preview first; seek once on finger-up. Repeated seeks while
+                // also requesting video thumbnails cause HLS stalls.
             },
             onSliderDragEnd: {
                 isVideoScrubbing = false
@@ -1023,7 +1024,15 @@ struct PlayerView: View {
             onNextEpisodeTap: (onWatchNext != nil || onSequelNeeded != nil) ? { Task { @MainActor in await loadAndAdvance() } } : nil,
             hasActiveSkipSegment: activeSkipSegment != nil,
             skipSegments: skipSegments,
-            previewAsset: player?.currentItem?.asset,
+            previewAsset: {
+                guard let asset = player?.currentItem?.asset as? AVURLAsset else { return nil }
+                // HLS playlists need a sprite/index service; asking the CDN to
+                // seek for thumbnail extraction on every drag stalls playback.
+                let url = asset.url
+                let ext = url.pathExtension.lowercased()
+                return url.isFileURL || ["mp4", "mov", "m4v"].contains(ext)
+                    ? asset : nil
+            }(),
             episodeNumber: currentContext?.episodeNumber,
             tvdbEpisodeTitle: tvdbEpisodeTitle,
             mediaTitle: currentContext?.mediaTitle
