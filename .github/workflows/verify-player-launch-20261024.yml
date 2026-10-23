@@ -21,6 +21,7 @@ jobs:
           presenter=Path("Shirox/Services/PlayerPresenter.swift").read_text()
           module=Path("Shirox/ViewModels/DetailViewModel.swift").read_text()
           watching=Path("Shirox/Views/ContinueWatchingCard.swift").read_text()
+          module_detail=Path("Shirox/Views/DetailView.swift").read_text()
           for match in ("onFirstFrame: {", "armFirstFrameWatchdog(for: item)", "guard !remaining.isEmpty else { return nil }", "firstFrameWatchdog?.cancel()"):
               assert match in player, match
           for wrong in ("Loading timeout reached, forcing ready state",
@@ -32,6 +33,8 @@ jobs:
           assert "presentResolvingEpisode(" in module
           assert "presentResolvingEpisode(" in watching
           assert "let fresh = try await onExpired" in watching
+          assert "let streams = try await onExpired" in module_detail
+          assert "vm.loadStreamsManually(for: episode)" in module_detail
           print("Instant player and resume regression checks passed")
           PY
       - name: Apply standard compatibility patches
