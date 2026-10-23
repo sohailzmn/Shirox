@@ -62,10 +62,11 @@ struct HomeView: View {
                             }
                             #endif
                             #if os(iOS)
-                            if !vm.recommendations(for: continueWatching.items).isEmpty {
+                            let suggestions = vm.recommendations(for: continueWatching.items)
+                            if !suggestions.isEmpty {
                                 AnimeSection(
                                     title: "Because You Watched",
-                                    items: vm.recommendations(for: continueWatching.items),
+                                    items: suggestions,
                                     category: .trending
                                 )
                             }
@@ -146,6 +147,11 @@ struct HomeView: View {
             #endif
         }
         .task { await vm.load() }
+        #if os(iOS)
+        .task(id: continueWatching.items.first?.aniListID) {
+            await vm.refreshPersonalization(from: continueWatching.items)
+        }
+        #endif
         .onAppear {
             #if os(iOS)
             PlayerPresenter.shared.resetToAppOrientation()
