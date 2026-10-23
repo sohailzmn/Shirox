@@ -315,8 +315,9 @@ struct ContinueWatchingCardDisplay: View {
     @State private var episodeThumbnail: String?
 
     private var progress: Double {
-        guard item.totalSeconds > 0 else { return 0 }
-        return min(item.watchedSeconds / item.totalSeconds, 1.0)
+        guard item.totalSeconds.isFinite, item.watchedSeconds.isFinite,
+              item.totalSeconds > 0 else { return 0 }
+        return min(max(item.watchedSeconds / item.totalSeconds, 0), 1.0)
     }
 
     /// Builds the episode label, e.g.:
@@ -368,7 +369,8 @@ struct ContinueWatchingCardDisplay: View {
         } else {
             fragments.append("Episode \(item.episodeNumber)")
         }
-        if !item.streamUrl.isEmpty, item.totalSeconds > 0 {
+        if !item.streamUrl.isEmpty, item.totalSeconds.isFinite,
+           item.watchedSeconds.isFinite, item.totalSeconds > 0 {
             let remaining = max(0, Int(ceil((item.totalSeconds - item.watchedSeconds) / 60)))
             fragments.append(remaining == 0 ? "Almost finished" : "\(remaining) min left")
         } else if item.streamUrl.isEmpty {
