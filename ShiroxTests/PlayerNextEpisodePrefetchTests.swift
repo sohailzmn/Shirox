@@ -54,6 +54,8 @@ final class PlayerNextEpisodePrefetchTests: XCTestCase {
     ) -> SkipSegments {
         var result = SkipSegments()
         result.isDurationVerified = verified
+        result.autoSkipIntro = verified
+        result.autoNextCredits = verified
         result.intro = .init(startMs: 80_000, endMs: 170_000)
         result.credits = .init(startMs: 1_340_000, endMs: end * 1_000)
         if preview { result.preview = .init(startMs: 1_420_000, endMs: 1_435_000) }
@@ -114,6 +116,33 @@ final class PlayerNextEpisodePrefetchTests: XCTestCase {
             at: .nan, duration: 1_425, segments: credits()))
         XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
             at: 1_340, duration: 0, segments: credits()))
+    }
+
+    func testIntroVerificationNeverAuthorizesAnUnverifiedOutro() {
+        var chapters = credits()
+        chapters.autoNextCredits = false
+        XCTAssertTrue(PlayerChapterTiming.shouldAutoSkip(.intro, segments: chapters))
+        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_340, duration: 1_425, segments: chapters))
+        XCTAssertFalse(PlayerChapterTiming.shouldOfferNext(
+            at: 1_340, duration: 1_425, segments: chapters, hasNext: true))
+    }
+
+    func testOutroVerificationNeverAuthorizesUnverifiedIntro() {
+        var chapters = credits()
+        chapters.autoSkipIntro = false
+        XCTAssertFalse(PlayerChapterTiming.shouldAutoSkip(.intro, segments: chapters))
+        XCTAssertTrue(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_340, duration: 1_425, segments: chapters))
+    }
+
+    func testInaccurateMarkersAreOnlyManual() {
+        var chapters = credits()
+        chapters.isDurationVerified = false
+        XCTAssertEqual(PlayerChapterTiming.activeSegment(at: 100, segments: chapters), .intro)
+        XCTAssertFalse(PlayerChapterTiming.shouldAutoSkip(.intro, segments: chapters))
+        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_340, duration: 1_425, segments: chapters))
     }
 
     func testPrefetchBeforeCreditsOrLastNinetySeconds() {
