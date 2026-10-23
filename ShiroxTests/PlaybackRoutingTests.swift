@@ -182,4 +182,25 @@ final class PlaybackRoutingTests: XCTestCase {
         XCTAssertTrue(PlaybackRouting.canAttemptStreamRefetch(attempts: attemptsAfterExplicitRetry))
     }
 
+    func testFiveSecondRemoteClipIsNotValidFullEpisode() {
+        XCTAssertTrue(PlaybackRouting.isClearlyTruncatedEpisode(
+            duration: 5, hasEpisodeContext: true, isLocalPlayback: false))
+    }
+
+    func testUnknownDurationDoesNotTriggerPrematureSourceRejection() {
+        for duration in [0.0, Double.nan, Double.infinity] {
+            XCTAssertFalse(PlaybackRouting.isClearlyTruncatedEpisode(
+                duration: duration, hasEpisodeContext: true, isLocalPlayback: false))
+        }
+    }
+
+    func testShortLocalVideosRemainAllowed() {
+        XCTAssertFalse(PlaybackRouting.isClearlyTruncatedEpisode(
+            duration: 5, hasEpisodeContext: true, isLocalPlayback: true))
+        XCTAssertFalse(PlaybackRouting.isClearlyTruncatedEpisode(
+            duration: 5, hasEpisodeContext: false, isLocalPlayback: false))
+        XCTAssertFalse(PlaybackRouting.isClearlyTruncatedEpisode(
+            duration: 1440, hasEpisodeContext: true, isLocalPlayback: false))
+    }
+
 }
