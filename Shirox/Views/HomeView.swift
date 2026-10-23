@@ -148,7 +148,7 @@ struct HomeView: View {
         }
         .task { await vm.load() }
         #if os(iOS)
-        .task(id: continueWatching.items.first?.aniListID) {
+        .task(id: continueWatching.items.first(where: { $0.aniListID != nil })?.aniListID) {
             await vm.refreshPersonalization(from: continueWatching.items)
         }
         #endif
