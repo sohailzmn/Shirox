@@ -104,7 +104,10 @@ final class PlayerPresenter: ObservableObject {
               playerVC?.viewIfLoaded?.window == nil else { return }
         let content = ShiroxInstantPlaybackScreen(
             mediaId: mediaId, title: title, episode: episode, artwork: artwork,
-            onCancel: { [weak self] in self?.dismissPlayer() },
+            onCancel: { [weak self] in
+                PlaybackPerformance.shared.cancelled()
+                self?.dismissPlayer()
+            },
             onChooseSource: { [weak self] in
                 self?.dismissPlayer()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
