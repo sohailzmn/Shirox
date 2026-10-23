@@ -37,6 +37,8 @@ final class PlayerPresenter: ObservableObject {
 
     #if os(iOS)
     private weak var playerVC: UIViewController?
+    /// The skeleton player is replaced in-place when the source resolves.
+    private weak var loadingPlayerVC: PlayerHostingController<AnyView>?
     private var sourceView: UIView?
     private var miniWindow: ShiroxMiniPlayerWindow?
     private var miniController: ShiroxMiniPlayerController?
@@ -90,6 +92,39 @@ final class PlayerPresenter: ObservableObject {
     /// Retries left for the in-flight `presentPlayer` attempt (see `presentPlayer`).
     private var presentRetriesRemaining = PlayerPresenter.maxPresentRetries
 
+    /// Present the full-screen experience immediately, before any provider
+    /// request. The hidden module resolver uses the same logic as the manual
+    /// source picker but never displays its navigation sheet.
+    func presentResolvingPlayer(
+        mediaId: Int?, title: String, episode: Int, artwork: String,
+        onStreamsLoaded: @escaping ([StreamResult], StreamResult?, String?, Int?, String?) -> Void,
+        onChooseSource: @escaping () -> Void
+    ) {
+        guard let top = Self.findTopViewController(),
+              playerVC?.viewIfLoaded?.window == nil else { return }
+        let content = ShiroxInstantPlaybackScreen(
+            mediaId: mediaId, title: title, episode: episode, artwork: artwork,
+            onCancel: { [weak self] in self?.dismissPlayer() },
+            onChooseSource: { [weak self] in
+                self?.dismissPlayer()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    onChooseSource()
+                }
+            },
+            onStreamsLoaded: onStreamsLoaded
+        )
+        .environmentObject(ModuleManager.shared)
+        let hosting = PlayerHostingController(rootView: AnyView(content))
+        hosting.modalPresentationStyle = .overFullScreen
+        loadingPlayerVC = hosting
+        playerVC = hosting
+        orientationLock = .allButUpsideDown
+        trackedPlayerOrientation = snapshotCurrentOrientation()
+        startTrackingOrientation()
+        // No modal transition or intermediate picker animation on Watch.
+        top.present(hosting, animated: false)
+    }
+
     func presentPlayer(stream: StreamResult, streams: [StreamResult] = [], context: PlayerContext? = nil, onWatchNext: WatchNextLoader? = nil, onStreamExpired: StreamRefetchLoader? = nil, onSequelNeeded: SequelLoader? = nil, onSequelAdvanced: ((SequelNavigation) -> Void)? = nil, onFinished: ((PlayerContext) -> Void)? = nil, from sourceView: UIView? = nil) {
         guard let topVC = Self.findTopViewController() else { return }
 
@@ -98,7 +133,10 @@ final class PlayerPresenter: ObservableObject {
         // AVPlayers, both holding audio focus. Checked against the window so a stale reference
         // can never wedge playback shut; a player on its way out falls through to the retry
         // below instead, so relaunching straight after a dismiss still works.
-        if let existing = playerVC, existing.viewIfLoaded?.window != nil, !existing.isBeingDismissed { return }
+        let replacingSkeleton = loadingPlayerVC != nil &&
+            playerVC === loadingPlayerVC
+        if let existing = playerVC, existing.viewIfLoaded?.window != nil,
+           !existing.isBeingDismissed, !replacingSkeleton { return }
 
         // UIKit silently refuses to present on a controller that is still presenting something
         // else — which is exactly what happens when the stream-picker sheet is still animating
@@ -106,7 +144,8 @@ final class PlayerPresenter: ObservableObject {
         // isn't long enough (slow device, heavy detail screen, a sheet that dismissed late) the
         // player just never appeared and the user was left staring at the episode list. Wait for
         // the hierarchy to settle instead of dropping the launch on the floor.
-        if topVC.presentedViewController != nil || topVC.isBeingDismissed || topVC.isBeingPresented {
+        if !replacingSkeleton &&
+            (topVC.presentedViewController != nil || topVC.isBeingDismissed || topVC.isBeingPresented) {
             guard presentRetriesRemaining > 0 else {
                 Logger.shared.log("[Player] Presentation blocked and retries exhausted — giving up", type: "Error")
                 presentRetriesRemaining = Self.maxPresentRetries
@@ -137,6 +176,18 @@ final class PlayerPresenter: ObservableObject {
         .tint(.primary)
         .ignoresSafeArea()
         
+        if replacingSkeleton, let skeleton = loadingPlayerVC {
+            // The resolver has finished. Keep the SAME full-screen hosting
+            // controller and replace only its SwiftUI content, without a
+            // dismiss/present flash or a second AVPlayer.
+            loadingPlayerVC = nil
+            skeleton.rootView = AnyView(playerView)
+            orientationLock = UserDefaults.standard.bool(forKey: "forceLandscape")
+                ? .landscape : .allButUpsideDown
+            UIView.performWithoutAnimation { refreshSupportedOrientations() }
+            return
+        }
+
         let hostingController = PlayerHostingController(rootView: playerView)
         // Keep the app alive underneath so it becomes interactive when the
         // full-screen playback surface is temporarily minimized.
@@ -174,6 +225,7 @@ final class PlayerPresenter: ObservableObject {
     }
 
     func dismissPlayer() {
+        loadingPlayerVC = nil
         closeMiniPlayerWindow()
         guard let playerVC = playerVC else { return }
         playerVC.view.isHidden = false
@@ -875,6 +927,119 @@ extension CastManager: GCKRequestDelegate {
 
 
 // MARK: - Small, touch-through in-app playback overlay
+
+// MARK: - Instant episode launch (visible before source extraction)
+#if os(iOS)
+@MainActor
+private final class ShiroxLaunchStatus: ObservableObject {
+    @Published var provider = "Preparing your episode"
+    @Published var failed = false
+    @Published var retryID = UUID()
+}
+
+@MainActor
+private struct ShiroxInstantPlaybackScreen: View {
+    let mediaId: Int?
+    let title: String
+    let episode: Int
+    let artwork: String
+    let onCancel: () -> Void
+    let onChooseSource: () -> Void
+    let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
+
+    @StateObject private var state = ShiroxLaunchStatus()
+    @State private var glowing = false
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let url = URL(string: artwork), !artwork.isEmpty {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                        .blur(radius: 40)
+                        .overlay(.black.opacity(0.8))
+                } placeholder: { Color.black }
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+            }
+
+            VStack(spacing: 22) {
+                HStack {
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .bold))
+                            .frame(width: 44, height: 44)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .accessibilityLabel("Close player")
+                    Spacer()
+                }
+                Spacer()
+                RoundedRectangle(cornerRadius: 13)
+                    .fill(.white.opacity(glowing ? 0.18 : 0.07))
+                    .frame(width: 184, height: 104)
+                    .overlay {
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.system(size: 35))
+                            .foregroundStyle(.white.opacity(glowing ? 0.6 : 0.25))
+                    }
+                VStack(spacing: 10) {
+                    Text(title)
+                        .font(.title2.weight(.bold))
+                        .lineLimit(2)
+                    Text("Episode \(episode)")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                    if state.failed {
+                        Text("Video couldn't be loaded from the available sources.")
+                            .foregroundStyle(.white.opacity(0.8))
+                            .multilineTextAlignment(.center)
+                            .font(.footnote)
+                        HStack {
+                            Button("Retry") {
+                                state.failed = false
+                                state.provider = "Retrying…"
+                                state.retryID = UUID()
+                            }.buttonStyle(.borderedProminent)
+                            Button("Choose Source", action: onChooseSource)
+                                .buttonStyle(.bordered)
+                        }
+                    } else {
+                        ProgressView().tint(.white)
+                        Text(state.provider)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.65))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                // The extractor is a headless view. Its original search and
+                // episode-matching behavior is reused without duplicating it.
+                ModuleStreamPickerView(
+                    mediaId: mediaId, animeTitle: title, episodeNumber: episode,
+                    onDismiss: {},
+                    headless: true,
+                    onStatus: { provider in state.provider = "Connecting to \(provider)…" },
+                    onFailure: { state.failed = true },
+                    onStreamsLoaded: onStreamsLoaded
+                )
+                .id(state.retryID)
+                .frame(width: 1, height: 1)
+                .opacity(0.001)
+                .accessibilityHidden(true)
+            }
+            .padding(24)
+            .foregroundStyle(.white)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                glowing = true
+            }
+        }
+    }
+}
+#endif
+
 #if os(iOS)
 @MainActor
 private final class ShiroxMiniPlayerWindow: UIWindow {
