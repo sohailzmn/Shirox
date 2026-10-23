@@ -1508,7 +1508,7 @@ struct PlayerView: View {
         nextPreviewTask = Task { @MainActor in
             let info = await TVDBMappingService.shared.getEpisode(
                 for: id, episodeNumber: next, provider: provider)
-            guard !Task.isCancelled, currentContext?.episodeNumber + 1 == next else { return }
+            guard !Task.isCancelled, currentContext?.episodeNumber == next - 1 else { return }
             upcomingEpisodeThumbnail = info?.thumbnail
             upcomingEpisodeTitle = info?.title
         }
