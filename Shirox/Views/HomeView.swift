@@ -61,6 +61,15 @@ struct HomeView: View {
                                 ContinueReadingSection(items: mangaProgress.items, readerContext: $readerContext)
                             }
                             #endif
+                            #if os(iOS)
+                            if !vm.recommendations(for: continueWatching.items).isEmpty {
+                                AnimeSection(
+                                    title: "Because You Watched",
+                                    items: vm.recommendations(for: continueWatching.items),
+                                    category: .trending
+                                )
+                            }
+                            #endif
                             if !vm.trending.isEmpty {
                                 AnimeSection(title: "Trending Now",     items: vm.trending, category: .trending)
                             }
