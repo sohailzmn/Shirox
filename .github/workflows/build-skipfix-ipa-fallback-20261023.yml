@@ -1,0 +1,50 @@
+name: Build Tested Skip-Fix IPA (Fallback)
+on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/build-skipfix-ipa-fallback-20261023.yml"
+permissions:
+  contents: write
+jobs:
+  ipa:
+    name: Compile unsigned IPA with alternate macOS runner
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact tested Shirox commit
+        uses: actions/checkout@v4
+        with:
+          ref: d838fadac168765c6b9ba02e7ebf4ae1c259977c
+      - name: Build unsigned IPA
+        run: |
+          test "$(git rev-parse HEAD)" = "d838fadac168765c6b9ba02e7ebf4ae1c259977c"
+          xcodebuild -version
+          chmod +x buildipa.sh
+          ./buildipa.sh
+      - name: Validate archive and app
+        run: |
+          test -s build/Shirox.ipa
+          unzip -tq build/Shirox.ipa
+          unzip -Z1 build/Shirox.ipa | grep -E '^Payload/[^/]+\.app/' >/dev/null
+          shasum -a 256 build/Shirox.ipa
+      - name: Attach verified IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shirox-IntroSkip-AutoNext-20261023-Fallback
+          path: build/Shirox.ipa
+          if-no-files-found: error
+          retention-days: 30
+      - name: Direct release link if permitted
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create skipfix-20261023 --repo sohailzmn/Shirox \
+            --target d838fadac168765c6b9ba02e7ebf4ae1c259977c \
+            --title "Shirox · Intro Skip + Auto Next Fix (23 Oct 2026)" \
+            --notes "Unsigned iOS IPA from the exact tested commit d838fadac168765c6b9ba02e7ebf4ae1c259977c. Tested: https://github.com/sohailzmn/Shirox/actions/runs/39885017146. Sign the IPA before installation." \
+            --prerelease || gh release view skipfix-20261023 --repo sohailzmn/Shirox
+          gh release upload skipfix-20261023 build/Shirox.ipa \
+            --repo sohailzmn/Shirox --clobber
