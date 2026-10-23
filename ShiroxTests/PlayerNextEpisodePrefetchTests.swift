@@ -132,3 +132,63 @@ final class PlayerNextEpisodePrefetchTests: XCTestCase {
             alreadyStarted: false, remainingSeconds: 10))
     }
 }
+
+
+@MainActor
+final class InstantPlayUXTests: XCTestCase {
+    func testMultilingualQueriesKeepExactTitleFirstAndDeduplicate() {
+        let queries = ModuleSeasonFallback.queries(
+            for: "Blue Lock Season 2",
+            alternatives: ["Blue Lock", "BLUE LOCK", "ブルーロック", "Blue Lock 2nd Season"]
+        )
+        XCTAssertEqual(queries.first, "Blue Lock Season 2")
+        XCTAssertTrue(queries.contains("Blue Lock"))
+        XCTAssertTrue(queries.contains("ブルーロック"))
+        XCTAssertEqual(queries.filter { $0.caseInsensitiveCompare("Blue Lock") == .orderedSame }.count, 1)
+    }
+
+    func testSeasonSuffixIsNotStrippedFromNormalTitles() {
+        XCTAssertEqual(ModuleSeasonFallback.queries(for: "Death Note"), ["Death Note"])
+        XCTAssertEqual(ModuleSeasonFallback.queries(for: "Blue Lock Staffel 2"),
+                       ["Blue Lock Staffel 2", "Blue Lock"])
+        XCTAssertEqual(ModuleSeasonFallback.queries(for: "Blue Lock S2"),
+                       ["Blue Lock S2", "Blue Lock"])
+    }
+
+    func testMetricsDoNotCountResolvedURLAsVideoFrame() {
+        let performance = PlaybackPerformance.shared
+        performance.clear()
+        performance.begin(title: "Blue Lock", episode: 14)
+        performance.sourceSearch(provider: "AniWorld")
+        performance.streamResolved()
+        XCTAssertNotNil(performance.samples.first?.streamReadyMs)
+        XCTAssertNil(performance.samples.first?.firstFrameMs,
+                     "A URL response is not the first displayed frame.")
+        performance.firstFrameReady()
+        let sample = performance.samples.first
+        XCTAssertNotNil(sample?.firstFrameMs)
+        XCTAssertGreaterThanOrEqual(sample?.firstFrameMs ?? -1, sample?.streamReadyMs ?? 0)
+        XCTAssertEqual(sample?.outcome, "Playing")
+    }
+
+    func testFailureIsNotReportedAsFastPlayback() {
+        let performance = PlaybackPerformance.shared
+        performance.clear()
+        performance.begin(title: "Dexter", episode: 1)
+        performance.failed()
+        XCTAssertEqual(performance.samples.first?.outcome, "Failed")
+        XCTAssertNil(performance.samples.first?.firstFrameMs)
+        performance.clear()
+    }
+
+    func testCacheCountersKeepIndependentHitCounts() {
+        let performance = PlaybackPerformance.shared
+        performance.clear()
+        performance.cacheHit(script: true)
+        performance.cacheHit(script: false)
+        performance.cacheHit(script: false)
+        XCTAssertEqual(performance.scriptCacheHits, 1)
+        XCTAssertEqual(performance.metadataCacheHits, 2)
+        performance.clear()
+    }
+}
