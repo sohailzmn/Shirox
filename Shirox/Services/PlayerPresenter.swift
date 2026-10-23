@@ -38,6 +38,8 @@ final class PlayerPresenter: ObservableObject {
     #if os(iOS)
     private weak var playerVC: UIViewController?
     private var sourceView: UIView?
+    private var miniWindow: ShiroxMiniPlayerWindow?
+    private var miniController: ShiroxMiniPlayerController?
     /// Last interface orientation observed during a player session via device-orientation notifications.
     private var trackedPlayerOrientation: UIInterfaceOrientation = .portrait
     private var orientationObserver: NSObjectProtocol?
@@ -136,7 +138,9 @@ final class PlayerPresenter: ObservableObject {
         .ignoresSafeArea()
         
         let hostingController = PlayerHostingController(rootView: playerView)
-        hostingController.modalPresentationStyle = UIModalPresentationStyle.fullScreen
+        // Keep the app alive underneath so it becomes interactive when the
+        // full-screen playback surface is temporarily minimized.
+        hostingController.modalPresentationStyle = .overFullScreen
 
         let forceLandscape = UserDefaults.standard.bool(forKey: "forceLandscape")
         let lastRaw = UserDefaults.standard.integer(forKey: "lastLandscapeOrientation")
@@ -170,7 +174,9 @@ final class PlayerPresenter: ObservableObject {
     }
 
     func dismissPlayer() {
+        closeMiniPlayerWindow()
         guard let playerVC = playerVC else { return }
+        playerVC.view.isHidden = false
         let wasLandscape = trackedPlayerOrientation.isLandscape
         // Save the side one last time before dismissing
         if wasLandscape {
@@ -186,6 +192,47 @@ final class PlayerPresenter: ObservableObject {
             self?.playerVC = nil
             self?.sourceView = nil
         }
+    }
+
+    /// This is a genuine in-app mini player: the video layer uses the SAME
+    /// AVPlayer instance as full-screen playback. The full-screen SwiftUI view
+    /// stays mounted in its overFullScreen controller, so position, subtitles,
+    /// background tasks and the Next Episode loader are not restarted.
+    func minimizePlayer(player: AVPlayer) {
+        guard let fullscreen = playerVC,
+              let scene = fullscreen.view.window?.windowScene,
+              miniWindow == nil else { return }
+        let controller = ShiroxMiniPlayerController(player: player)
+        controller.onRestore = { [weak self] in self?.restoreMiniPlayer() }
+        controller.onClose = { [weak self] in self?.dismissPlayer() }
+        let window = ShiroxMiniPlayerWindow(windowScene: scene)
+        window.windowLevel = .normal + 2
+        window.backgroundColor = .clear
+        window.rootViewController = controller
+        window.isHidden = false
+        miniController = controller
+        miniWindow = window
+        fullscreen.view.isHidden = true
+        fullscreen.view.isUserInteractionEnabled = false
+        orientationLock = .portrait
+        UIView.performWithoutAnimation { refreshSupportedOrientations() }
+    }
+
+    func restoreMiniPlayer() {
+        closeMiniPlayerWindow()
+        guard let fullscreen = playerVC else { return }
+        fullscreen.view.isHidden = false
+        fullscreen.view.isUserInteractionEnabled = true
+        orientationLock = .allButUpsideDown
+        UIView.performWithoutAnimation { refreshSupportedOrientations() }
+    }
+
+    private func closeMiniPlayerWindow() {
+        miniController?.detachVideo()
+        miniWindow?.isHidden = true
+        miniWindow?.rootViewController = nil
+        miniController = nil
+        miniWindow = nil
     }
 
     /// Called after the player view has already been manually animated off screen (drag-to-dismiss).
@@ -816,6 +863,120 @@ extension CastManager: GCKRequestDelegate {
         // A load that fails leaves the TV on its idle screen; say so instead of presenting
         // a cast overlay for media that never started.
         Task { @MainActor in self.lastError = error.localizedDescription }
+    }
+}
+#endif
+
+
+// MARK: - Small, touch-through in-app playback overlay
+#if os(iOS)
+@MainActor
+private final class ShiroxMiniPlayerWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        // No full-screen transparent shield: taps outside the video go through
+        // to the underlying tab, search and detail screens.
+        return hit === rootViewController?.view ? nil : hit
+    }
+}
+
+@MainActor
+private final class ShiroxMiniVideoSurface: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var videoLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+}
+
+@MainActor
+private final class ShiroxMiniPlayerController: UIViewController {
+    let card = UIView()
+    let surface = ShiroxMiniVideoSurface()
+    private let playButton = UIButton(type: .system)
+    private let expandButton = UIButton(type: .system)
+    private let closeButton = UIButton(type: .system)
+    private var isPositioned = false
+    private var player: AVPlayer?
+    var onRestore: (() -> Void)?
+    var onClose: (() -> Void)?
+
+    init(player: AVPlayer) {
+        self.player = player
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        card.backgroundColor = .black
+        card.layer.cornerRadius = 14
+        card.layer.masksToBounds = true
+        card.layer.borderWidth = 1
+        card.layer.borderColor = UIColor.white.withAlphaComponent(0.17).cgColor
+        view.addSubview(card)
+        surface.videoLayer.player = player
+        surface.videoLayer.videoGravity = .resizeAspect
+        card.addSubview(surface)
+        for (button, symbol, action) in [
+            (playButton, "pause.fill", #selector(togglePlayback)),
+            (expandButton, "arrow.up.left.and.arrow.down.right", #selector(expand)),
+            (closeButton, "xmark", #selector(close))
+        ] {
+            button.setImage(UIImage(systemName: symbol), for: .normal)
+            button.tintColor = .white
+            button.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+            button.layer.cornerRadius = 15
+            button.addTarget(self, action: action, for: .touchUpInside)
+            card.addSubview(button)
+        }
+        card.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(drag(_:))))
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if !isPositioned {
+            card.frame = CGRect(
+                x: max(12, view.bounds.width - 274),
+                y: max(60, view.bounds.height - view.safeAreaInsets.bottom - 200),
+                width: 260, height: 148)
+            isPositioned = true
+        }
+        surface.frame = card.bounds
+        playButton.frame = CGRect(x: 8, y: 8, width: 31, height: 31)
+        expandButton.frame = CGRect(x: card.bounds.width - 77, y: 8, width: 31, height: 31)
+        closeButton.frame = CGRect(x: card.bounds.width - 39, y: 8, width: 31, height: 31)
+    }
+
+    @objc private func togglePlayback() {
+        guard let player else { return }
+        if player.rate > 0 {
+            player.pause()
+            playButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
+        } else {
+            player.play()
+            playButton.setImage(UIImage(systemName: "pause.fill"), for: .normal)
+        }
+    }
+
+    @objc private func expand() { onRestore?() }
+    @objc private func close() { onClose?() }
+
+    @objc private func drag(_ pan: UIPanGestureRecognizer) {
+        let delta = pan.translation(in: view)
+        var next = card.center
+        next.x += delta.x
+        next.y += delta.y
+        next.x = min(max(card.bounds.width / 2 + 8, next.x),
+                     view.bounds.width - card.bounds.width / 2 - 8)
+        next.y = min(max(card.bounds.height / 2 + view.safeAreaInsets.top, next.y),
+                     view.bounds.height - card.bounds.height / 2 - view.safeAreaInsets.bottom)
+        card.center = next
+        pan.setTranslation(.zero, in: view)
+    }
+
+    func detachVideo() {
+        surface.videoLayer.player = nil
+        player = nil
     }
 }
 #endif
