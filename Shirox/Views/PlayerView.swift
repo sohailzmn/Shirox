@@ -2646,7 +2646,10 @@ struct PlayerView: View {
             if canRecoverStream {
                 await recoverPlayback()
             } else {
-                nudgePlayer()
+                // A failed AVPlayerItem cannot be repaired by seeking it again.
+                // Explicit Retry rebuilds the same source as a new item, whose
+                // first-frame timeout will surface the action again if it fails.
+                setupPlayer()
             }
         }
     }
