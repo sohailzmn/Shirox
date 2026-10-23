@@ -15,6 +15,13 @@ import Combine
 final class ModuleJSRunner {
 
     private var context: JSContext?
+    private var moduleCacheKey = ""
+
+    // Browsing a series, playing several episodes and Auto Next previously
+    // re-downloaded the complete season list on every new runner. Only catalog
+    // metadata is cached, never ephemeral expiring video URLs.
+    private static var episodesCache: [String: (storedAt: Date, episodes: [EpisodeLink])] = [:]
+    private static let episodesTTL: TimeInterval = 300
 
     /// Set when a request made by *this* runner hit a Turnstile wall with no cached cookie.
     /// Host-scoped to this module, so the picker only offers verification for the module
@@ -36,6 +43,7 @@ final class ModuleJSRunner {
     // MARK: - Load module
 
     func load(module: ModuleDefinition) async throws {
+        moduleCacheKey = module.id + "|" + module.scriptUrl
         // Clear WKWebView cookies (used by networkFetch/extractStreamUrl) for isolation.
         // HTTPCookieStorage.shared is NOT cleared — the ephemeral URLSession has its own
         // isolated store, so bypass cookies from earlier calls in this runner persist.
@@ -83,6 +91,11 @@ final class ModuleJSRunner {
     // MARK: - Episodes
 
     func fetchEpisodes(url: String) async throws -> [EpisodeLink] {
+        let key = moduleCacheKey + "|" + url
+        if let cached = Self.episodesCache[key],
+           Date().timeIntervalSince(cached.storedAt) < Self.episodesTTL {
+            return cached.episodes
+        }
         let json = try await callAsyncJS("extractEpisodes", args: [url])
         guard let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
@@ -102,6 +115,15 @@ final class ModuleJSRunner {
             "[Episodes] \(url) → \(links.count) eps numbers=[\(links.prefix(60).map { $0.number.truncatingRemainder(dividingBy: 1) == 0 ? String(Int($0.number)) : String($0.number) }.joined(separator: ","))]",
             type: "Download"
         )
+        if !links.isEmpty {
+            if Self.episodesCache.count >= 64 {
+                Self.episodesCache = Self.episodesCache.filter {
+                    Date().timeIntervalSince($0.value.storedAt) < Self.episodesTTL
+                }
+                if Self.episodesCache.count >= 64 { Self.episodesCache.removeAll() }
+            }
+            Self.episodesCache[key] = (Date(), links)
+        }
         return links
     }
 
