@@ -12,6 +12,32 @@ final class SkipTimestampsService {
     }
 
     private var cache: [CacheKey: SkipSegments] = [:]
+    private struct AniSkipKey: Hashable {
+        let malID: Int
+        let episode: Int
+        let durationBucket: Int
+    }
+    private var fastCache: [AniSkipKey: SkipSegments] = [:]
+
+    /// Return reliable, runtime-matched AniSkip markers immediately, without
+    /// waiting for TVDB/TMDB/IMDB mapping. The player uses this result first;
+    /// a longer secondary lookup may fill missing chapters afterwards.
+    func fetchFastSegments(
+        malID: Int, episode: Int, playbackDuration: Double
+    ) async -> SkipSegments? {
+        guard malID > 0, episode > 0, playbackDuration.isFinite,
+              playbackDuration >= 60, playbackDuration <= 14_400 else { return nil }
+        let key = AniSkipKey(malID: malID, episode: episode,
+                             durationBucket: Int((playbackDuration / 5).rounded()))
+        if let cached = fastCache[key] { return cached }
+        let result = await fetchAniSkip(
+            malID: malID, episode: episode, duration: playbackDuration)
+        if let result {
+            if fastCache.count >= 100 { fastCache.removeAll() }
+            fastCache[key] = result
+        }
+        return result
+    }
 
     private init() {}
 
@@ -34,8 +60,8 @@ final class SkipTimestampsService {
         // ending: keep it, but let slower providers fill the missing chapter.
         let aniSkip: SkipSegments?
         if let malID, malID > 0 {
-            aniSkip = await fetchAniSkip(
-                malID: malID, episode: episodeNumber, duration: duration)
+            aniSkip = await fetchFastSegments(
+                malID: malID, episode: episodeNumber, playbackDuration: duration)
         } else {
             aniSkip = nil
         }
@@ -63,8 +89,8 @@ final class SkipTimestampsService {
         // whereas AniSkip expects the episode number local to that season.
         let preciseAniSkip: SkipSegments?
         if aniListEpisode != episodeNumber, let malID {
-            preciseAniSkip = await fetchAniSkip(
-                malID: malID, episode: aniListEpisode, duration: duration)
+            preciseAniSkip = await fetchFastSegments(
+                malID: malID, episode: aniListEpisode, playbackDuration: duration)
         } else {
             preciseAniSkip = nil
         }
@@ -142,6 +168,7 @@ final class SkipTimestampsService {
 
     func clearCache() {
         cache.removeAll()
+        fastCache.removeAll()
     }
 
     // MARK: - Exact-cut timestamps
