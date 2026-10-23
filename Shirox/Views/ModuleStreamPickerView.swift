@@ -275,8 +275,12 @@ struct ModuleStreamPickerView: View {
                         // A fresh resolver result is already an actual stream.
                         // Reuse the user's last working choice immediately;
                         // network races are only for unfamiliar hosts.
-                        let winner = streams.first(where: { $0.title == savedTitle })
-                            ?? (await Self.fastestResponsiveStream(in: streams))
+                        let winner: StreamResult
+                        if let saved = streams.first(where: { $0.title == savedTitle }) {
+                            winner = saved
+                        } else {
+                            winner = await Self.fastestResponsiveStream(in: streams)
+                        }
                         guard !Task.isCancelled else { return }
                         ModuleSearchAliasManager.shared.setLastSearchResultHref(
                             mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id, href: href)
