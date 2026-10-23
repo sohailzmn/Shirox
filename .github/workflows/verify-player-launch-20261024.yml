@@ -5,6 +5,16 @@ on:
       - feature/smart-playback-recovery-20261021
     paths:
       - ".github/workflows/verify-player-launch-20261024.yml"
+      - "Shirox/Views/PlayerView.swift"
+      - "Shirox/Views/ContinueWatchingCard.swift"
+      - "Shirox/Views/DetailView.swift"
+      - "Shirox/Views/ModuleStreamPickerView.swift"
+      - "Shirox/Services/HLSQualityParser.swift"
+      - "Shirox/Services/PlaybackRouting.swift"
+      - "ShiroxTests/PlaybackRoutingTests.swift"
+      - "ShiroxTests/HLSQualityPreferenceTests.swift"
+      - "ShiroxTests/ContinueWatchingSeasonMatchTests.swift"
+      - "ShiroxTests/EpisodeNavigatorTests.swift"
 permissions:
   contents: read
 jobs:
@@ -72,6 +82,10 @@ jobs:
             -configuration Debug -destination "platform=iOS Simulator,id=$SIM_ID" \
             -derivedDataPath "$RUNNER_TEMP/InstantPlaybackTests" -skipPackagePluginValidation \
             -only-testing:ShiroxTests/PlayerNextEpisodePrefetchTests \
+            -only-testing:ShiroxTests/PlaybackRoutingTests \
+            -only-testing:ShiroxTests/HLSQualityPreferenceTests \
+            -only-testing:ShiroxTests/ContinueWatchingSeasonMatchTests \
+            -only-testing:ShiroxTests/EpisodeNavigatorTests \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
             > "$RUNNER_TEMP/player-tests.log" 2>&1 || {
               grep -nE '(error:|failed|TEST FAILED)' "$RUNNER_TEMP/player-tests.log" | tail -75 || true
