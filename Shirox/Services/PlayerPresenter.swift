@@ -218,6 +218,10 @@ final class PlayerPresenter: ObservableObject {
         UIView.performWithoutAnimation { refreshSupportedOrientations() }
     }
 
+    func refreshMiniPlayer(player: AVPlayer) {
+        miniController?.replacePlayer(player)
+    }
+
     func restoreMiniPlayer() {
         closeMiniPlayerWindow()
         guard let fullscreen = playerVC else { return }
@@ -974,6 +978,14 @@ private final class ShiroxMiniPlayerController: UIViewController {
                      view.bounds.height - card.bounds.height / 2 - view.safeAreaInsets.bottom)
         card.center = next
         pan.setTranslation(.zero, in: view)
+    }
+
+    func replacePlayer(_ replacement: AVPlayer) {
+        guard replacement !== player else { return }
+        player = replacement
+        surface.videoLayer.player = replacement
+        playButton.setImage(UIImage(systemName: replacement.rate > 0
+            ? "pause.fill" : "play.fill"), for: .normal)
     }
 
     func detachVideo() {
