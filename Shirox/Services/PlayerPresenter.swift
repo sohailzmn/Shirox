@@ -95,6 +95,42 @@ final class PlayerPresenter: ObservableObject {
     /// Present the full-screen experience immediately, before any provider
     /// request. The hidden module resolver uses the same logic as the manual
     /// source picker but never displays its navigation sheet.
+    /// Direct playback for a known module episode or a Continue Watching
+    /// resume. The content is rendered immediately; only extraction runs
+    /// asynchronously, inside the same full-screen presentation.
+    func presentResolvingEpisode(
+        title: String, episode: Int, artwork: String,
+        onResolve: @escaping @MainActor () async throws -> Void,
+        onChooseSource: @escaping () -> Void
+    ) {
+        guard let top = Self.findTopViewController(),
+              playerVC?.viewIfLoaded?.window == nil else { return }
+        let content = ShiroxInstantPlaybackScreen(
+            mediaId: nil, title: title, episode: episode, artwork: artwork,
+            alternativeTitles: [],
+            onCancel: { [weak self] in
+                PlaybackPerformance.shared.cancelled()
+                self?.dismissPlayer()
+            },
+            onChooseSource: { [weak self] in
+                self?.dismissPlayer()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    onChooseSource()
+                }
+            },
+            onStreamsLoaded: { _, _, _, _, _ in },
+            directResolver: onResolve
+        )
+        let hosting = PlayerHostingController(rootView: AnyView(content))
+        hosting.modalPresentationStyle = .overFullScreen
+        loadingPlayerVC = hosting
+        playerVC = hosting
+        orientationLock = .allButUpsideDown
+        trackedPlayerOrientation = snapshotCurrentOrientation()
+        startTrackingOrientation()
+        top.present(hosting, animated: false)
+    }
+
     func presentResolvingPlayer(
         mediaId: Int?, title: String, episode: Int, artwork: String,
         alternativeTitles: [String] = [],
@@ -952,6 +988,7 @@ private struct ShiroxInstantPlaybackScreen: View {
     let onCancel: () -> Void
     let onChooseSource: () -> Void
     let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
+    var directResolver: (@MainActor () async throws -> Void)? = nil
 
     @StateObject private var state = ShiroxLaunchStatus()
     @State private var glowing = false
@@ -1021,7 +1058,19 @@ private struct ShiroxInstantPlaybackScreen: View {
                 Spacer()
                 // The extractor is a headless view. Its original search and
                 // episode-matching behavior is reused without duplicating it.
-                ModuleStreamPickerView(
+                if let directResolver {
+                    Color.clear.frame(width: 1, height: 1)
+                        .task(id: state.retryID) {
+                            do {
+                                try await directResolver()
+                            } catch {
+                                guard !Task.isCancelled else { return }
+                                state.provider = error.localizedDescription
+                                state.failed = true
+                            }
+                        }
+                } else {
+                    ModuleStreamPickerView(
                     mediaId: mediaId, animeTitle: title, episodeNumber: episode,
                     alternateTitles: alternativeTitles, onDismiss: {},
                     headless: true,
@@ -1029,10 +1078,11 @@ private struct ShiroxInstantPlaybackScreen: View {
                     onFailure: { state.failed = true },
                     onStreamsLoaded: onStreamsLoaded
                 )
-                .id(state.retryID)
-                .frame(width: 1, height: 1)
-                .opacity(0.001)
-                .accessibilityHidden(true)
+                    .id(state.retryID)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .accessibilityHidden(true)
+                }
             }
             .padding(24)
             .foregroundStyle(.white)
