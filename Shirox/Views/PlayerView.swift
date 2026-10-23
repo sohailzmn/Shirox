@@ -245,7 +245,8 @@ struct PlayerView: View {
                 #if os(iOS)
                 VideoLayerView(player: player, pipTrigger: pipTrigger,
                                refreshToken: miniSurfaceRefresh,
-                               videoGravity: isFilled ? .resizeAspectFill : .resizeAspect)
+                               videoGravity: isFilled ? .resizeAspectFill : .resizeAspect,
+                               onFirstFrame: { PlaybackPerformance.shared.firstFrameReady() })
                     .ignoresSafeArea()
                     .overlay { videoLoadingOverlay }
                 #elseif os(tvOS)
@@ -3080,11 +3081,14 @@ struct VideoLayerView: UIViewRepresentable {
     var pipTrigger: Int = 0
     var refreshToken: Int = 0
     var videoGravity: AVLayerVideoGravity = .resizeAspect
+    var onFirstFrame: (() -> Void)? = nil
 
     class Coordinator: NSObject, AVPictureInPictureControllerDelegate, @unchecked Sendable {
         var pipController: AVPictureInPictureController?
         var lastPipTrigger: Int = 0
         var lastRefreshToken: Int = 0
+        var frameCallback: (() -> Void)?
+        var displayReadyObservation: NSKeyValueObservation?
         private var foregroundObserver: NSObjectProtocol?
 
         override init() {
@@ -3112,6 +3116,13 @@ struct VideoLayerView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PlayerLayerUIView {
         let view = PlayerLayerUIView(player: player)
+        context.coordinator.frameCallback = onFirstFrame
+        context.coordinator.displayReadyObservation = view.playerLayer.observe(
+            \.isReadyForDisplay, options: [.initial, .new]
+        ) { [weak coordinator = context.coordinator] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            DispatchQueue.main.async { coordinator?.frameCallback?() }
+        }
         if AVPictureInPictureController.isPictureInPictureSupported() {
             let controller = AVPictureInPictureController(playerLayer: view.playerLayer)
             controller?.delegate = context.coordinator
@@ -3121,6 +3132,7 @@ struct VideoLayerView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PlayerLayerUIView, context: Context) {
+        context.coordinator.frameCallback = onFirstFrame
         if refreshToken != context.coordinator.lastRefreshToken {
             // Rebind after the separate mini AVPlayerLayer releases this
             // playback session to avoid a black full-screen video surface.
