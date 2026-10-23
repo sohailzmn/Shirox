@@ -895,14 +895,24 @@ struct DetailView: View {
 
             LinearGradient(
                 stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: platformBackground.opacity(0.2), location: 0.45),
+                    .init(color: .black.opacity(0.14), location: 0),
+                    .init(color: .clear, location: 0.20),
+                    .init(color: platformBackground.opacity(0.18), location: 0.42),
+                    .init(color: platformBackground.opacity(0.78), location: 0.78),
                     .init(color: platformBackground, location: 1.0)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
             .frame(height: 420)
+
+            // Cinematic edge vignette improves title readability on bright banners.
+            LinearGradient(
+                colors: [.black.opacity(0.32), .clear, .black.opacity(0.18)],
+                startPoint: .leading, endPoint: .trailing
+            )
+            .frame(height: 420)
+            .allowsHitTesting(false)
 
             HStack(alignment: .bottom, spacing: 14) {
                 CachedAsyncImage(urlString: item.image)
@@ -916,7 +926,8 @@ struct DetailView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(item.title)
-                        .font(.title3.weight(.bold))
+                        .font(.system(size: 23, weight: .heavy, design: .rounded))
+                        .shadow(color: .black.opacity(0.4), radius: 12, y: 3)
                         .lineLimit(3)
                         .heroTitleAnchor(in: "detailScroll")
                         .copyTitleContextMenu(item.title)
