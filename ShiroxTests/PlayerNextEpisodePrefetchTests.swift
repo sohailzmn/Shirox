@@ -145,6 +145,35 @@ final class PlayerNextEpisodePrefetchTests: XCTestCase {
             at: 1_340, duration: 1_425, segments: chapters))
     }
 
+    func testMissingOutroGetsOneAdditionalMetadataLookup() {
+        var partial = SkipSegments()
+        partial.intro = .init(startMs: 80_000, endMs: 170_000)
+        partial.autoSkipIntro = true
+        partial.isDurationVerified = true
+
+        XCTAssertTrue(PlayerChapterTiming.shouldRetryMissingChapters(partial, attempts: 1))
+        XCTAssertFalse(PlayerChapterTiming.shouldRetryMissingChapters(partial, attempts: 2))
+        XCTAssertFalse(PlayerChapterTiming.shouldRetryMissingChapters(partial, attempts: 3))
+    }
+
+    func testCompleteIntroOutroNeverRetries() {
+        XCTAssertFalse(PlayerChapterTiming.shouldRetryMissingChapters(credits(), attempts: 1))
+    }
+
+    func testEmptyChapterResponseRetriesOnlyOnce() {
+        XCTAssertTrue(PlayerChapterTiming.shouldRetryMissingChapters(nil, attempts: 1))
+        XCTAssertFalse(PlayerChapterTiming.shouldRetryMissingChapters(nil, attempts: 2))
+        XCTAssertFalse(PlayerChapterTiming.shouldRetryMissingChapters(nil, attempts: 0))
+    }
+
+    func testManualOutroStillAvailableWhenNotDurationVerified() {
+        let chapters = credits(verified: false)
+        XCTAssertEqual(PlayerChapterTiming.activeSegment(at: 1_350, segments: chapters), .credits)
+        XCTAssertFalse(PlayerChapterTiming.shouldAutoSkip(.credits, segments: chapters))
+        XCTAssertFalse(PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+            at: 1_350, duration: 1_425, segments: chapters))
+    }
+
     func testPrefetchBeforeCreditsOrLastNinetySeconds() {
         XCTAssertTrue(PlayerNextEpisodePrefetch.shouldStart(
             progress: 0.7, threshold: 0.9, hasLoader: true,
