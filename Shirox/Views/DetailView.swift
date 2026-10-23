@@ -695,6 +695,43 @@ struct DetailView: View {
 
         let storedStreams = item.allStreams?.compactMap { $0.asStreamResult } ?? []
 
+        // Detail-screen Continue Watching used to mount a stored CDN URL
+        // immediately. Those links expire, creating a black 0:00 screen.
+        // Reuse the exact same fullscreen skeleton as a normal episode tap.
+        let isLocal = url.isFileURL || url.host == "localhost" || url.host == "127.0.0.1"
+        if !isLocal, let onExpired {
+            PlaybackPerformance.shared.begin(title: item.mediaTitle, episode: item.episodeNumber)
+            PlayerPresenter.shared.presentResolvingEpisode(
+                title: item.mediaTitle, episode: item.episodeNumber,
+                artwork: item.imageUrl,
+                onResolve: {
+                    let streams = try await onExpired(item.episodeNumber, item.episodeHref)
+                    try Task.checkCancellation()
+                    guard !streams.isEmpty else {
+                        throw NSError(domain: "Shirox.Resume", code: 3,
+                            userInfo: [NSLocalizedDescriptionKey:
+                                "Could not find a fresh stream for this episode."])
+                    }
+                    let chosen = streams.first(where: { $0.title == item.streamTitle })
+                        ?? streams[0]
+                    PlayerPresenter.shared.presentPlayer(
+                        stream: chosen, streams: streams, context: context,
+                        onWatchNext: onWatchNext, onStreamExpired: onExpired,
+                        onFinished: nil)
+                },
+                onChooseSource: {
+                    if let episode = vm.detail?.episodes.first(where: {
+                        $0.href == item.episodeHref
+                    }) ?? vm.detail?.episodes.first(where: {
+                        Int($0.number) == item.episodeNumber
+                    }) {
+                        vm.loadStreamsManually(for: episode)
+                    }
+                }
+            )
+            return
+        }
+
         PlayerPresenter.shared.presentPlayer(
             stream: stream,
             streams: storedStreams,
