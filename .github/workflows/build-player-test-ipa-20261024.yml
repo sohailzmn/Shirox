@@ -1,4 +1,4 @@
-name: Build Shirox Continue Watching Skip IPA (Unsigned)
+name: Build Shirox Gesture Fix IPA (Unsigned)
 on:
   push:
     branches:
@@ -12,20 +12,20 @@ permissions:
 
 jobs:
   ipa:
-    name: Build unsigned iPhone IPA from fixed resume-skip commit
+    name: Build unsigned iPhone IPA with gesture and intro outro fixes
     runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 208eb3bb57ccd639a55e366776df3797e8bd007b
+          ref: 3b69f53eb3bbf1fcee7e4513c63a52a7ce1f819c
       - name: Show exact source revision
         run: |
           echo "Building git commit: $(git rev-parse HEAD)"
           echo "Branch: $GITHUB_REF_NAME"
           xcodebuild -version
           test "$GITHUB_REF_NAME" = "feature/smart-playback-recovery-20261021"
-          test "$(git rev-parse HEAD)" = "208eb3bb57ccd639a55e366776df3797e8bd007b"
+          test "$(git rev-parse HEAD)" = "3b69f53eb3bbf1fcee7e4513c63a52a7ce1f819c"
       - name: Build unsigned iPhone IPA using existing project script
         run: |
           chmod +x ./buildipa.sh
@@ -51,11 +51,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="resume-intro-outro-208eb3bb57cc"
+          TAG="gesture-fix-3b69f53eb3bb"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --target "208eb3bb57ccd639a55e366776df3797e8bd007b" \
-            --title "Shirox Weiterschauen Intro Outro Fix (unsigned) 208eb3b" \
-            --notes "Unsigned iOS test IPA from source commit 208eb3bb57ccd639a55e366776df3797e8bd007b. Fixes preserved MAL and AniList IDs during Continue Watching so intro/outro skip works after resume as well as search. Includes prior player repairs. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
+            --target "3b69f53eb3bbf1fcee7e4513c63a52a7ce1f819c" \
+            --title "Shirox Swipe Gesture Fix (unsigned) 3b69f53" \
+            --notes "Unsigned iOS test IPA from source commit 3b69f53eb3bbf1fcee7e4513c63a52a7ce1f819c. Removes conflicting fullscreen swipe-to-dismiss pan so vertical swipes adjust brightness or volume without closing playback. Includes Kuroko season-aware intro/outro markers and all prior Continue Watching fixes. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
             --prerelease
           gh release upload "$TAG" build/Shirox.ipa build/Shirox.ipa.sha256 \
             --repo "$GITHUB_REPOSITORY" --clobber
