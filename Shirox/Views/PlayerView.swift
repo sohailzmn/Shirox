@@ -3672,18 +3672,15 @@ private struct SpeedBoostOverlay: UIViewRepresentable {
 
 #if os(iOS)
 class PlayerHostingController<Content: View>: UIHostingController<Content> {
-    private var panCoordinator: DragToDismissCoordinator?
-
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
         if #available(iOS 16.4, *) { safeAreaRegions = [] }
-        let coordinator = DragToDismissCoordinator(viewController: self)
-        panCoordinator = coordinator
-        let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(DragToDismissCoordinator.handlePan(_:)))
-        pan.cancelsTouchesInView = false
-        pan.delegate = coordinator
-        view.addGestureRecognizer(pan)
+        // Do not attach a second, full-screen vertical pan recognizer here.
+        // It used to slide the hosting controller off-screen and close playback
+        // on the same downward gesture that adjusts brightness/volume inside
+        // PlayerDoubleTapSeek. The player's own gesture surface now owns all
+        // vertical swipes; playback closes only through explicit UI controls.
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
@@ -3710,29 +3707,4 @@ class PlayerHostingController<Content: View>: UIHostingController<Content> {
     override var prefersStatusBarHidden: Bool { true }
 }
 
-private final class DragToDismissCoordinator: NSObject, UIGestureRecognizerDelegate {
-    weak var viewController: UIViewController?
-    init(viewController: UIViewController) { self.viewController = viewController }
-    @objc func handlePan(_ gr: UIPanGestureRecognizer) {
-        guard let vc = viewController else { return }
-        let t = gr.translation(in: vc.view)
-        switch gr.state {
-        case .changed: vc.view.transform = CGAffineTransform(translationX: 0, y: max(0, t.y))
-        case .ended, .cancelled:
-            let v = gr.velocity(in: vc.view)
-            if t.y > 150 || v.y > 800 {
-                UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn, animations: { vc.view.transform = CGAffineTransform(translationX: 0, y: vc.view.bounds.height) }, completion: { _ in PlayerPresenter.shared.dragDismiss() })
-            } else {
-                UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.75, initialSpringVelocity: 1, options: []) { vc.view.transform = .identity }
-            }
-        default: break
-        }
-    }
-    func gestureRecognizerShouldBegin(_ gr: UIGestureRecognizer) -> Bool {
-        guard let pan = gr as? UIPanGestureRecognizer, let vc = viewController else { return true }
-        let v = pan.velocity(in: vc.view)
-        return v.y > 0 && v.y > abs(v.x)
-    }
-    func gestureRecognizer(_ gr: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
-}
 #endif
