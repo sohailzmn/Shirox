@@ -16,6 +16,7 @@ on:
       - "Shirox/Services/SkipTimestampsService.swift"
       - "Shirox/Models/SkipSegments.swift"
       - "ShiroxTests/PlayerNextEpisodePrefetchTests.swift"
+      - "ShiroxTests/SeasonChainMathTests.swift"
       - "ShiroxTests/PlaybackRoutingTests.swift"
       - "ShiroxTests/HLSQualityPreferenceTests.swift"
       - "ShiroxTests/ContinueWatchingSeasonMatchTests.swift"
@@ -91,6 +92,7 @@ jobs:
             -configuration Debug -destination "platform=iOS Simulator,id=$SIM_ID" \
             -derivedDataPath "$RUNNER_TEMP/InstantPlaybackTests" -skipPackagePluginValidation \
             -only-testing:ShiroxTests/PlayerNextEpisodePrefetchTests \
+            -only-testing:ShiroxTests/SeasonChainMathTests \
             -only-testing:ShiroxTests/PlaybackRoutingTests \
             -only-testing:ShiroxTests/HLSQualityPreferenceTests \
             -only-testing:ShiroxTests/ContinueWatchingSeasonMatchTests \
