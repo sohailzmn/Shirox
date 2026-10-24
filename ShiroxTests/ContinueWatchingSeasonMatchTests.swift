@@ -52,6 +52,52 @@ final class ContinueWatchingSeasonMatchTests: XCTestCase {
         XCTAssertTrue(item.matchesEpisode(number: 5, href: ""))
     }
 
+    // MARK: - Identity handoff from Continue Watching to AniSkip
+
+    func testMALOnlyContinueWatchingRestoresSkipIdentity() {
+        let item = ContinueWatchingItem(
+            id: UUID(), mediaTitle: "Blue Lock", episodeNumber: 6,
+            episodeTitle: nil, imageUrl: "", streamUrl: "https://x/video.m3u8",
+            headers: nil, subtitle: nil, streamTitle: nil,
+            aniListID: nil, malID: 49596, moduleId: "mod", detailHref: "show/blue-lock",
+            watchedSeconds: 420, totalSeconds: 1400, lastWatchedAt: .now
+        )
+        let identity = item.playbackIdentity()
+        XCTAssertNil(identity.aniListID)
+        XCTAssertEqual(identity.malID, 49596,
+                       "MAL-only saved episodes must keep their AniSkip identity")
+    }
+
+    func testContinueWatchingRecoversCachedAniListFromMALWithoutErasingMAL() {
+        let item = makeItem(episodeNumber: 6, episodeHref: nil)
+        let identity = item.playbackIdentity(
+            mappedAniListID: 137822, linkedAniListID: nil, mappedMALID: 49596
+        )
+        XCTAssertEqual(identity.aniListID, 137822)
+        XCTAssertEqual(identity.malID, 49596)
+    }
+
+    func testContinueWatchingTitleMappingRestoresMissingAnimeID() {
+        let item = makeItem(episodeNumber: 6, episodeHref: nil)
+        let identity = item.playbackIdentity(linkedAniListID: 137822)
+        XCTAssertEqual(identity.aniListID, 137822)
+    }
+
+    func testSavedMALAndAniListTakePrecedenceOverFallbacks() {
+        let item = ContinueWatchingItem(
+            id: UUID(), mediaTitle: "Blue Lock", episodeNumber: 6,
+            episodeTitle: nil, imageUrl: "", streamUrl: "https://x/video.m3u8",
+            headers: nil, subtitle: nil, streamTitle: nil,
+            aniListID: 137822, malID: 49596, moduleId: "mod", detailHref: nil,
+            watchedSeconds: 420, totalSeconds: 1400, lastWatchedAt: .now
+        )
+        let identity = item.playbackIdentity(
+            mappedAniListID: 123, linkedAniListID: 456, mappedMALID: 789
+        )
+        XCTAssertEqual(identity.aniListID, 137822)
+        XCTAssertEqual(identity.malID, 49596)
+    }
+
     // MARK: - Completed (watched) display decision
 
     /// A per-episode href marker is authoritative — the row is watched regardless of the

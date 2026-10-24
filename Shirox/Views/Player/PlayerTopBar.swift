@@ -5,6 +5,8 @@ struct PlayerTopBar: View {
     var onDismiss: () -> Void
     @Binding var isLocked: Bool
     var onPiP: (() -> Void)? = nil
+    /// In-app compact player, retaining the same underlying AVPlayer.
+    var onMinimize: (() -> Void)? = nil
     var topPadding: CGFloat = 24
     var isLandscape: Bool = true
     var showDismiss: Bool = true
@@ -82,6 +84,16 @@ struct PlayerTopBar: View {
         #endif
         AirPlayButton()
             .frame(width: frameSize, height: frameSize)
+        if let onMinimize {
+            Button(action: onMinimize) {
+                Image(systemName: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: iconSize, weight: .medium))
+                    .foregroundStyle(.white)
+                    .frame(width: frameSize, height: frameSize)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Mini Player")
+        }
         if onPiP != nil {
             Button { onPiP?() } label: {
                 Image(systemName: "pip.enter")

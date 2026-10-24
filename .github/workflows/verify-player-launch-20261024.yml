@@ -1,0 +1,116 @@
+name: Verify Instant Playback Repairs (No IPA)
+on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/verify-player-launch-20261024.yml"
+      - "Shirox/Views/PlayerView.swift"
+      - "Shirox/Views/ContinueWatchingCard.swift"
+      - "Shirox/Views/DetailView.swift"
+      - "Shirox/Views/ModuleStreamPickerView.swift"
+      - "Shirox/Services/HLSQualityParser.swift"
+      - "Shirox/Services/ModuleSearchAliasManager.swift"
+      - "Shirox/Views/SettingsView.swift"
+      - "Shirox/Services/PlaybackRouting.swift"
+      - "Shirox/Services/SkipTimestampsService.swift"
+      - "Shirox/Models/SkipSegments.swift"
+      - "ShiroxTests/PlayerNextEpisodePrefetchTests.swift"
+      - "ShiroxTests/SeasonChainMathTests.swift"
+      - "ShiroxTests/PlaybackRoutingTests.swift"
+      - "ShiroxTests/HLSQualityPreferenceTests.swift"
+      - "ShiroxTests/ContinueWatchingSeasonMatchTests.swift"
+      - "ShiroxTests/EpisodeNavigatorTests.swift"
+      - "ShiroxTests/HomeCacheStoreTests.swift"
+concurrency:
+  group: shirox-playback-regression-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: macos-26
+    timeout-minutes: 80
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert single loading flow and honest first-frame readiness
+        run: |
+          echo "Validating commit $(git rev-parse HEAD)"
+          python3 - <<'PY'
+          from pathlib import Path
+          player=Path("Shirox/Views/PlayerView.swift").read_text()
+          presenter=Path("Shirox/Services/PlayerPresenter.swift").read_text()
+          module=Path("Shirox/ViewModels/DetailViewModel.swift").read_text()
+          watching=Path("Shirox/Views/ContinueWatchingCard.swift").read_text()
+          module_detail=Path("Shirox/Views/DetailView.swift").read_text()
+          for match in ("onFirstFrame: {", "armFirstFrameWatchdog(for: item)", "guard !remaining.isEmpty else { return nil }", "firstFrameWatchdog?.cancel()"):
+              assert match in player, match
+          for wrong in ("Loading timeout reached, forcing ready state",
+                        "if currentContext?.resumeFrom == nil { videoReady = true }"):
+              assert wrong not in player,wrong
+          assert "DragToDismissCoordinator" not in player, "vertical swipes must not dismiss playback"
+          assert "view.addGestureRecognizer(pan)" not in player, "do not register fullscreen dismissal pans"
+          gestures=Path("Shirox/Views/Player/PlayerDoubleTapSeek.swift").read_text()
+          assert "handleVerticalPan(_ gr: UIPanGestureRecognizer)" in gestures
+          assert "onVerticalSwipe?(rightSide, delta)" in gestures
+          assert "func presentResolvingEpisode(" in presenter
+          assert "directResolver: onResolve" in presenter
+          assert "func loadStreamsManually(for episode:" in module
+          assert "presentResolvingEpisode(" in module
+          assert "presentResolvingEpisode(" in watching
+          assert "let fresh = try await onExpired" in watching
+          assert "let streams = try await onExpired" in module_detail
+          assert "vm.loadStreamsManually(for: episode)" in module_detail
+          print("Instant player and resume regression checks passed")
+          PY
+      - name: Apply standard compatibility patches
+        run: |
+          python3 patch_serienstream_interactive.py
+          python3 patch_serienstream_interactive_v3.py
+          python3 patch_serienstream_session_v5.py
+          python3 patch_serienstream_exact_episode_v6.py
+          sed -i '' '/\.fontWeight(.semibold)/d' Shirox/Views/Shared/CloudflareBypassSheetView.swift
+      - name: Compile iOS Simulator without IPA packaging
+        run: |
+          xcodebuild -project Shirox.xcodeproj -scheme Shirox_iOS \
+            -configuration Debug -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/InstantPlaybackTests" -skipPackagePluginValidation \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
+            build > "$RUNNER_TEMP/player-build.log" 2>&1 || {
+              grep -nE '(error:|BUILD FAILED|fatal error)' "$RUNNER_TEMP/player-build.log" | tail -75 || true
+              tail -65 "$RUNNER_TEMP/player-build.log"
+              exit 1
+            }
+          echo "SIMULATOR BUILD SUCCEEDED"
+      - name: Chapter and player XCTest
+        run: |
+          SIM_ID=$(xcrun simctl list devices available -j | python3 -c '
+          import json,sys
+          for rt,ds in json.load(sys.stdin)["devices"].items():
+              if "iOS" not in rt: continue
+              for d in ds:
+                  if d.get("isAvailable"):
+                      print(d["udid"]);sys.exit(0)
+          sys.exit(1)
+          ')
+          xcodebuild test -project Shirox.xcodeproj -scheme Shirox_iOS \
+            -configuration Debug -destination "platform=iOS Simulator,id=$SIM_ID" \
+            -derivedDataPath "$RUNNER_TEMP/InstantPlaybackTests" -skipPackagePluginValidation \
+            -only-testing:ShiroxTests/PlayerNextEpisodePrefetchTests \
+            -only-testing:ShiroxTests/SeasonChainMathTests \
+            -only-testing:ShiroxTests/PlaybackRoutingTests \
+            -only-testing:ShiroxTests/HLSQualityPreferenceTests \
+            -only-testing:ShiroxTests/ContinueWatchingSeasonMatchTests \
+            -only-testing:ShiroxTests/EpisodeNavigatorTests \
+            -only-testing:ShiroxTests/HomeCacheStoreTests \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
+            > "$RUNNER_TEMP/player-tests.log" 2>&1 || {
+              grep -nE '(error:|failed|TEST FAILED)' "$RUNNER_TEMP/player-tests.log" | tail -75 || true
+              tail -80 "$RUNNER_TEMP/player-tests.log"
+              exit 1
+            }
+          grep -E '(Executed|TEST SUCCEEDED)' "$RUNNER_TEMP/player-tests.log" | tail -6
+      - name: Verify no IPA was created
+        run: |
+          ! find . -name '*.ipa' -print -quit | grep -q .
+          echo "No IPA created."

@@ -1,0 +1,36 @@
+name: Smart Play IPA
+
+# Only user-triggered builds: source commits must not generate an IPA automatically.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-ios:
+    name: Build Smart Play IPA
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout improvements
+        uses: actions/checkout@v4
+      - name: Show selected tools
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Build unsigned IPA
+        run: |
+          chmod +x ./buildipa.sh
+          ./buildipa.sh
+      - name: Verify generated IPA
+        run: |
+          test -s build/Shirox.ipa
+          unzip -tq build/Shirox.ipa
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shirox-SmartPlay-IPA
+          path: build/Shirox.ipa
+          if-no-files-found: error
+          retention-days: 14

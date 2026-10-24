@@ -15,18 +15,107 @@ private final class ModuleStreamVMStore: ObservableObject {
     }
 }
 
+// MARK: - Season-aware module matching
+//
+// AniList often names a second season "Blue Lock Season 2" while AniWorld stores
+// every season under "Blue Lock". Keep the requested season when choosing an episode:
+// simplifying the search title must never silently play S1E1 for S2E1.
+enum ModuleSeasonFallback {
+    static func parsedSuffix(in title: String) -> (base: String, season: Int)? {
+        let patterns = [
+            #"(?i)(?:\s*[\(\[:–—-]\s*|\s+)(?:season|staffel)\s*(\d{1,2})\s*[\)\]]?\s*$"#,
+            #"(?i)\s+(\d{1,2})(?:st|nd|rd|th)\s+season\s*$"#,
+            #"(?i)\s+s(\d{1,2})\s*$"#
+        ]
+        let whole = NSRange(title.startIndex..<title.endIndex, in: title)
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: title, range: whole),
+                  let suffixRange = Range(match.range, in: title),
+                  let seasonRange = Range(match.range(at: 1), in: title),
+                  let season = Int(title[seasonRange]), season > 0 else { continue }
+            let base = String(title[..<suffixRange.lowerBound])
+                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines
+                    .union(CharacterSet(charactersIn: ":-–—([ ")))
+            guard base.count > 1 else { continue }
+            return (base, season)
+        }
+        return nil
+    }
+
+    static func queries(for title: String, alternatives: [String] = []) -> [String] {
+        var result: [String] = []
+        var seen = Set<String>()
+        for candidate in [title] + alternatives {
+            let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard trimmed.count > 1 else { continue }
+            for value in [trimmed, parsedSuffix(in: trimmed)?.base].compactMap({ $0 }) {
+                let normalized = value.folding(
+                    options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+                if seen.insert(normalized).inserted { result.append(value) }
+            }
+            if result.count >= 8 { break }
+        }
+        return Array(result.prefix(8))
+    }
+
+    /// For a grouped AniWorld listing, match the actual season URL. When S2 is
+    /// missing, report no match instead of accidentally selecting S1E1.
+    static func aniWorldEpisode(
+        from episodes: [EpisodeLink], title: String, module: ModuleDefinition, number: Int
+    ) -> (handled: Bool, episode: EpisodeLink?) {
+        guard module.sourceName.localizedCaseInsensitiveContains("AniWorld"),
+              let season = parsedSuffix(in: title)?.season else { return (false, nil) }
+        let hasSeasonPaths = episodes.contains { $0.href.localizedCaseInsensitiveContains("/staffel-") }
+        guard hasSeasonPaths else { return (false, nil) }
+        let ending = "/staffel-\(season)/episode-\(number)"
+        let found = episodes.first { item in
+            let path = URL(string: item.href)?.path.lowercased() ?? item.href.lowercased()
+            return path.hasSuffix(ending)
+        }
+        return (true, found)
+    }
+}
+
 // MARK: - Sheet
 
 struct ModuleStreamPickerView: View {
     let mediaId: Int?
     let animeTitle: String
+    let alternateTitles: [String]
     let episodeNumber: Int
     let onDismiss: () -> Void
-    let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void  // allStreams, selectedStream, showHref, availableCount, episodeHref
+    let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
+    let headless: Bool
+    let onStatus: ((String) -> Void)?
+    let onFailure: (() -> Void)?
+
+    init(
+        mediaId: Int?, animeTitle: String, episodeNumber: Int,
+        alternateTitles: [String] = [],
+        onDismiss: @escaping () -> Void,
+        headless: Bool = false, onStatus: ((String) -> Void)? = nil,
+        onFailure: (() -> Void)? = nil,
+        onStreamsLoaded: @escaping ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
+    ) {
+        self.mediaId = mediaId
+        self.animeTitle = animeTitle
+        self.alternateTitles = alternateTitles
+        self.episodeNumber = episodeNumber
+        self.onDismiss = onDismiss
+        self.onStreamsLoaded = onStreamsLoaded
+        self.headless = headless
+        self.onStatus = onStatus
+        self.onFailure = onFailure
+    }
 
     @EnvironmentObject private var moduleManager: ModuleManager
     @AppStorage("useDefaultExtension") private var useDefaultExtension = false
     @StateObject private var vmStore = ModuleStreamVMStore()
+    @State private var autoPlayTask: Task<Void, Never>?
+    @State private var autoPlayLoading = false
+    @State private var autoPlayMessage: String?
+    @State private var didAutoStart = false
 
     private var visibleModules: [ModuleDefinition] {
         if useDefaultExtension, let active = moduleManager.activeModule {
@@ -36,15 +125,53 @@ struct ModuleStreamPickerView: View {
     }
 
     var body: some View {
-        NavigationStack {
-            List {
+        Group {
+            if headless {
+                Color.clear.frame(width: 1, height: 1)
+                    .accessibilityHidden(true)
+            } else {
+                NavigationStack {
+                    List {
+                Section {
+                    Button {
+                        if autoPlayLoading {
+                            autoPlayTask?.cancel()
+                            autoPlayLoading = false
+                        } else {
+                            startSmartPlay()
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            if autoPlayLoading {
+                                ProgressView()
+                            } else {
+                                Image(systemName: "play.fill")
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(autoPlayLoading ? "Finding the fastest stream…" : "Smart Play")
+                                    .fontWeight(.semibold)
+                                Text(autoPlayLoading ? "Tap to cancel" : "Find a working episode across installed modules")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                    }
+                    .disabled(moduleManager.modules.isEmpty)
+                    if let autoPlayMessage {
+                        Text(autoPlayMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
                 ForEach(visibleModules) { module in
                     ModuleStreamRow(
                         module: module,
                         mediaId: mediaId,
                         animeTitle: animeTitle,
                         episodeNumber: episodeNumber,
-                        rowVm: vmStore.get(for: module, mediaId: mediaId, animeTitle: animeTitle, episodeNumber: episodeNumber)
+                        rowVm: vmStore.get(for: module, mediaId: mediaId, animeTitle: animeTitle, episodeNumber: episodeNumber),
+                        automaticSearch: false
                     ) { streams, selectedStream, showHref, availableCount, episodeHref in
                         moduleManager.selectModule(module)
                         onDismiss()
@@ -68,8 +195,19 @@ struct ModuleStreamPickerView: View {
                     Button("Cancel") { onDismiss() }
                 }
             }
-            .tint(.primary)
+                    .tint(.primary)
+                }
+            }
         }
+        .onAppear {
+            // A single tap on Watch now starts resolving immediately: no source
+            // picker, anime search result picker, or quality picker is required.
+            if !didAutoStart {
+                didAutoStart = true
+                startSmartPlay()
+            }
+        }
+        .onDisappear { autoPlayTask?.cancel() }
         #if os(iOS)
         .adaptivePresentationDetents([.medium, .large])
 
@@ -79,6 +217,196 @@ struct ModuleStreamPickerView: View {
 
         #endif
     }
+
+    // MARK: - One-tap stream resolution
+
+    private func startSmartPlay() {
+        guard !autoPlayLoading else { return }
+        autoPlayLoading = true
+        autoPlayMessage = nil
+        // Avoid running the per-row searches in parallel with this targeted path.
+        for row in vmStore.viewModels.values { row.cancelIfSearching() }
+
+        autoPlayTask = Task { @MainActor in
+            defer { autoPlayLoading = false }
+            let last = UserDefaults.standard.string(forKey: "lastUsedModuleId")
+            let active = moduleManager.activeModule?.id
+            let candidates: [ModuleDefinition]
+            if useDefaultExtension, let selected = moduleManager.activeModule {
+                candidates = [selected]
+            } else {
+                candidates = moduleManager.modules.filter { !$0.isManga }
+            }
+            let modules = candidates.sorted { left, right in
+                func priority(_ module: ModuleDefinition) -> Int {
+                    if module.id == last { return 0 }
+                    if module.id == active { return 1 }
+                    return 2
+                }
+                return priority(left) < priority(right)
+            }
+
+            // AniList -> absolute episode indexing is identical for every
+            // module. Resolving it N times serially previously delayed playback.
+            let offset: Int
+            if let mediaId {
+                offset = await SeasonChainMapper.shared.resolveOffset(
+                    anchorAniListID: mediaId, anchorMALID: nil) ?? 0
+            } else {
+                offset = 0
+            }
+
+            for module in modules {
+                guard !Task.isCancelled else { return }
+                autoPlayMessage = "Checking \(module.sourceName)…"
+                onStatus?(module.sourceName)
+                if headless {
+                    PlaybackPerformance.shared.sourceSearch(provider: module.sourceName)
+                }
+                let runner = ModuleJSRunner()
+                do {
+                    try await runner.load(module: module)
+
+                    var hrefs: [String] = []
+                    if let previous = ModuleSearchAliasManager.shared.getLastSearchResultHref(
+                        mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id) {
+                        hrefs.append(previous)
+                    }
+
+                    // Pass 0: reuse a known result. Search the AniList title, then
+                    // retry a seasonless title (e.g. "Blue Lock" for "Blue Lock Season 2").
+                    let alias = ModuleSearchAliasManager.shared.getAlias(
+                        mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id)
+                    let queries = ModuleSeasonFallback.queries(
+                        for: alias ?? animeTitle, alternatives: alternateTitles + [animeTitle])
+                    for searchPass in 0...queries.count {
+                        guard !Task.isCancelled else { return }
+                        if searchPass == 0 && hrefs.isEmpty { continue }
+                        if searchPass > 0 {
+                            let query = queries[searchPass - 1]
+                            let results = (try? await runner.search(keyword: query)) ?? []
+                            hrefs = SearchResultMatcher.ranked(
+                                query: query, items: results, title: { $0.title })
+                                .prefix(3).map { $0.href }
+                        }
+                        var visited = Set<String>()
+                        for href in hrefs where visited.insert(href).inserted {
+                        guard !Task.isCancelled else { return }
+                        if headless { PlaybackPerformance.shared.moduleResolved() }
+                        let episodes: [EpisodeLink]
+                        do { episodes = try await runner.fetchEpisodes(url: href) }
+                        catch { continue }
+                        let seasonMatch = ModuleSeasonFallback.aniWorldEpisode(
+                            from: episodes, title: animeTitle, module: module, number: episodeNumber)
+                        let absoluteIndex = offset + episodeNumber - 1
+                        let episode: EpisodeLink?
+                        if seasonMatch.handled {
+                            episode = seasonMatch.episode
+                        } else if offset > 0 && episodes.indices.contains(absoluteIndex) {
+                            episode = episodes[absoluteIndex]
+                        } else {
+                            episode = episodes.first { Int($0.number) == episodeNumber }
+                        }
+                        guard let episode else { continue }
+                        if headless { PlaybackPerformance.shared.episodeResolved() }
+
+                        let streams: [StreamResult]
+                        do { streams = try await runner.fetchStreams(episodeUrl: episode.href) }
+                        catch { continue }
+                        guard !streams.isEmpty else { continue }
+
+                        let savedTitle = ModuleSearchAliasManager.shared.getLastStreamTitle(
+                            moduleId: module.id)
+                        // A fresh resolver result is already an actual stream.
+                        // Reuse the user's last working choice immediately;
+                        // network races are only for unfamiliar hosts.
+                        let winner: StreamResult
+                        if let saved = streams.first(where: { $0.title == savedTitle }) {
+                            winner = saved
+                        } else if headless {
+                            // The module has already extracted working stream URLs.
+                            // Don't delay fullscreen playback with a duplicate HTTP
+                            // probe. Prefer a lighter rendition if it is offered.
+                            winner = streams.first(where: {
+                                $0.title.localizedCaseInsensitiveContains("480p")
+                            }) ?? streams[0]
+                        } else {
+                            winner = await Self.fastestResponsiveStream(in: streams)
+                        }
+                        guard !Task.isCancelled else { return }
+                        ModuleSearchAliasManager.shared.setLastSearchResultHref(
+                            mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id, href: href)
+                        ModuleSearchAliasManager.shared.setLastStreamTitle(
+                            moduleId: module.id, title: winner.title)
+                        UserDefaults.standard.set(module.id, forKey: "lastUsedModuleId")
+                        moduleManager.selectModule(module)
+                        if headless { PlaybackPerformance.shared.streamResolved() }
+                        if !headless { onDismiss() }
+                        onStreamsLoaded(streams, winner, href, episodes.count, episode.href)
+                        return
+                        }
+                    }
+                } catch {
+                    // A broken provider must not block playback from the next module.
+                    Logger.shared.log("[SmartPlay] \(module.sourceName): \(error.localizedDescription)", type: "Error")
+                }
+            }
+            if !Task.isCancelled {
+                autoPlayMessage = "No working stream found. Choose a module below or retry."
+                if headless { PlaybackPerformance.shared.failed() }
+                onFailure?()
+            }
+        }
+    }
+
+    /// Probe the first few candidates concurrently. GET only small HLS playlists,
+    /// HEAD for MP4, and never download a whole movie just to measure start time.
+    /// Always fall back to the module's first choice if all probes are rejected.
+    private static func fastestResponsiveStream(in streams: [StreamResult]) async -> StreamResult {
+        guard streams.count > 1 else { return streams[0] }
+        let probes = Array(streams.prefix(3)).enumerated().compactMap { index, stream
+            -> (index: Int, url: URL, headers: [String: String], isHLS: Bool, isMP4: Bool)? in
+            let ext = stream.url.pathExtension.lowercased()
+            guard stream.url.scheme?.lowercased() == "https", stream.url.host != nil,
+                  ext == "m3u8" || ext == "mp4" else { return nil }
+            return (index, stream.url, stream.headers, ext == "m3u8", ext == "mp4")
+        }
+        guard !probes.isEmpty else { return streams[0] }
+        return await withTaskGroup(of: Int?.self) { group in
+            for probe in probes {
+                group.addTask {
+                    guard !Task.isCancelled else { return nil }
+                    var request = URLRequest(url: probe.url, timeoutInterval: 2.5)
+                    request.httpMethod = probe.isMP4 ? "HEAD" : "GET"
+                    if probe.isHLS {
+                        request.setValue("bytes=0-65535", forHTTPHeaderField: "Range")
+                    }
+                    probe.headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
+                    do {
+                        let (data, response) = try await URLSession.shared.data(for: request)
+                        guard !Task.isCancelled, let http = response as? HTTPURLResponse,
+                              (200..<300).contains(http.statusCode) else { return nil }
+                        if probe.isHLS {
+                            guard let text = String(data: data, encoding: .utf8),
+                                  text.trimmingCharacters(in: .whitespacesAndNewlines)
+                                      .hasPrefix("#EXTM3U") else { return nil }
+                        }
+                        return probe.index
+                    } catch { return nil }
+                }
+            }
+            // Return on the first valid playlist instead of waiting for every
+            // slower source to finish. The task group cancels in-flight probes.
+            for await winner in group {
+                if let winner {
+                    group.cancelAll()
+                    return streams[winner]
+                }
+            }
+            return streams[0]
+        }
+    }
+
 }
 
 // MARK: - Row ViewModel
@@ -248,22 +576,35 @@ private final class ModuleStreamRowViewModel: ObservableObject {
 
         do {
             try await r.load(module: module)
-            var results = try await r.search(keyword: keyword)
+            let queries = ModuleSeasonFallback.queries(for: keyword)
+            var results: [SearchItem] = []
+            var matchedQuery = keyword
+            for query in queries {
+                guard !Task.isCancelled else { return }
+                let candidate = (try? await r.search(keyword: query)) ?? []
+                if !candidate.isEmpty {
+                    results = candidate
+                    matchedQuery = query
+                    break
+                }
+            }
 
             if results.isEmpty {
-                // Some modules (e.g. animepahe) need a warm session before search works;
-                // retry once automatically before showing "Not Found".
+                // Retry only after trying the shorter title; don't add an 800ms
+                // delay before the "Blue Lock" fallback.
                 try await Task.sleep(nanoseconds: 800_000_000)
-                if Task.isCancelled { return }
-                results = try await r.search(keyword: keyword)
+                guard !Task.isCancelled else { return }
+                if let last = queries.last {
+                    matchedQuery = last
+                    results = (try? await r.search(keyword: last)) ?? []
+                }
             }
 
             if results.isEmpty {
                 settle(.notFound)
             } else {
-                // Surface the entry that matches the AniList title's season first, so multi-season
-                // shows (separate per-season entries) don't bury the right one behind look-alikes.
-                let ordered = SearchResultMatcher.ranked(query: originalAnimeTitle, items: results, title: { $0.title })
+                let ordered = SearchResultMatcher.ranked(
+                    query: matchedQuery, items: results, title: { $0.title })
                 settle(.searchResults(ordered))
             }
         } catch {
@@ -315,6 +656,10 @@ private final class ModuleStreamRowViewModel: ObservableObject {
     /// absolute position instead — but only when the list is actually long enough to contain
     /// that season, so single-season lists fall straight through to the existing logic.
     private func matchEpisode(from episodes: [EpisodeLink], target: Int, seasonOffset: Int = 0) -> EpisodeLink? {
+        let seasonMatch = ModuleSeasonFallback.aniWorldEpisode(
+            from: episodes, title: originalAnimeTitle, module: module, number: target)
+        if seasonMatch.handled { return seasonMatch.episode }
+
         let targetDouble = Double(target)
 
         // 0. Combined multi-season list: pick by absolute position.
@@ -400,6 +745,7 @@ private struct ModuleStreamRow: View {
     let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
 
     @ObservedObject var rowVm: ModuleStreamRowViewModel
+    let automaticSearch: Bool
     @State private var showAllResults = false
     @State private var showStreamPicker = false
     @AppStorage("autoPickLastStream") private var autoPickLastStream = false
@@ -410,6 +756,7 @@ private struct ModuleStreamRow: View {
         animeTitle: String,
         episodeNumber: Int,
         rowVm: ModuleStreamRowViewModel,
+        automaticSearch: Bool = true,
         onStreamsLoaded: @escaping ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
     ) {
         self.module = module
@@ -418,6 +765,7 @@ private struct ModuleStreamRow: View {
         self.episodeNumber = episodeNumber
         self.onStreamsLoaded = onStreamsLoaded
         self._rowVm = ObservedObject(wrappedValue: rowVm)
+        self.automaticSearch = automaticSearch
     }
 
     private var isPreferredModule: Bool {
@@ -437,7 +785,7 @@ private struct ModuleStreamRow: View {
         }
         .padding(.vertical, 6)
         .onAppear {
-            rowVm.startFind()
+            if automaticSearch { rowVm.startFind() }
         }
         .onDisappear {
             rowVm.cancelIfSearching()

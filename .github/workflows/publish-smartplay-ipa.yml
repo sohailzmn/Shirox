@@ -1,0 +1,42 @@
+name: Publish Smart Play IPA
+
+on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/publish-smartplay-ipa.yml"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release-ipa:
+    name: Publish compiled Smart Play IPA
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download completed and verified IPA artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p downloaded
+          gh run download 39551421966 --repo sohailzmn/Shirox --name Shirox-SmartPlay-IPA --dir downloaded
+      - name: Validate IPA payload and size
+        run: |
+          test -s downloaded/Shirox.ipa
+          unzip -tq downloaded/Shirox.ipa
+          unzip -Z1 downloaded/Shirox.ipa | grep '^Payload/Shirox.app/' >/dev/null
+          ls -lh downloaded/Shirox.ipa
+      - name: Publish downloadable IPA to a separate prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create smartplay-20261021 \
+            --repo sohailzmn/Shirox \
+            --target 3c05469417ba610bfdc8249a3d3de0314325f92b \
+            --title "Shirox Smart Play · 21 Oct 2026" \
+            --notes "Unsigned iOS IPA built from feature/smart-playback-recovery-20261021, with Smart Play, stream probe selection and buffer recovery. Sign with eSign before installing. Build run: https://github.com/sohailzmn/Shirox/actions/runs/39551421966" \
+            --prerelease
+          gh release upload smartplay-20261021 downloaded/Shirox.ipa \
+            --repo sohailzmn/Shirox --clobber

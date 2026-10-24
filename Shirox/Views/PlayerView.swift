@@ -105,7 +105,19 @@ struct PlayerView: View {
     @State private var skipSegments: SkipSegments?
     @State private var activeSkipSegment: SkipSegmentType?
     @State private var skippedSegments: Set<SkipSegmentType> = []
+    @State private var skipFetchTask: Task<Void, Never>?
+    @State private var didRequestSkipSegments = false
+    @State private var skipLookupAttempts = 0
+    @State private var nextSkipLookupAt: Date?
+    @State private var didAdvanceAfterCredits = false
+    @State private var lastCreditsAdvanceAttempt: Date?
+    @State private var upcomingEpisodeThumbnail: String?
+    @State private var upcomingEpisodeTitle: String?
+    @State private var previewEpisodeRequested: Int?
+    @State private var nextPreviewTask: Task<Void, Never>?
     @State private var skip85ButtonFrame: CGRect = .zero
+    // Netflix/Crunchyroll-style: show Skip Intro by default; automatic seeks
+    // remain opt-in under the existing player setting.
     @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = true
 
     // AniList tracking
@@ -143,6 +155,7 @@ struct PlayerView: View {
     @AppStorage("playerLiquidGlass") private var playerLiquidGlass = true
     @AppStorage("speedBoostTolerance") private var speedBoostTolerance: Int = 10
     @AppStorage("preferredQuality") private var preferredQuality: String = "auto"
+    @AppStorage("preferredAudioLanguage") private var preferredAudioLanguage: String = "auto"
     @State private var playbackSpeed: Double = 1.0
     @State private var volume: Float = 1.0
     @State private var showSubtitleSettings = false
@@ -160,6 +173,13 @@ struct PlayerView: View {
     @State private var stallRecoveryAttempts = 0
     @State private var isRecoveringStall = false
     @State private var showStallRetry = false
+    /// A session-only cap after repeated CDN stalls; never changes the user's saved preference.
+    @State private var stallQualityReduced = false
+    @State private var startupBitrateTask: Task<Void, Never>?
+    @State private var firstFrameWatchdog: Task<Void, Never>?
+    @State private var failedStreamURLs: Set<URL> = []
+    /// Shared budget across failed-item notifications, background recovery and stalled streams.
+    @State private var automaticRefetchAttempts = 0
     // When we were truly backgrounded (home/app-switch/lock), so foreground can tell a
     // brief resign-active from a suspension long enough to have killed the source.
     @State private var backgroundedAt: Date? = nil
@@ -186,6 +206,8 @@ struct PlayerView: View {
     }
 
     @State private var isSpeedBoosted = false
+    @State private var gestureHint: String?
+    @State private var gestureHintTask: Task<Void, Never>?
     @State private var isVideoScrubbing = false
     @State private var videoScrubTime: Double = 0
     @State private var videoScrubStartTime: Double = 0
@@ -196,6 +218,7 @@ struct PlayerView: View {
     // PiP (iOS only)
     #if os(iOS)
     @State private var pipTrigger = 0
+    @State private var miniSurfaceRefresh = 0
     #endif
 
     init(stream: StreamResult, streams: [StreamResult] = [], customDismiss: (() -> Void)? = nil, context: PlayerContext? = nil, onWatchNext: WatchNextLoader? = nil, onStreamExpired: StreamRefetchLoader? = nil, onSequelNeeded: SequelLoader? = nil, onSequelAdvanced: ((SequelNavigation) -> Void)? = nil, onFinished: ((PlayerContext) -> Void)? = nil) {
@@ -231,7 +254,18 @@ struct PlayerView: View {
             } else if let player {
                 #if os(iOS)
                 VideoLayerView(player: player, pipTrigger: pipTrigger,
-                               videoGravity: isFilled ? .resizeAspectFill : .resizeAspect)
+                               refreshToken: miniSurfaceRefresh,
+                               videoGravity: isFilled ? .resizeAspectFill : .resizeAspect,
+                               onFirstFrame: {
+                                   guard !videoReady else { return }
+                                   if let item = player.currentItem,
+                                      rejectTruncatedEpisodeIfNeeded(item) { return }
+                                   videoReady = true
+                                   showStallRetry = false
+                                   firstFrameWatchdog?.cancel()
+                                   firstFrameWatchdog = nil
+                                   PlaybackPerformance.shared.firstFrameReady()
+                               })
                     .ignoresSafeArea()
                     .overlay { videoLoadingOverlay }
                 #elseif os(tvOS)
@@ -295,11 +329,47 @@ struct PlayerView: View {
                 lockOverlayView
             }
 
-            if let segment = activeSkipSegment, !castManager.isConnected, skip85ButtonFrame != .zero {
+            if !castManager.isConnected, skip85ButtonFrame != .zero,
+               activeSkipSegment != nil || showNextEpisodePrompt {
                 ZStack(alignment: .topLeading) {
                     Color.clear
-                    PlayerSkipButton(segmentType: segment, onSkip: skipToSegmentEnd)
-                        .offset(x: skip85ButtonFrame.minX, y: skip85ButtonFrame.minY)
+                    HStack(spacing: 10) {
+                        if let segment = activeSkipSegment {
+                            PlayerSkipButton(segmentType: segment, onSkip: skipToSegmentEnd)
+                        }
+                        if showNextEpisodePrompt {
+                            Button {
+                                guard !isLoadingNextEpisode else { return }
+                                Task { @MainActor in await loadAndAdvance() }
+                            } label: {
+                                HStack(spacing: 10) {
+                                    CachedAsyncImage(
+                                        urlString: upcomingEpisodeThumbnail
+                                            ?? currentContext?.imageUrl ?? ""
+                                    )
+                                    .frame(width: 76, height: 44)
+                                    .clipped()
+                                    .clipShape(RoundedRectangle(cornerRadius: 7))
+
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text("UP NEXT · EP \((currentContext?.episodeNumber ?? 0) + 1)")
+                                            .font(.caption2.weight(.bold))
+                                            .foregroundStyle(.white.opacity(0.8))
+                                        Text(upcomingEpisodeTitle ?? "Play Next Episode")
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(.white)
+                                            .lineLimit(1)
+                                    }
+                                    Image(systemName: "play.fill")
+                                        .foregroundStyle(.white)
+                                }
+                                .padding(7)
+                                .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 13))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .offset(x: skip85ButtonFrame.minX, y: skip85ButtonFrame.minY)
                 }
                 .ignoresSafeArea()
                 .allowsHitTesting(true)
@@ -370,6 +440,10 @@ struct PlayerView: View {
             autoAdvanceTask?.cancel()
             autoAdvanceTask = nil
             prefetchTask?.cancel()
+            skipFetchTask?.cancel()
+            firstFrameWatchdog?.cancel()
+            startupBitrateTask?.cancel()
+            nextPreviewTask?.cancel()
             cancelStallWatchdog(resetAttempts: true)
             if let obs = timeObserver { player?.removeTimeObserver(obs) }
             rateObserver?.invalidate()
@@ -398,10 +472,25 @@ struct PlayerView: View {
             try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
             #endif
         }
+        #if os(iOS)
+        .onReceive(NotificationCenter.default.publisher(
+            for: Notification.Name("ShiroxMiniPlayerRestored"))) { _ in
+            miniSurfaceRefresh += 1
+        }
+        #endif
         .onChangeOf(volume) { newVolume in
             player?.volume = newVolume
             castManager.setVolume(newVolume)
         }
+        #if os(iOS)
+        .onChangeOf(player) { newPlayer in
+            // Stall recovery can replace the AVPlayer instance while the
+            // floating window is open. Rebind without restarting playback.
+            if let newPlayer {
+                PlayerPresenter.shared.refreshMiniPlayer(player: newPlayer)
+            }
+        }
+        #endif
         .onChangeOf(playbackSpeed) { newSpeed in
             if castManager.isConnected {
                 castManager.setPlaybackRate(Float(newSpeed))
@@ -724,9 +813,38 @@ struct PlayerView: View {
                 onSeekBackward: { skip(by: -Double(skipShort)); scheduleHide() },
                 onSeekForward: { skip(by: Double(skipShort)); scheduleHide() },
                 seekAmount: Double(skipShort),
-                isLocked: isLocked
+                isLocked: isLocked,
+                onVerticalSwipe: { rightSide, delta in
+                    #if os(iOS)
+                    guard !castManager.isConnected, !isLocked else { return }
+                    if rightSide {
+                        volume = min(1, max(0, volume + Float(delta)))
+                        player.volume = volume
+                        gestureHint = "Volume \(Int(volume * 100))%"
+                    } else {
+                        UIScreen.main.brightness = min(1, max(0, UIScreen.main.brightness + delta))
+                        gestureHint = "Brightness \(Int(UIScreen.main.brightness * 100))%"
+                    }
+                    gestureHintTask?.cancel()
+                    gestureHintTask = Task { @MainActor in
+                        try? await Task.sleep(nanoseconds: 950_000_000)
+                        guard !Task.isCancelled else { return }
+                        gestureHint = nil
+                    }
+                    #endif
+                }
             )
             .ignoresSafeArea()
+
+            if let gestureHint {
+                Text(gestureHint)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(.black.opacity(0.6), in: Capsule())
+                    .allowsHitTesting(false)
+            }
 
             #if os(iOS)
             if isSpeedBoosted {
@@ -899,6 +1017,13 @@ struct PlayerView: View {
                 pipTrigger += 1
                 #endif
             },
+            onMinimize: {
+                #if os(iOS)
+                if let player, !castManager.isConnected {
+                    PlayerPresenter.shared.minimizePlayer(player: player)
+                }
+                #endif
+            },
             topPadding: topPad,
             isLandscape: isLandscape
         )
@@ -929,7 +1054,8 @@ struct PlayerView: View {
             },
             onSliderDragChange: { dragTime in
                 videoScrubTime = dragTime
-                seekSmoothly(to: dragTime)
+                // Preview first; seek once on finger-up. Repeated seeks while
+                // also requesting video thumbnails cause HLS stalls.
             },
             onSliderDragEnd: {
                 isVideoScrubbing = false
@@ -958,6 +1084,15 @@ struct PlayerView: View {
             onNextEpisodeTap: (onWatchNext != nil || onSequelNeeded != nil) ? { Task { @MainActor in await loadAndAdvance() } } : nil,
             hasActiveSkipSegment: activeSkipSegment != nil,
             skipSegments: skipSegments,
+            previewAsset: {
+                guard let asset = player?.currentItem?.asset as? AVURLAsset else { return nil }
+                // HLS playlists need a sprite/index service; asking the CDN to
+                // seek for thumbnail extraction on every drag stalls playback.
+                let url = asset.url
+                let ext = url.pathExtension.lowercased()
+                return url.isFileURL || ["mp4", "mov", "m4v"].contains(ext)
+                    ? asset : nil
+            }(),
             episodeNumber: currentContext?.episodeNumber,
             tvdbEpisodeTitle: tvdbEpisodeTitle,
             mediaTitle: currentContext?.mediaTitle
@@ -1063,6 +1198,23 @@ struct PlayerView: View {
                         .background(Color.white, in: Capsule())
                 }
                 .buttonStyle(.plain)
+                if availableStreams.contains(where: { $0.url != currentStream.url }) {
+                    Menu {
+                        ForEach(availableStreams.filter { $0.url != currentStream.url }) { stream in
+                            Button(stream.title) {
+                                showStallRetry = false
+                                failedStreamURLs.removeAll()
+                                automaticRefetchAttempts = 0
+                                stallRecoveryAttempts = 0
+                                switchQuality(stream)
+                            }
+                        }
+                    } label: {
+                        Text("Choose Source")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
+                }
             }
             .padding(32)
 
@@ -1428,13 +1580,160 @@ struct PlayerView: View {
         scheduleHide()
     }
 
+    private func requestUpcomingPreviewIfNeeded() {
+        guard onWatchNext != nil, duration.isFinite, duration > 0,
+              duration - currentTime <= 120,
+              let context = currentContext else { return }
+        let next = context.episodeNumber + 1
+        guard previewEpisodeRequested != next else { return }
+        let id = context.aniListID ?? context.malID
+        guard let id else { return }
+        previewEpisodeRequested = next
+        let provider: ProviderType = context.aniListID == nil ? .mal : .anilist
+        nextPreviewTask?.cancel()
+        nextPreviewTask = Task { @MainActor in
+            let info = await TVDBMappingService.shared.getEpisode(
+                for: id, episodeNumber: next, provider: provider)
+            guard !Task.isCancelled, currentContext?.episodeNumber == next - 1 else { return }
+            upcomingEpisodeThumbnail = info?.thumbnail
+            upcomingEpisodeTitle = info?.title
+        }
+    }
+
+    private var showNextEpisodePrompt: Bool {
+        PlayerChapterTiming.shouldOfferNext(
+            at: currentTime, duration: duration, segments: skipSegments,
+            hasNext: onWatchNext != nil || onSequelNeeded != nil
+        )
+    }
+
+    /// Request time markers after AVPlayer reports the real length of this cut.
+    /// Cancel and reject stale replies when changing episode or stream URL.
+    private func requestSkipMetadataIfNeeded() {
+        guard !didRequestSkipSegments, skipLookupAttempts < 2,
+              nextSkipLookupAt.map({ Date() >= $0 }) ?? true,
+              let ctx = currentContext, ctx.aniListID != nil || ctx.malID != nil,
+              let item = player?.currentItem, item.status == .readyToPlay else { return }
+
+        // A hoster swap can leave the previous episode's duration in SwiftUI until
+        // AVPlayer publishes the replacement item's duration. Using the stale value
+        // rejects perfectly valid AniSkip runtime matches and hides both buttons.
+        let actualDuration = item.duration.seconds
+        guard actualDuration.isFinite, actualDuration > 60, actualDuration <= 14_400 else { return }
+
+        didRequestSkipSegments = true
+        skipLookupAttempts += 1
+        let retryIncomplete = skipLookupAttempts > 1
+        let ep = ctx.episodeNumber
+        var aniListID = ctx.aniListID
+        let initialMalID = ctx.malID ?? aniListID.flatMap {
+            IDMappingService.shared.cachedMalId(forAnilistId: $0)
+        }
+        let streamURL = currentStream.url
+
+        skipFetchTask = Task { @MainActor in
+            // Recover a missing MAL mapping so AniSkip can deliver verified
+            // opening/ending times. Older module contexts often carry only AniList ID.
+            var malID = initialMalID
+            if malID == nil, let aniListID {
+                malID = await IDMappingService.shared.malId(forAnilistId: aniListID)
+            }
+            guard !Task.isCancelled, player?.currentItem === item,
+                  currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+
+            if let malID, malID > 0 {
+                let fast = await SkipTimestampsService.shared.fetchFastSegments(
+                    malID: malID, episode: ep, playbackDuration: actualDuration,
+                    refreshIncomplete: retryIncomplete)
+                guard !Task.isCancelled, player?.currentItem === item,
+                      currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                if let fast {
+                    skipSegments = fast
+                    if fast.intro != nil && fast.credits != nil { return }
+                }
+            }
+
+            // Modules such as AniWorld may expose a whole franchise as episodes
+            // 1...75, while AniSkip indexes each TV season as episodes 1...25.
+            // Existing SeasonChainMapper already resolves that difference for
+            // tracking, but skip metadata previously never used it. Only attempt
+            // the slower season mapping after the instant raw lookup was
+            // incomplete. Never change the actual playback/progress episode.
+            var lookupEpisode = ep
+            if ep > 1, let mapped = await SeasonChainMapper.shared.resolve(
+                globalEpisode: ep, anchorAniListID: aniListID, anchorMALID: malID
+            ) {
+                guard !Task.isCancelled, player?.currentItem === item,
+                      currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                let mappedMAL = mapped.malID ?? mapped.aniListID.flatMap {
+                    IDMappingService.shared.cachedMalId(forAnilistId: $0)
+                }
+                let hasDifferentLookup = mapped.relativeEpisode != ep
+                    || (mappedMAL != nil && mappedMAL != malID)
+                if mapped.relativeEpisode > 0, hasDifferentLookup {
+                    lookupEpisode = mapped.relativeEpisode
+                    aniListID = mapped.aniListID ?? aniListID
+                    malID = mappedMAL ?? malID
+                    if let mappedMAL = mappedMAL, mappedMAL > 0 {
+                        let seasonSegments = await SkipTimestampsService.shared.fetchFastSegments(
+                            malID: mappedMAL, episode: lookupEpisode,
+                            playbackDuration: actualDuration, refreshIncomplete: retryIncomplete
+                        )
+                        guard !Task.isCancelled, player?.currentItem === item,
+                              currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                        if let seasonSegments {
+                            skipSegments = seasonSegments
+                            if seasonSegments.intro != nil && seasonSegments.credits != nil {
+                                return
+                            }
+                        }
+                    }
+                    Logger.shared.log(
+                        "[Skip] Season-aware lookup: episode \(ep) -> \(lookupEpisode), MAL \(malID.map(String.init) ?? "nil")",
+                        type: "Player"
+                    )
+                }
+            }
+
+            // MAL-only saved progress (including legacy Continue Watching entries)
+            // can fetch AniSkip directly. Resolve the reverse mapping only if we
+            // still need fallback metadata; never make fast AniSkip await it.
+            if aniListID == nil, let malID {
+                aniListID = await IDMappingService.shared.anilistId(forMALId: malID)
+            }
+            guard !Task.isCancelled, player?.currentItem === item,
+                  currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+
+            // Fallback remains manually skippable unless independently verified;
+            // no guessed automatic seeks or early auto-next transitions.
+            if let aniListID {
+                let result = await SkipTimestampsService.shared.fetchSegments(
+                    aniListID: aniListID, episodeNumber: lookupEpisode, malID: malID,
+                    playbackDuration: actualDuration, refreshIncomplete: retryIncomplete)
+                guard !Task.isCancelled, player?.currentItem === item,
+                      currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                if let result { skipSegments = result }
+            }
+
+            if PlayerChapterTiming.shouldRetryMissingChapters(skipSegments, attempts: skipLookupAttempts) {
+                // One bounded refresh while the viewer watches. A temporary API
+                // outage or incomplete ending result no longer lasts the whole episode.
+                nextSkipLookupAt = Date().addingTimeInterval(18)
+                didRequestSkipSegments = false
+            }
+        }
+    }
+
     private func skipToSegmentEnd() {
         guard let type = activeSkipSegment,
               let seg = skipSegments?.segment(for: type) else { return }
         skippedSegments.insert(type)
         activeSkipSegment = nil
+        // Match the automatic skip's keyframe tolerance: frame-exact HLS
+        // seeks can wedge on CDNs even though the clip boundary is correct.
+        let tolerance = CMTime(seconds: 0.3, preferredTimescale: 600)
         player?.seek(to: CMTime(seconds: seg.endMs / 1000, preferredTimescale: 600),
-                     toleranceBefore: .zero, toleranceAfter: .zero)
+                     toleranceBefore: tolerance, toleranceAfter: tolerance)
     }
 
     private func skip(by seconds: Double) {
@@ -1547,11 +1846,9 @@ struct PlayerView: View {
     }
 
     /// Suspends until the player has its first frame ready (`videoReady`) or a safety timeout
-    /// elapses, so deferred background work doesn't compete with the main-actor-bound initial
-    /// load + resume seek. `videoReady` is always flipped true eventually (on readyToPlay, on
-    /// seek completion, or by setupPlayer's own load timeout), so this can't hang indefinitely;
-    /// the timeout here is just a backstop. Polling mirrors how setupPlayer's load-timeout Task
-    /// reads `videoReady`.
+    /// elapses, so optional metadata work doesn't compete with actual video decoding.
+    /// A deadline never marks a frame as displayed: callers must check `videoReady`
+    /// after this returns. Failed URLs are handled by the retry overlay.
     @MainActor
     private func waitForVideoReady(timeout: TimeInterval = 12) async {
         guard !videoReady else { return }
@@ -1562,11 +1859,26 @@ struct PlayerView: View {
         }
     }
 
+    @MainActor
+    private func armFirstFrameWatchdog(for item: AVPlayerItem) {
+        firstFrameWatchdog?.cancel()
+        firstFrameWatchdog = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 12_000_000_000)
+            guard !Task.isCancelled, !videoReady,
+                  player?.currentItem === item else { return }
+            Logger.shared.log("[Player] No rendered first frame: offering retry", type: "Error")
+            isBuffering = false
+            showStallRetry = true
+        }
+    }
+
     private func setupPlayer() {
         if let obs = timeObserver { player?.removeTimeObserver(obs); timeObserver = nil }
         rateObserver?.invalidate(); rateObserver = nil
         audioGroup = nil
         #if os(iOS)
+        firstFrameWatchdog?.cancel()
+        firstFrameWatchdog = nil
         videoReady = false
         // Take audio focus now that a player is actually opening. This is what
         // interrupts system music — deliberately deferred from app launch.
@@ -1595,7 +1907,15 @@ struct PlayerView: View {
         } else {
             asset = AVURLAsset(url: currentStream.url)
         }
+        startupBitrateTask?.cancel()
         let item = AVPlayerItem(asset: asset)
+        // Begin automatic HLS conservatively. Expensive renditions can delay
+        // first frame significantly on mobile networks; once playback has been
+        // stable the bitrate cap is removed for normal AVPlayer adaptation.
+        if preferredQuality == "auto", !isLocalPlayback,
+           currentStream.url.pathExtension.lowercased() == "m3u8" {
+            item.preferredPeakBitRate = 2_000_000
+        }
         item.preferredForwardBufferDuration = 0 // Automatic: let AVPlayer size the buffer adaptively (YouTube-style ABR). A fixed value fights stall-minimization and prolongs stalls on flaky CDNs.
         item.canUseNetworkResourcesForLiveStreamingWhilePaused = true // Continue buffering when paused
         
@@ -1603,12 +1923,9 @@ struct PlayerView: View {
 
         Task {
             guard let group = try? await asset.loadMediaSelectionGroup(for: .audible) else { return }
-            await MainActor.run { audioGroup = group }
-            if currentStream.subtitle != nil {
-                let jaOptions = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "ja"))
-                if let jaOption = jaOptions.first {
-                    await MainActor.run { item.select(jaOption, in: group) }
-                }
+            await MainActor.run {
+                audioGroup = group
+                applyRememberedAudio(to: item, group: group, subtitle: currentStream.subtitle != nil)
             }
         }
         let p = AVPlayer(playerItem: item)
@@ -1624,14 +1941,31 @@ struct PlayerView: View {
         p.play() // Ensure player starts
         isPlaying = true
         player = p
+        if item.preferredPeakBitRate == 2_000_000 {
+            startupBitrateTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 10_000_000_000)
+                guard !Task.isCancelled, player?.currentItem === item,
+                      p.timeControlStatus == .playing, !isBuffering,
+                      selectedQualityBandwidth == nil, preferredQuality == "auto",
+                      !stallQualityReduced else { return }
+                item.preferredPeakBitRate = 0
+                Logger.shared.log("[ABR] Stable playback: restore automatic quality", type: "Player")
+            }
+        }
         bufferProgress = 0
         hlsQualities = []
         selectedQualityBandwidth = nil
+        stallQualityReduced = false
         let qualityURL = currentStream.url
         let qualityHeaders = currentStream.headers
         Task {
+            // The quality-menu manifest is optional metadata. Do not compete with the
+            // actual video segments for bandwidth before the first displayed frame.
+            await waitForVideoReady()
+            guard !Task.isCancelled, videoReady else { return }
             let qualities = await HLSQualityParser.parse(url: qualityURL, headers: qualityHeaders)
             await MainActor.run {
+                guard player?.currentItem === item, currentStream.url == qualityURL else { return }
                 hlsQualities = qualities
                 applyPreferredQuality()
             }
@@ -1643,9 +1977,8 @@ struct PlayerView: View {
                 isPlaying = status != .paused
                 isBuffering = status == .waitingToPlayAtSpecifiedRate
                 #if os(iOS)
-                if status == .playing && !videoReady && currentContext?.resumeFrom == nil {
-                    videoReady = true
-                }
+                // AVPlayer.timeControlStatus == .playing does not prove that
+                // any picture is visible. The layer's first-frame event does.
                 #endif
                 switch status {
                 case .waitingToPlayAtSpecifiedRate:
@@ -1656,7 +1989,9 @@ struct PlayerView: View {
                 case .playing:
                     // Playback resumed — clear any in-flight watchdog and reset the budget
                     // so each independent stall gets a fresh escalation.
-                    cancelStallWatchdog(resetAttempts: true)
+                    // A momentary 720p recovery must not reset the failure
+                    // budget and immediately trigger another 480p->720p loop.
+                    cancelStallWatchdog(resetAttempts: false)
                     // Sync the resume to the server for pauses that bypass togglePlayPause
                     // (Control Center, lock screen, interruption end). Skip while scrubbing
                     // (transient) and while casting (the local player is intentionally paused
@@ -1672,14 +2007,9 @@ struct PlayerView: View {
             }
         }
 
-        // Add a fallback to ensure we don't load forever
-        Task {
-            try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
-            if !videoReady {
-                Logger.shared.log("[Player] Loading timeout reached, forcing ready state", type: "Debug")
-                await MainActor.run { videoReady = true }
-            }
-        }
+        // Never hide the skeleton on a timer: an expired URL would produce
+        // the reported black 0:00 screen. Offer explicit recovery instead.
+        armFirstFrameWatchdog(for: item)
 
 
         let interval = CMTime(seconds: 0.5, preferredTimescale: 600)
@@ -1687,6 +2017,7 @@ struct PlayerView: View {
             guard !isScrubbing else { return }
             currentTime = time.seconds
             if let d = p?.currentItem?.duration, d.isNumeric { duration = d.seconds }
+            if let item = p?.currentItem, rejectTruncatedEpisodeIfNeeded(item) { return }
             if duration > 0, let ranges = p?.currentItem?.loadedTimeRanges {
                 let maxLoaded = ranges.compactMap { $0.timeRangeValue }
                     .map { $0.start.seconds + $0.duration.seconds }
@@ -1704,7 +2035,11 @@ struct PlayerView: View {
                         progress: progress,
                         threshold: watchedPercentage / 100.0,
                         hasLoader: onWatchNext != nil,
-                        alreadyStarted: didPrefetchNext) {
+                        alreadyStarted: didPrefetchNext,
+                        remainingSeconds: duration - currentTime,
+                        creditsStart: skipSegments?.autoNextCredits == true
+                            ? skipSegments?.credits?.startMs.map { $0 / 1_000 } : nil,
+                        currentTime: currentTime) {
                     didPrefetchNext = true
                     startPrefetchNext()
                 }
@@ -1723,38 +2058,52 @@ struct PlayerView: View {
                 // decode forward from the segment keyframe and frequently wedges in
                 // .waitingToPlayAtSpecifiedRate — the "won't stop buffering on resume" symptom.
                 p?.seek(to: CMTime(seconds: resumeFrom, preferredTimescale: 600)) { _ in
-                    // Always set ready, even if seek was interrupted
-                    DispatchQueue.main.async { videoReady = true }
+                    // A completed resume seek is not a rendered frame.
+                    // AVPlayerLayer.isReadyForDisplay ends the loading UI.
                 }
             }
             // Resume landed — stop steering nudges toward the (now reached) resume target.
             if let target = pendingResumeTarget, currentTime >= target - 3 {
                 pendingResumeTarget = nil
             }
+            requestSkipMetadataIfNeeded()
+            requestUpcomingPreviewIfNeeded()
             if let segments = skipSegments {
-                let timeMs = currentTime * 1000
-                var newActive: SkipSegmentType? = nil
-                for type in SkipSegmentType.allCases {
-                    if let seg = segments.segment(for: type) {
-                        let start = seg.startMs ?? 0
-                        if timeMs >= start && timeMs < seg.endMs {
-                            newActive = type
-                            break
+                let newActive = PlayerChapterTiming.activeSegment(
+                    at: currentTime, segments: segments)
+                if let type = newActive,
+                   autoSkipSegments && PlayerChapterTiming.shouldAutoSkip(type, segments: segments),
+                   !skippedSegments.contains(type), let seg = segments.segment(for: type) {
+                    skippedSegments.insert(type)
+                    activeSkipSegment = nil
+                    p?.seek(to: CMTime(seconds: seg.endMs / 1000, preferredTimescale: 600),
+                            toleranceBefore: CMTime(seconds: 0.3, preferredTimescale: 600),
+                            toleranceAfter: CMTime(seconds: 0.3, preferredTimescale: 600))
+                } else {
+                    // Let the user see Skip Intro again after rewinding,
+                    // even when an automatic skip already happened once.
+                    activeSkipSegment = newActive
+                }
+                // Advance as soon as the verified credits start. Auto Next means
+                // post-credit scenes are intentionally skipped.
+                if autoNextEpisode && onWatchNext != nil && isPlaying &&
+                   !isLoadingNextEpisode && !didAdvanceAfterCredits &&
+                   (lastCreditsAdvanceAttempt.map {
+                       Date().timeIntervalSince($0) >= 12
+                   } ?? true),
+                   PlayerChapterTiming.shouldAdvanceAtCreditsStart(
+                        at: currentTime, duration: duration, segments: segments) {
+                    didAdvanceAfterCredits = true
+                    lastCreditsAdvanceAttempt = Date()
+                    let originalEpisode = currentContext?.episodeNumber
+                    autoAdvanceTask = Task { @MainActor in
+                        await loadAndAdvance()
+                        if currentContext?.episodeNumber == originalEpisode {
+                            // The provider returned no new stream: allow another
+                            // attempt in 12 seconds instead of giving up forever.
+                            didAdvanceAfterCredits = false
                         }
                     }
-                }
-                if autoSkipSegments {
-                    if let type = newActive, !skippedSegments.contains(type),
-                       let seg = segments.segment(for: type) {
-                        skippedSegments.insert(type)
-                        activeSkipSegment = nil
-                        p?.seek(to: CMTime(seconds: seg.endMs / 1000, preferredTimescale: 600),
-                                toleranceBefore: .zero, toleranceAfter: .zero)
-                    } else {
-                        activeSkipSegment = newActive
-                    }
-                } else {
-                    activeSkipSegment = newActive
                 }
             }
             if let p { updateNowPlaying(player: p) }
@@ -1762,15 +2111,21 @@ struct PlayerView: View {
 
         setupPlaybackEndObserver(for: item)
 
+        skipFetchTask?.cancel()
+        skipFetchTask = nil
+        didRequestSkipSegments = false
+        skipLookupAttempts = 0
+        nextSkipLookupAt = nil
+        didAdvanceAfterCredits = false
+        lastCreditsAdvanceAttempt = nil
+        nextPreviewTask?.cancel()
+        nextPreviewTask = nil
+        previewEpisodeRequested = nil
+        upcomingEpisodeThumbnail = nil
+        upcomingEpisodeTitle = nil
         skipSegments = nil
         activeSkipSegment = nil
         skippedSegments = []
-        if let aid = currentContext?.aniListID, let ep = currentContext?.episodeNumber {
-            Task {
-                let result = await SkipTimestampsService.shared.fetchSegments(aniListID: aid, episodeNumber: ep)
-                skipSegments = result
-            }
-        }
 
         scheduleHide()
         #if os(iOS)
@@ -1956,10 +2311,12 @@ struct PlayerView: View {
                 guard player == nil || player?.currentItem === observedItem else { return }
                 switch status {
                 case .readyToPlay:
+                    if rejectTruncatedEpisodeIfNeeded(observedItem) { return }
+                    PlaybackPerformance.shared.playerReady()
                     Logger.shared.log("[Player] Item status: readyToPlay", type: "Debug")
                     // With a resume position the overlay stays up until the seek lands, so the
                     // user never sees a frame from the wrong position.
-                    if currentContext?.resumeFrom == nil { videoReady = true }
+                    // Wait for the actual AVPlayerLayer frame callback.
                 case .failed:
                     Logger.shared.log("[Player] Item failed: \(observedItem.error?.localizedDescription ?? "unknown error")", type: "Error")
                     guard canRecoverStream, !isRefetchingStream else {
@@ -1967,7 +2324,7 @@ struct PlayerView: View {
                         surfaceUnrecoverablePlayback()
                         return
                     }
-                    Task { @MainActor in await refetchStream() }
+                    Task { @MainActor in await recoverPlayback() }
                 case .unknown:
                     break
                 @unknown default:
@@ -2003,10 +2360,18 @@ struct PlayerView: View {
                     Task { @MainActor in await recoverPlayback() }
                     return
                 }
+                // A credits-triggered transition may already be resolving
+                // the next source. Don't run the same stateful loader twice.
+                guard !didAdvanceAfterCredits && !isLoadingNextEpisode else { return }
+                didAdvanceAfterCredits = true
+                let outgoing = currentContext?.episodeNumber
                 autoAdvanceTask = Task { @MainActor in
                     isPlaying = false
                     setControlsVisible(true)
                     if autoNextEpisode { await loadAndAdvance() }
+                    if currentContext?.episodeNumber == outgoing {
+                        didAdvanceAfterCredits = false
+                    }
                 }
             }
         )
@@ -2042,7 +2407,10 @@ struct PlayerView: View {
 
     /// Whether wedged/failed playback can be auto-recovered. Network streams re-extract a fresh
     /// URL via `onStreamExpired`; offline copies re-resolve the local file and restart the proxy.
-    private var canRecoverStream: Bool { onStreamExpired != nil || isLocalPlayback }
+    private var canRecoverStream: Bool {
+        onStreamExpired != nil || isLocalPlayback ||
+            availableStreams.contains(where: { $0.url != currentStream.url })
+    }
 
     /// Re-resolves the currently-playing downloaded episode to a fresh, server-backed local
     /// stream. The localhost HLS proxy's loopback sockets die across a long background, so the
@@ -2087,7 +2455,17 @@ struct PlayerView: View {
             swapStream(stream, episodeNumber: currentContext?.episodeNumber ?? 1, episodeHref: currentContext?.episodeHref)
             return
         }
-        guard let loader = onStreamExpired else { return }
+        failedStreamURLs.insert(currentStream.url)
+        guard let loader = onStreamExpired else {
+            // Modules that already returned several streams still have a recovery path.
+            if let alternative = preferredRecoveryStream(from: availableStreams) {
+                swapStream(alternative, episodeNumber: currentContext?.episodeNumber ?? 1,
+                           allStreams: availableStreams, episodeHref: currentContext?.episodeHref)
+            } else {
+                surfaceUnrecoverablePlayback()
+            }
+            return
+        }
         isRefetchingStream = true
         do {
             // Refetch the episode currently on screen, not the one the player launched with —
@@ -2102,19 +2480,14 @@ struct PlayerView: View {
                 surfaceUnrecoverablePlayback()
                 return
             }
-            let isSub = currentStream.subtitle != nil
-            
-            // Break down complex expression for compiler
-            let matchingStreams = streams.filter { $0.title == currentStream.title && ($0.subtitle != nil) == isSub }
-            let fallbackStreams = streams.filter { ($0.subtitle != nil) == isSub }
-            let titleMatchingStreams = streams.filter { $0.title == currentStream.title }
-            
-            let match = matchingStreams.first
-                ?? fallbackStreams.first
-                ?? titleMatchingStreams.first
-                ?? streams[0]
-
-            swapStream(match, episodeNumber: currentContext?.episodeNumber ?? 1, episodeHref: currentContext?.episodeHref)
+            // After a dead CDN, don't immediately retry the same hoster if another
+            // playable host was provided. Keep subtitle/audio mode when possible.
+            guard let match = preferredRecoveryStream(from: streams) else {
+                surfaceUnrecoverablePlayback()
+                return
+            }
+            swapStream(match, episodeNumber: currentContext?.episodeNumber ?? 1,
+                       allStreams: streams, episodeHref: currentContext?.episodeHref)
         } catch {
             Logger.shared.log("[StreamExpiry] Refetch failed: \(error.localizedDescription)", type: "Error")
             isRefetchingStream = false
@@ -2122,13 +2495,86 @@ struct PlayerView: View {
         }
     }
 
+    /// Select a different host first, then a fresh URL from the current host.
+    /// Avoid switching subtitle mode while recovering German dubbed playback.
+    private func preferredRecoveryStream(from candidates: [StreamResult]) -> StreamResult? {
+        let remaining = candidates.filter {
+            !failedStreamURLs.contains($0.url) && $0.url != currentStream.url
+        }
+        // Exhaustion is an error, not permission to oscillate between
+        // two previously failed 720p/480p stream URLs.
+        guard !remaining.isEmpty else { return nil }
+        let unused = remaining
+        let sameMode = unused.filter { ($0.subtitle != nil) == (currentStream.subtitle != nil) }
+        let pool = sameMode.isEmpty ? unused : sameMode
+        // Do not repeatedly oscillate between the same two dead URLs.
+        return pool.first(where: { $0.url.host != currentStream.url.host })
+            ?? pool.first(where: { $0.url != currentStream.url })
+            ?? pool.first
+    }
+
+    /// Temporarily lower HLS bandwidth on the first persistent stall.
+    /// This leaves saved/manual quality settings intact and skips casting/offline playback.
+    @MainActor
+    private func reduceQualityAfterStall() -> Bool {
+        guard !isLocalPlayback, !castManager.isConnected, !stallQualityReduced,
+              let item = player?.currentItem,
+              currentStream.url.pathExtension.lowercased() == "m3u8" else { return false }
+        let sorted = hlsQualities.sorted { $0.bandwidth < $1.bandwidth }
+        let lower = sorted.filter { (HLSQualityParser.height(of: $0) ?? Int.max) <= 480 }
+        if let preferred = lower.last ?? sorted.first {
+            guard selectedQualityBandwidth == nil ||
+                  selectedQualityBandwidth! > preferred.bandwidth else { return false }
+            stallQualityReduced = true
+            selectQuality(preferred.bandwidth)
+            Logger.shared.log("[StallRecovery] Switching to \(preferred.label)", type: "Player")
+        } else {
+            // The master playlist was unavailable, but AVPlayer can still
+            // adapt its own variants using a temporary maximum bitrate.
+            guard item.preferredPeakBitRate == 0 ||
+                  item.preferredPeakBitRate > 1_200_000 else { return false }
+            stallQualityReduced = true
+            item.preferredPeakBitRate = 1_200_000
+            Logger.shared.log("[StallRecovery] Adaptive low-bandwidth cap", type: "Player")
+        }
+        return true
+    }
+
     /// Ends the "we're still trying" state and offers a manual retry. Used wherever automatic
     /// recovery has run out of road, so playback never dead-ends on a silent black frame.
     @MainActor
     private func surfaceUnrecoverablePlayback() {
-        videoReady = true
+        // An error is not a decoded frame; keep the skeleton until a real frame arrives.
+        videoReady = false
         isBuffering = false
         showStallRetry = true
+    }
+
+    /// A clearly truncated remote asset (e.g. five-second placeholder) is not
+    /// a complete episode. Short locally imported user videos remain playable.
+    @MainActor
+    private func rejectTruncatedEpisodeIfNeeded(_ item: AVPlayerItem) -> Bool {
+        guard player?.currentItem === item else { return false }
+        guard PlaybackRouting.isClearlyTruncatedEpisode(
+            duration: item.duration.seconds,
+            hasEpisodeContext: currentContext?.episodeNumber != nil,
+            isLocalPlayback: isLocalPlayback
+        ) else { return false }
+        let rejectedURL = currentStream.url
+        guard !failedStreamURLs.contains(rejectedURL) else { return true }
+        failedStreamURLs.insert(rejectedURL)
+        videoReady = false
+        PlaybackPerformance.shared.rejectedInvalidEpisode()
+        Logger.shared.log(
+            "[Player] Rejected implausibly short online episode (\(item.duration.seconds)s); attempting fresh source",
+            type: "Error"
+        )
+        if canRecoverStream {
+            Task { @MainActor in await recoverPlayback() }
+        } else {
+            surfaceUnrecoverablePlayback()
+        }
+        return true
     }
 
     // MARK: - Stall Recovery
@@ -2179,14 +2625,15 @@ struct PlayerView: View {
         Logger.shared.log("[StallRecovery] Stall detected at \(currentTime)s — attempt \(attempt)", type: "Player")
 
         if attempt == 1 {
-            // Step 1: nudge. A zero-distance seek + playImmediately re-issues the
-            // segment requests that wedged, clearing most transient CDN stalls.
+            // 1. Brief network nudge, without switching URLs.
             nudgePlayer()
-            startStallWatchdog() // re-arm to escalate if the nudge didn't take
-        } else if attempt <= 3, canRecoverStream {
-            // Step 2: the source is likely dead — re-resolve it, preserving position. For a
-            // network stream this re-runs the extractor; for a downloaded copy it does a full
-            // clean rebuild (restart the local HLS proxy, fresh AVPlayer + reactivated session).
+            startStallWatchdog()
+        } else if attempt == 2 && reduceQualityAfterStall() {
+            // 2. Adaptive HLS downshift; only escalate if the player remains stuck.
+            nudgePlayer()
+            startStallWatchdog()
+        } else if attempt <= 4, canRecoverStream {
+            // 3. Re-resolve and prefer a different hoster when the previous one is dead.
             await recoverPlayback()
         } else {
             // Step 3: give up auto-recovery; let the user retry manually.
@@ -2212,9 +2659,16 @@ struct PlayerView: View {
     @MainActor
     private func recoverByRefetch() async {
         guard !isRecoveringStall else { return }
+        guard PlaybackRouting.canAttemptStreamRefetch(attempts: automaticRefetchAttempts) else {
+            Logger.shared.log("[StreamRecovery] Automatic refetch budget exhausted", type: "Error")
+            surfaceUnrecoverablePlayback()
+            return
+        }
+        automaticRefetchAttempts += 1
         isRecoveringStall = true
         defer { isRecoveringStall = false }
         let resumeAt = currentTime
+        failedStreamURLs.insert(currentStream.url)
         // swapStream unconditionally force-plays (rate up, isPlaying = true), so capture the
         // user's intent now — a recovery triggered while paused must stay paused, not start
         // playing on its own when the user returns to the app.
@@ -2312,11 +2766,16 @@ struct PlayerView: View {
         Logger.shared.log("[StallRecovery] Manual retry tapped", type: "Player")
         showStallRetry = false
         stallRecoveryAttempts = 0
+        automaticRefetchAttempts = 0
+        failedStreamURLs.removeAll() // A user-initiated retry starts a new recovery cycle.
         Task { @MainActor in
             if canRecoverStream {
                 await recoverPlayback()
             } else {
-                nudgePlayer()
+                // A failed AVPlayerItem cannot be repaired by seeking it again.
+                // Explicit Retry rebuilds the same source as a new item, whose
+                // first-frame timeout will surface the action again if it fails.
+                setupPlayer()
             }
         }
     }
@@ -2462,12 +2921,12 @@ struct PlayerView: View {
             Logger.shared.log("[PlayerView] Auto-selected single stream: \(result.streams[0].title)", type: "Debug")
             swapStream(result.streams[0], episodeNumber: result.episodeNumber, allStreams: result.streams, episodeHref: result.episodeHref)
         }
-        else {
-            Logger.shared.log("[PlayerView] Showing stream picker with \(result.streams.count) streams", type: "Debug")
-            nextEpisodeNumber = result.episodeNumber
-            nextEpisodeStreams = result.streams
-            nextEpisodeHref = result.episodeHref
-            showNextEpisodePicker = true
+        else if let fallback = result.streams.first {
+            // This is Auto Next, not a manual source-selection flow. Do not
+            // interrupt a series binge with a popup on hoster title mismatch.
+            Logger.shared.log("[PlayerView] Auto Next fallback to \(fallback.title)", type: "Player")
+            swapStream(fallback, episodeNumber: result.episodeNumber,
+                       allStreams: result.streams, episodeHref: result.episodeHref)
         }
     }
 
@@ -2561,7 +3020,19 @@ struct PlayerView: View {
 
     private func switchQuality(_ next: StreamResult) {
         guard next.url != currentStream.url else { return }
+        // A different file/hoster may be a different edit, so invalidate
+        // timing marks until the new item's true duration is available.
+        skipFetchTask?.cancel()
+        skipFetchTask = nil
+        skipSegments = nil
+        activeSkipSegment = nil
+        skippedSegments = []
+        didRequestSkipSegments = false
+        skipLookupAttempts = 0
+        nextSkipLookupAt = nil
+        didAdvanceAfterCredits = false
         let resumeAt = currentTime
+        duration = 0  // Wait for the replacement item's runtime before requesting skip marks.
         // While casting, quality is the receiver's business: rebuilding the local item would
         // leave the TV on the old rendition and (before this) start the new one on the phone.
         // Re-issue the chosen stream to the receiver at the position it had reached.
@@ -2584,10 +3055,27 @@ struct PlayerView: View {
         // watches the item it was given, so without this a dead URL after a quality switch was
         // never noticed at all.
         observeItemStatus(newItem)
+        #if os(iOS)
+        videoReady = false
+        armFirstFrameWatchdog(for: newItem)
+        #endif
         player?.replaceCurrentItem(with: newItem)
         subtitleTracks = next.allSubtitles ?? subtitleTracks
         currentStream = next
         player?.automaticallyWaitsToMinimizeStalling = !isLocalPlayback
+        hlsQualities = []
+        selectedQualityBandwidth = nil
+        // A manual host/source change must never inherit the previous item’s HLS ladder.
+        Task {
+            await waitForVideoReady()
+            guard !Task.isCancelled, videoReady else { return }
+            let levels = await HLSQualityParser.parse(url: next.url, headers: next.headers)
+            await MainActor.run {
+                guard player?.currentItem === newItem, currentStream.url == next.url else { return }
+                hlsQualities = levels
+                applyPreferredQuality()
+            }
+        }
         if let ctx = currentContext {
             currentContext = PlayerContext(mediaTitle: ctx.mediaTitle, episodeNumber: ctx.episodeNumber, episodeTitle: ctx.episodeTitle, imageUrl: ctx.imageUrl, aniListID: ctx.aniListID, malID: ctx.malID, moduleId: ctx.moduleId, totalEpisodes: ctx.totalEpisodes, availableEpisodes: ctx.availableEpisodes, isAiring: ctx.isAiring, resumeFrom: ctx.resumeFrom, detailHref: ctx.detailHref, episodeHref: ctx.episodeHref, streamTitle: next.title, workingDetailHref: ctx.workingDetailHref, thumbnailUrl: ctx.thumbnailUrl)
         }
@@ -2596,7 +3084,10 @@ struct PlayerView: View {
         loadSubtitles()
         Task {
             guard let group = try? await asset.loadMediaSelectionGroup(for: .audible) else { return }
-            await MainActor.run { audioGroup = group }
+            await MainActor.run {
+                audioGroup = group
+                applyRememberedAudio(to: newItem, group: group, subtitle: next.subtitle != nil)
+            }
         }
         // Seek to same position after item is ready
         Task { @MainActor in
@@ -2615,6 +3106,11 @@ struct PlayerView: View {
     }
 
     private func swapStream(_ next: StreamResult, episodeNumber: Int, allStreams: [StreamResult] = [], episodeHref: String? = nil) {
+        if currentContext?.episodeNumber != episodeNumber {
+            failedStreamURLs.removeAll()
+            automaticRefetchAttempts = 0
+            stallRecoveryAttempts = 0
+        }
         didTrackEpisode = false
         completionBox.context = nil
         // onWatchNext confirmed ep `episodeNumber` exists. If availableEpisodes is stale
@@ -2643,6 +3139,10 @@ struct PlayerView: View {
         // refetch recovery): without this, a dead URL on episode 2 onwards produced a black
         // screen with no refetch and no error — the launch item's observer no longer applies.
         observeItemStatus(newItem)
+        #if os(iOS)
+        videoReady = false
+        armFirstFrameWatchdog(for: newItem)
+        #endif
         player?.replaceCurrentItem(with: newItem)
         // THE BUG: this used to start the local player unconditionally. During a cast the
         // local player is deliberately parked and silent, so an auto-advance played episode 2
@@ -2678,6 +3178,7 @@ struct PlayerView: View {
         // otherwise keep network buffering armed on a file already sitting on disk.
         player?.automaticallyWaitsToMinimizeStalling = !isLocalPlayback
         if !allStreams.isEmpty { availableStreams = allStreams }
+        stallQualityReduced = false
         if let ctx = currentContext {
             // Don't carry the bumped availableEpisodes into the new episode's context — it makes
             // the new episode look like the last available, causing saveProgress() to skip the
@@ -2689,10 +3190,9 @@ struct PlayerView: View {
         audioGroup = nil
         Task {
             guard let group = try? await asset.loadMediaSelectionGroup(for: .audible) else { return }
-            await MainActor.run { audioGroup = group }
-            if next.subtitle != nil {
-                let jaOptions = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: "ja"))
-                if let jaOption = jaOptions.first { await MainActor.run { newItem.select(jaOption, in: group) } }
+            await MainActor.run {
+                audioGroup = group
+                applyRememberedAudio(to: newItem, group: group, subtitle: next.subtitle != nil)
             }
         }
         hlsQualities = []
@@ -2700,8 +3200,11 @@ struct PlayerView: View {
         let qualityURL = next.url
         let qualityHeaders = next.headers
         Task {
+            await waitForVideoReady()
+            guard !Task.isCancelled, videoReady else { return }
             let qualities = await HLSQualityParser.parse(url: qualityURL, headers: qualityHeaders)
             await MainActor.run {
+                guard player?.currentItem === newItem, currentStream.url == qualityURL else { return }
                 hlsQualities = qualities
                 applyPreferredQuality()
             }
@@ -2711,16 +3214,21 @@ struct PlayerView: View {
         loadSubtitles()
         tvdbEpisodeTitle = nil
         loadTVDBTitle()
+        skipFetchTask?.cancel()
+        skipFetchTask = nil
+        didRequestSkipSegments = false
+        skipLookupAttempts = 0
+        nextSkipLookupAt = nil
+        didAdvanceAfterCredits = false
+        lastCreditsAdvanceAttempt = nil
+        nextPreviewTask?.cancel()
+        nextPreviewTask = nil
+        previewEpisodeRequested = nil
+        upcomingEpisodeThumbnail = nil
+        upcomingEpisodeTitle = nil
         skipSegments = nil
         activeSkipSegment = nil
         skippedSegments = []
-        if let aid = currentContext?.aniListID {
-            let ep = episodeNumber
-            Task {
-                let result = await SkipTimestampsService.shared.fetchSegments(aniListID: aid, episodeNumber: ep)
-                skipSegments = result
-            }
-        }
         if swapTarget == .cast { castCurrentMedia(startTime: 0) }
         if let p = player { updateNowPlaying(player: p) }
         scheduleHide()
@@ -2731,20 +3239,49 @@ struct PlayerView: View {
     // Rebuilt on every open by PlayerMenuButton's deferred element, so state stays fresh.
 
     private func qualityMenuItems() -> [PlayerMenuItem] {
-        var items = [PlayerMenuItem(title: "Auto", isOn: selectedQualityBandwidth == nil) { selectQuality(nil) }]
+        var items = [PlayerMenuItem(title: "Auto", isOn: selectedQualityBandwidth == nil) {
+            preferredQuality = "auto"
+            selectQuality(nil)
+        }]
         items += hlsQualities.map { quality in
             PlayerMenuItem(title: quality.label, isOn: selectedQualityBandwidth == quality.bandwidth) {
+                if let height = HLSQualityParser.height(of: quality) {
+                    preferredQuality = String(height)
+                }
                 selectQuality(quality.bandwidth)
             }
         }
         return items
     }
 
+    @MainActor
+    private func applyRememberedAudio(
+        to item: AVPlayerItem, group: AVMediaSelectionGroup, subtitle: Bool
+    ) {
+        let language = preferredAudioLanguage
+        if language != "auto" {
+            let preferred = AVMediaSelectionGroup.mediaSelectionOptions(
+                from: group.options, with: Locale(identifier: language))
+            if let option = preferred.first {
+                item.select(option, in: group)
+                return
+            }
+        }
+        if subtitle {
+            let japanese = AVMediaSelectionGroup.mediaSelectionOptions(
+                from: group.options, with: Locale(identifier: "ja"))
+            if let option = japanese.first { item.select(option, in: group) }
+        }
+    }
+
     private func audioMenuItems() -> [PlayerMenuItem] {
         guard let group = audioGroup, let item = player?.currentItem else { return [] }
         let selected = item.currentMediaSelection.selectedMediaOption(in: group)
         return group.options.map { option in
-            PlayerMenuItem(title: option.displayName, isOn: option == selected) { item.select(option, in: group) }
+            PlayerMenuItem(title: option.displayName, isOn: option == selected) {
+                item.select(option, in: group)
+                preferredAudioLanguage = option.locale?.identifier ?? "auto"
+            }
         }
     }
 
@@ -2861,11 +3398,16 @@ final class MacPlayerWindowManager {
 struct VideoLayerView: UIViewRepresentable {
     let player: AVPlayer
     var pipTrigger: Int = 0
+    var refreshToken: Int = 0
     var videoGravity: AVLayerVideoGravity = .resizeAspect
+    var onFirstFrame: (() -> Void)? = nil
 
     class Coordinator: NSObject, AVPictureInPictureControllerDelegate, @unchecked Sendable {
         var pipController: AVPictureInPictureController?
         var lastPipTrigger: Int = 0
+        var lastRefreshToken: Int = 0
+        var frameCallback: (() -> Void)?
+        var displayReadyObservation: NSKeyValueObservation?
         private var foregroundObserver: NSObjectProtocol?
 
         override init() {
@@ -2893,6 +3435,13 @@ struct VideoLayerView: UIViewRepresentable {
 
     func makeUIView(context: Context) -> PlayerLayerUIView {
         let view = PlayerLayerUIView(player: player)
+        context.coordinator.frameCallback = onFirstFrame
+        context.coordinator.displayReadyObservation = view.playerLayer.observe(
+            \.isReadyForDisplay, options: [.initial, .new]
+        ) { [weak coordinator = context.coordinator] layer, _ in
+            guard layer.isReadyForDisplay else { return }
+            DispatchQueue.main.async { coordinator?.frameCallback?() }
+        }
         if AVPictureInPictureController.isPictureInPictureSupported() {
             let controller = AVPictureInPictureController(playerLayer: view.playerLayer)
             controller?.delegate = context.coordinator
@@ -2902,6 +3451,13 @@ struct VideoLayerView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PlayerLayerUIView, context: Context) {
+        context.coordinator.frameCallback = onFirstFrame
+        if refreshToken != context.coordinator.lastRefreshToken {
+            // Rebind after the separate mini AVPlayerLayer releases this
+            // playback session to avoid a black full-screen video surface.
+            context.coordinator.lastRefreshToken = refreshToken
+            uiView.player = nil
+        }
         uiView.player = player
         uiView.playerLayer.videoGravity = videoGravity
         if pipTrigger > context.coordinator.lastPipTrigger {
@@ -3116,18 +3672,15 @@ private struct SpeedBoostOverlay: UIViewRepresentable {
 
 #if os(iOS)
 class PlayerHostingController<Content: View>: UIHostingController<Content> {
-    private var panCoordinator: DragToDismissCoordinator?
-
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
         if #available(iOS 16.4, *) { safeAreaRegions = [] }
-        let coordinator = DragToDismissCoordinator(viewController: self)
-        panCoordinator = coordinator
-        let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(DragToDismissCoordinator.handlePan(_:)))
-        pan.cancelsTouchesInView = false
-        pan.delegate = coordinator
-        view.addGestureRecognizer(pan)
+        // Do not attach a second, full-screen vertical pan recognizer here.
+        // It used to slide the hosting controller off-screen and close playback
+        // on the same downward gesture that adjusts brightness/volume inside
+        // PlayerDoubleTapSeek. The player's own gesture surface now owns all
+        // vertical swipes; playback closes only through explicit UI controls.
     }
 
     override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
@@ -3154,29 +3707,4 @@ class PlayerHostingController<Content: View>: UIHostingController<Content> {
     override var prefersStatusBarHidden: Bool { true }
 }
 
-private final class DragToDismissCoordinator: NSObject, UIGestureRecognizerDelegate {
-    weak var viewController: UIViewController?
-    init(viewController: UIViewController) { self.viewController = viewController }
-    @objc func handlePan(_ gr: UIPanGestureRecognizer) {
-        guard let vc = viewController else { return }
-        let t = gr.translation(in: vc.view)
-        switch gr.state {
-        case .changed: vc.view.transform = CGAffineTransform(translationX: 0, y: max(0, t.y))
-        case .ended, .cancelled:
-            let v = gr.velocity(in: vc.view)
-            if t.y > 150 || v.y > 800 {
-                UIView.animate(withDuration: 0.25, delay: 0, options: .curveEaseIn, animations: { vc.view.transform = CGAffineTransform(translationX: 0, y: vc.view.bounds.height) }, completion: { _ in PlayerPresenter.shared.dragDismiss() })
-            } else {
-                UIView.animate(withDuration: 0.4, delay: 0, usingSpringWithDamping: 0.75, initialSpringVelocity: 1, options: []) { vc.view.transform = .identity }
-            }
-        default: break
-        }
-    }
-    func gestureRecognizerShouldBegin(_ gr: UIGestureRecognizer) -> Bool {
-        guard let pan = gr as? UIPanGestureRecognizer, let vc = viewController else { return true }
-        let v = pan.velocity(in: vc.view)
-        return v.y > 0 && v.y > abs(v.x)
-    }
-    func gestureRecognizer(_ gr: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool { true }
-}
 #endif

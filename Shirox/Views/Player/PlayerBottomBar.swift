@@ -1,4 +1,5 @@
 import SwiftUI
+import AVFoundation
 
 struct Skip85ButtonFramePreferenceKey: PreferenceKey {
     nonisolated(unsafe) static var defaultValue: CGRect = .zero
@@ -38,6 +39,7 @@ struct PlayerBottomBar: View {
     var onNextEpisodeTap: (() -> Void)? = nil
     var hasActiveSkipSegment: Bool = false
     var skipSegments: SkipSegments? = nil
+    var previewAsset: AVAsset? = nil
     var episodeNumber: Int? = nil
     var tvdbEpisodeTitle: String? = nil
     var mediaTitle: String? = nil
@@ -89,6 +91,7 @@ struct PlayerBottomBar: View {
                 duration: duration,
                 bufferProgress: bufferProgress,
                 skipSegments: skipSegments,
+                previewAsset: previewAsset,
                 onSeek: onSeek,
                 onDragStart: onSliderDragStart,
                 onDragChange: onSliderDragChange,
