@@ -1653,6 +1653,48 @@ struct PlayerView: View {
                 }
             }
 
+            // Modules such as AniWorld may expose a whole franchise as episodes
+            // 1...75, while AniSkip indexes each TV season as episodes 1...25.
+            // Existing SeasonChainMapper already resolves that difference for
+            // tracking, but skip metadata previously never used it. Only attempt
+            // the slower season mapping after the instant raw lookup was
+            // incomplete. Never change the actual playback/progress episode.
+            var lookupEpisode = ep
+            if ep > 1, let mapped = await SeasonChainMapper.shared.resolve(
+                globalEpisode: ep, anchorAniListID: aniListID, anchorMALID: malID
+            ) {
+                guard !Task.isCancelled, player?.currentItem === item,
+                      currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                let mappedMAL = mapped.malID ?? mapped.aniListID.flatMap {
+                    IDMappingService.shared.cachedMalId(forAnilistId: $0)
+                }
+                let hasDifferentLookup = mapped.relativeEpisode != ep
+                    || (mappedMAL != nil && mappedMAL != malID)
+                if mapped.relativeEpisode > 0, hasDifferentLookup {
+                    lookupEpisode = mapped.relativeEpisode
+                    aniListID = mapped.aniListID ?? aniListID
+                    malID = mappedMAL ?? malID
+                    if let mappedMAL = mappedMAL, mappedMAL > 0 {
+                        let seasonSegments = await SkipTimestampsService.shared.fetchFastSegments(
+                            malID: mappedMAL, episode: lookupEpisode,
+                            playbackDuration: actualDuration, refreshIncomplete: retryIncomplete
+                        )
+                        guard !Task.isCancelled, player?.currentItem === item,
+                              currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                        if let seasonSegments {
+                            skipSegments = seasonSegments
+                            if seasonSegments.intro != nil && seasonSegments.credits != nil {
+                                return
+                            }
+                        }
+                    }
+                    Logger.shared.log(
+                        "[Skip] Season-aware lookup: episode \(ep) -> \(lookupEpisode), MAL \(malID.map(String.init) ?? "nil")",
+                        type: "Player"
+                    )
+                }
+            }
+
             // MAL-only saved progress (including legacy Continue Watching entries)
             // can fetch AniSkip directly. Resolve the reverse mapping only if we
             // still need fallback metadata; never make fast AniSkip await it.
@@ -1666,7 +1708,7 @@ struct PlayerView: View {
             // no guessed automatic seeks or early auto-next transitions.
             if let aniListID {
                 let result = await SkipTimestampsService.shared.fetchSegments(
-                    aniListID: aniListID, episodeNumber: ep, malID: malID,
+                    aniListID: aniListID, episodeNumber: lookupEpisode, malID: malID,
                     playbackDuration: actualDuration, refreshIncomplete: retryIncomplete)
                 guard !Task.isCancelled, player?.currentItem === item,
                       currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
