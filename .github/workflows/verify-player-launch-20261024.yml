@@ -48,6 +48,11 @@ jobs:
           for wrong in ("Loading timeout reached, forcing ready state",
                         "if currentContext?.resumeFrom == nil { videoReady = true }"):
               assert wrong not in player,wrong
+          assert "DragToDismissCoordinator" not in player, "vertical swipes must not dismiss playback"
+          assert "view.addGestureRecognizer(pan)" not in player, "do not register fullscreen dismissal pans"
+          gestures=Path("Shirox/Views/Player/PlayerDoubleTapSeek.swift").read_text()
+          assert "handleVerticalPan(_ gr: UIPanGestureRecognizer)" in gestures
+          assert "onVerticalSwipe?(rightSide, delta)" in gestures
           assert "func presentResolvingEpisode(" in presenter
           assert "directResolver: onResolve" in presenter
           assert "func loadStreamsManually(for episode:" in module
