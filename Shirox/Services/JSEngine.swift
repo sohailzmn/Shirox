@@ -7,6 +7,7 @@ final class JSEngine: ObservableObject {
     static let shared = JSEngine()
 
     private(set) var context: JSContext
+    private var loadedModuleID: String?
 
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -25,9 +26,13 @@ final class JSEngine: ObservableObject {
     // MARK: - Module Loading
 
     func loadModule(_ module: ModuleDefinition) async throws {
-        // Clear cookies so the previous module's session doesn't bleed into this one
-        HTTPCookieStorage.shared.cookies?.forEach { HTTPCookieStorage.shared.deleteCookie($0) }
-        NetworkFetchManager.clearCookies()
+        // Only clear cookies when changing module identity. Reloading the same
+        // site after a user completed its Cloudflare check must not throw away
+        // that verified browsing session. Never auto-solve CAPTCHA challenges.
+        if loadedModuleID != module.id {
+            HTTPCookieStorage.shared.cookies?.forEach { HTTPCookieStorage.shared.deleteCookie($0) }
+            NetworkFetchManager.clearCookies()
+        }
 
         let script: String
         if let cached = module.scriptContent {
@@ -49,7 +54,9 @@ final class JSEngine: ObservableObject {
         context.evaluateScript(script)
         if let exception = context.exception {
             Logger.shared.log("[JSEngine] Script load error: \(exception)", type: "Error")
+            throw JSEngineError.jsError(exception.toString() ?? "Module script failed to load")
         }
+        loadedModuleID = module.id
     }
 
     // MARK: - Context Setup
