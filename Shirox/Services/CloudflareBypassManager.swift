@@ -274,8 +274,12 @@ final class CloudflareBypassManager: ObservableObject {
         // second sheet, then fall through (the cookie will be cached on success).
         if inProgressHosts.contains(host) {
             for _ in 0..<120 {
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                try await Task.sleep(nanoseconds: 250_000_000)
                 if !inProgressHosts.contains(host) { break }
+            }
+            // Waiting on another tab is not proof of a successful check.
+            guard cookie(for: host) != nil else {
+                throw CloudflareBypassError.verificationIncomplete
             }
             return
         }
