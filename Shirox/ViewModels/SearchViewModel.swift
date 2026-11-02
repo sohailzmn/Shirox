@@ -5,6 +5,9 @@ import Combine
 final class SearchViewModel: ObservableObject {
     @Published var moduleResults: [SearchItem] = []
     @Published var aniListResults: [Media] = []
+    @Published var liveActionResults: [LiveActionTitle] = []
+    @Published var liveActionLoading = false
+    @Published var liveActionError: String?
     @Published var isLoading = false
     @Published var errorMessage: String?
     @Published var query = ""
@@ -12,6 +15,7 @@ final class SearchViewModel: ObservableObject {
 
     private(set) var isUsingModule = false
     private var searchTask: Task<Void, Never>?
+    private var liveActionTask: Task<Void, Never>?
     private var cancellables = Set<AnyCancellable>()
 
     init() {
@@ -27,12 +31,27 @@ final class SearchViewModel: ObservableObject {
         let q = query.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { clearResults(); return }
         searchTask?.cancel()
+        liveActionTask?.cancel()
         isUsingModule = usingModule
         hasSearched = true
         isLoading = true
         errorMessage = nil
         moduleResults = []
         aniListResults = []
+        liveActionResults = []
+        liveActionError = nil
+        liveActionLoading = true
+        // An anime/module failure must not hide an independent live-action result.
+        liveActionTask = Task { @MainActor in
+            do {
+                let results = try await LiveActionCatalog.shared.search(q)
+                guard !Task.isCancelled, query.trimmingCharacters(in: .whitespaces) == q else { return }
+                liveActionResults = results
+            } catch {
+                if !Task.isCancelled { liveActionError = error.localizedDescription }
+            }
+            if !Task.isCancelled { liveActionLoading = false }
+        }
         searchTask = Task {
             do {
                 if usingModule {
@@ -94,14 +113,19 @@ final class SearchViewModel: ObservableObject {
 
     func clearResults() {
         searchTask?.cancel()
+        liveActionTask?.cancel()
         searchTask = nil
+        liveActionTask = nil
         moduleResults = []
         aniListResults = []
+        liveActionResults = []
+        liveActionLoading = false
+        liveActionError = nil
         isLoading = false
         errorMessage = nil
         hasSearched = false
     }
 
-    var hasResults: Bool { !moduleResults.isEmpty || !aniListResults.isEmpty }
-    var resultCount: Int { moduleResults.count + aniListResults.count }
+    var hasResults: Bool { !moduleResults.isEmpty || !aniListResults.isEmpty || !liveActionResults.isEmpty }
+    var resultCount: Int { moduleResults.count + aniListResults.count + liveActionResults.count }
 }
