@@ -18,14 +18,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 9c90ed354c7bac72b4f8d016f53498111c2b5422
+          ref: a9a7ace2fc9947d94a75470b31759f7234e33734
       - name: Show exact source revision
         run: |
           echo "Building git commit: $(git rev-parse HEAD)"
           echo "Branch: $GITHUB_REF_NAME"
           xcodebuild -version
           test "$GITHUB_REF_NAME" = "feature/smart-playback-recovery-20261021"
-          test "$(git rev-parse HEAD)" = "9c90ed354c7bac72b4f8d016f53498111c2b5422"
+          test "$(git rev-parse HEAD)" = "a9a7ace2fc9947d94a75470b31759f7234e33734"
       - name: Build unsigned iPhone IPA using existing project script
         run: |
           chmod +x ./buildipa.sh
@@ -51,11 +51,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="tv-movie-catalog-9c90ed354c7b"
+          TAG="tv-movie-catalog-a9a7ace2fc99"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --target "9c90ed354c7bac72b4f8d016f53498111c2b5422" \
-            --title "Shirox TV and Movie Catalog (unsigned) 9c90ed3" \
-            --notes "Unsigned iOS test IPA from source commit 9c90ed354c7bac72b4f8d016f53498111c2b5422. Adds TVmaze series and Apple movie catalog search with season lists, keeps manually verified source sessions on same-module reload, and includes prior player and skip fixes. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
+            --target "a9a7ace2fc9947d94a75470b31759f7234e33734" \
+            --title "Shirox TV and Movie Catalog (unsigned) a9a7ace" \
+            --notes "Unsigned iOS test IPA from source commit a9a7ace2fc9947d94a75470b31759f7234e33734. Adds TVmaze series and Apple movie catalog search with season lists, keeps manually verified source sessions on same-module reload, and includes prior player and skip fixes. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
             --prerelease
           gh release upload "$TAG" build/Shirox.ipa build/Shirox.ipa.sha256 \
             --repo "$GITHUB_REPOSITORY" --clobber
