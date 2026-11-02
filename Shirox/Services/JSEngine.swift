@@ -442,7 +442,7 @@ final class JSEngine: ObservableObject {
         }
     }
 
-    static func isTurnstileResponse(status: Int, body: String) -> Bool {
+    nonisolated static func isTurnstileResponse(status: Int, body: String) -> Bool {
         // Some sites return a 200 HTML "Just a moment" page or a 403
         // challenge without the word "Cloudflare". Never treat a normal
         // series page or an ordinary HTTP 403 as a challenge.
