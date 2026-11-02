@@ -174,3 +174,32 @@ final class AniListOutageClassificationTests: XCTestCase {
         XCTAssertFalse(AniListService.isAnnouncedOutage("This account has been disabled."))
     }
 }
+
+
+// Live-action metadata is intentionally independent of AniList/MAL accounts and
+// streaming modules. Search suffixes must resolve to the correct show's season.
+@MainActor
+final class LiveActionCatalogQueryTests: XCTestCase {
+    func testDexterResurrectedSeasonTwoUsesActualSeriesTitle() {
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("Dexter: Resurrected Season 2"),
+                       "Dexter: resurrection")
+        XCTAssertEqual(LiveActionCatalog.requestedSeason(in: "Dexter: Resurrected Season 2"), 2)
+    }
+
+    func testGermanSeasonSyntaxAlsoWorks() {
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("Dexter Resurrection Staffel 2"),
+                       "Dexter Resurrection")
+        XCTAssertEqual(LiveActionCatalog.requestedSeason(in: "Dexter Resurrection Staffel 2"), 2)
+    }
+
+    func testRegularSeriesAndFilmQueriesDoNotInventSeasons() {
+        XCTAssertNil(LiveActionCatalog.requestedSeason(in: "Interstellar"))
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("Dexter"), "Dexter")
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("The Dark Knight"), "The Dark Knight")
+    }
+
+    func testCompactSeasonSyntax() {
+        XCTAssertEqual(LiveActionCatalog.requestedSeason(in: "Dexter Resurrection S2"), 2)
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("Dexter Resurrection S2"), "Dexter Resurrection")
+    }
+}
