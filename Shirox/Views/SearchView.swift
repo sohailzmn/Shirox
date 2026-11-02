@@ -21,6 +21,7 @@ struct SearchView: View {
     // plays once a subtitle is chosen or explicitly skipped.
     @State private var pendingVideoURL: URL?
     @State private var pendingVideoTitle: String?
+    @State private var moduleEpisodeHint: String?
 
     private var isLocalModule: Bool { moduleManager.activeModule?.isLocalPlayback == true }
     private var isJellyfinModule: Bool { moduleManager.activeModule?.isJellyfin == true }
@@ -300,6 +301,12 @@ struct SearchView: View {
     private var resultsView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
+                if let moduleEpisodeHint, usingModule {
+                    Label(moduleEpisodeHint, systemImage: "info.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 16)
+                }
                 if !vm.aniListResults.isEmpty || !vm.moduleResults.isEmpty {
                     Text(usingModule ? "Streaming module" : "Anime")
                         .font(.title3.weight(.bold))
@@ -340,7 +347,12 @@ struct SearchView: View {
                     LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(vm.liveActionResults) { title in
                             NavigationLink {
-                                LiveActionDetailView(title: title, hasStreamingModule: usingModule) { name in
+                                LiveActionDetailView(title: title, hasStreamingModule: usingModule) { name, season, episode in
+                                    if let season, let episode {
+                                        moduleEpisodeHint = "Searching \(name) in the selected module. Choose Season \(season), Episode \(episode) from its results."
+                                    } else {
+                                        moduleEpisodeHint = nil
+                                    }
                                     vm.query = name
                                     vm.search(usingModule: true)
                                 }
@@ -641,7 +653,7 @@ private struct LiveActionPosterCard: View {
 private struct LiveActionDetailView: View {
     let title: LiveActionTitle
     let hasStreamingModule: Bool
-    let onSearchModule: (String) -> Void
+    let onSearchModule: (String, Int?, Int?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var seasons: [LiveActionSeason] = []
@@ -683,13 +695,18 @@ private struct LiveActionDetailView: View {
                     Button {
                         // Explicitly search the installed module; a catalog result does
                         // not claim any stream or hoster is available.
-                        onSearchModule(title.name)
+                        onSearchModule(title.name, nil, nil)
                         dismiss()
                     } label: {
                         Label("Search in selected streaming module", systemImage: "magnifyingglass")
                             .frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
+                    .tint(.blue)
+                } else if title.kind == .series {
+                    Label("Select a streaming module to search for episodes.", systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if title.kind == .series {
                     Text("Seasons & episodes").font(.headline)
@@ -711,20 +728,20 @@ private struct LiveActionDetailView: View {
                             }
                         }
                         ForEach(episodes) { episode in
-                            HStack(spacing: 8) {
-                                Text(episode.number.map { "E\($0)" } ?? "Special")
-                                    .font(.caption.monospacedDigit())
-                                    .foregroundStyle(.secondary)
-                                    .frame(width: 55, alignment: .leading)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(episode.name).font(.subheadline)
-                                    if let airdate = episode.airdate {
-                                        Text(airdate).font(.caption2).foregroundStyle(.secondary)
-                                    }
+                            let status = episode.releaseStatus()
+                            if status == .aired && hasStreamingModule {
+                                Button {
+                                    // Search only: the catalog doesn't provide a stream.
+                                    // Preserve the selected season/episode as an on-screen hint.
+                                    onSearchModule(title.name, activeSeason, episode.number)
+                                    dismiss()
+                                } label: {
+                                    episodeRow(episode, status: status, canSearch: true)
                                 }
-                                Spacer()
+                                .buttonStyle(.plain)
+                            } else {
+                                episodeRow(episode, status: status, canSearch: false)
                             }
-                            .padding(.vertical, 5)
                         }
                     }
                 }
@@ -744,6 +761,52 @@ private struct LiveActionDetailView: View {
             guard title.kind == .series else { return }
             await loadSeasons()
         }
+    }
+
+    private func episodeRow(
+        _ episode: LiveActionEpisode,
+        status: LiveActionReleaseStatus,
+        canSearch: Bool
+    ) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(episode.number.map { "E\($0)" } ?? "Special")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 50, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(episode.name).font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                HStack(spacing: 8) {
+                    if let airdate = episode.airdate {
+                        Text(airdate)
+                    }
+                    switch status {
+                    case .aired:
+                        Label("Aired", systemImage: "checkmark.circle")
+                    case .upcoming:
+                        Label("Upcoming", systemImage: "calendar")
+                    case .unknown:
+                        Text("Air date unknown")
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            if canSearch {
+                Label("Find", systemImage: "magnifyingglass")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.blue)
+            }
+        }
+        .padding(.vertical, 10)
+        .padding(.horizontal, 8)
+        .contentShape(Rectangle())
+        .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+        .accessibilityHint(canSearch
+            ? "Search for this aired episode in the selected module. A stream is not guaranteed."
+            : "TV catalog listing; no stream availability has been verified.")
     }
 
     private func loadSeasons() async {
