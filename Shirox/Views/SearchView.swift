@@ -144,9 +144,11 @@ struct SearchView: View {
                         : "Find any anime via \(primaryProvider.displayName)"
                 )
             }
-        } else if vm.isLoading {
+        } else if vm.hasResults {
+            resultsView
+        } else if vm.isLoading || vm.liveActionLoading {
             loadingView
-        } else if let err = vm.errorMessage {
+        } else if let err = vm.errorMessage ?? vm.liveActionError {
             emptyStateView(
                 icon: "exclamationmark.triangle",
                 title: "Something went wrong",
@@ -294,35 +296,73 @@ struct SearchView: View {
         return types
     }
 
-    // MARK: - Results Grid
+    // MARK: - Results: existing anime/modules plus independently indexed TV/film
     private var resultsView: some View {
         ScrollView {
-            LazyVGrid(columns: columns, spacing: 12) {
-                if !vm.aniListResults.isEmpty {
-                    ForEach(vm.aniListResults) { media in
-                        NavigationLink {
-                            AniListDetailView(mediaId: media.id, preloadedMedia: media)
-                        } label: {
-                            AniListCardView(media: media)
-                        }
-                        .buttonStyle(CardPressStyle())
-                    }
-                } else {
-                    ForEach(vm.moduleResults) { item in
-                        NavigationLink {
-                            if moduleManager.activeModule?.isManga == true {
-                                MangaDetailView(item: item)
-                            } else {
-                                DetailView(item: item)
+            LazyVStack(alignment: .leading, spacing: 18) {
+                if !vm.aniListResults.isEmpty || !vm.moduleResults.isEmpty {
+                    Text(usingModule ? "Streaming module" : "Anime")
+                        .font(.title3.weight(.bold))
+                        .padding(.horizontal, 16)
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(vm.aniListResults) { media in
+                            NavigationLink {
+                                AniListDetailView(mediaId: media.id, preloadedMedia: media)
+                            } label: {
+                                AniListCardView(media: media)
                             }
-                        } label: {
-                            AnimeCardView(item: item)
+                            .buttonStyle(CardPressStyle())
                         }
-                        .buttonStyle(CardPressStyle())
+                        ForEach(vm.moduleResults) { item in
+                            NavigationLink {
+                                if moduleManager.activeModule?.isManga == true {
+                                    MangaDetailView(item: item)
+                                } else {
+                                    DetailView(item: item)
+                                }
+                            } label: {
+                                AnimeCardView(item: item)
+                            }
+                            .buttonStyle(CardPressStyle())
+                        }
                     }
+                    .padding(.horizontal, 16)
+                }
+                if !vm.liveActionResults.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("TV Series & Movies")
+                            .font(.title3.weight(.bold))
+                        Text("Catalog metadata · TVmaze & Apple · Not guaranteed in streaming modules")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(vm.liveActionResults) { title in
+                            NavigationLink {
+                                LiveActionDetailView(title: title, hasStreamingModule: usingModule) { name in
+                                    vm.query = name
+                                    vm.search(usingModule: true)
+                                }
+                            } label: {
+                                LiveActionPosterCard(title: title)
+                            }
+                            .buttonStyle(CardPressStyle())
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+                if vm.isLoading || vm.liveActionLoading {
+                    HStack { ProgressView(); Text("Searching other sources…").font(.caption) }
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 16)
+                }
+                if let err = vm.errorMessage, !vm.liveActionResults.isEmpty {
+                    Label("Selected provider: \(err)", systemImage: "exclamationmark.triangle")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .padding(.horizontal, 16)
                 }
             }
-            .padding(.horizontal, 16)
             .padding(.top, 8)
             .padding(.bottom, 16)
             .animation(.easeInOut(duration: 0.25), value: vm.resultCount)
