@@ -9,6 +9,9 @@ on:
       - "Shirox/Views/ContinueWatchingCard.swift"
       - "Shirox/Views/DetailView.swift"
       - "Shirox/Views/ModuleStreamPickerView.swift"
+      - "Shirox/Services/CloudflareBypassManager.swift"
+      - "Shirox/Services/JSEngine.swift"
+      - "ShiroxTests/CloudflareBypassClearanceTests.swift"
       - "Shirox/Services/HLSQualityParser.swift"
       - "Shirox/Services/ModuleSearchAliasManager.swift"
       - "Shirox/Views/SettingsView.swift"
@@ -96,6 +99,7 @@ jobs:
           xcodebuild test -project Shirox.xcodeproj -scheme Shirox_iOS \
             -configuration Debug -destination "platform=iOS Simulator,id=$SIM_ID" \
             -derivedDataPath "$RUNNER_TEMP/InstantPlaybackTests" -skipPackagePluginValidation \
+            -only-testing:ShiroxTests/CloudflareBypassClearanceTests \
             -only-testing:ShiroxTests/PlayerNextEpisodePrefetchTests \
             -only-testing:ShiroxTests/SeasonChainMathTests \
             -only-testing:ShiroxTests/PlaybackRoutingTests \
