@@ -25,6 +25,9 @@ on:
       - "ShiroxTests/ContinueWatchingSeasonMatchTests.swift"
       - "ShiroxTests/EpisodeNavigatorTests.swift"
       - "ShiroxTests/HomeCacheStoreTests.swift"
+      - "Shirox/ViewModels/SearchViewModel.swift"
+      - "Shirox/Views/SearchView.swift"
+      - "ShiroxTests/ProviderFallbackChainTests.swift"
 concurrency:
   group: shirox-playback-regression-${{ github.ref }}
   cancel-in-progress: true
@@ -107,6 +110,7 @@ jobs:
             -only-testing:ShiroxTests/ContinueWatchingSeasonMatchTests \
             -only-testing:ShiroxTests/EpisodeNavigatorTests \
             -only-testing:ShiroxTests/HomeCacheStoreTests \
+            -only-testing:ShiroxTests/LiveActionCatalogQueryTests \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
             > "$RUNNER_TEMP/player-tests.log" 2>&1 || {
               grep -nE '(error:|failed|TEST FAILED)' "$RUNNER_TEMP/player-tests.log" | tail -75 || true
