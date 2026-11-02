@@ -154,11 +154,35 @@ struct LiveActionSeason: Identifiable, Decodable {
     let episodeCount: Int?
     let premiereDate: String?
 }
+enum LiveActionReleaseStatus: Equatable {
+    case aired
+    case upcoming
+    case unknown
+}
+
 struct LiveActionEpisode: Identifiable, Decodable {
     let id: Int
     let number: Int?
     let name: String
     let airdate: String?
+
+    /// TVmaze's airdate is YYYY-MM-DD. This indicates whether the announced
+    /// broadcast date has passed, NOT whether a video is licensed or playable
+    /// in any installed streaming module.
+    func releaseStatus(asOf date: Date = Date(), calendar: Calendar = .current) -> LiveActionReleaseStatus {
+        guard let airdate,
+              airdate.range(of: #"^\d{4}-\d{2}-\d{2}$"#, options: .regularExpression) != nil
+        else { return .unknown }
+
+        let parts = airdate.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3,
+              let day = calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2])),
+              calendar.component(.year, from: day) == parts[0],
+              calendar.component(.month, from: day) == parts[1],
+              calendar.component(.day, from: day) == parts[2]
+        else { return .unknown }
+        return day <= calendar.startOfDay(for: date) ? .aired : .upcoming
+    }
 }
 
 @MainActor
