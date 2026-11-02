@@ -1,4 +1,4 @@
-name: Build Shirox TV and Movie Catalog IPA (Unsigned)
+name: Build Shirox Dexter Episode Status IPA (Unsigned)
 on:
   push:
     branches:
@@ -12,20 +12,20 @@ permissions:
 
 jobs:
   ipa:
-    name: Build unsigned iPhone IPA with live-action catalog and session improvements
+    name: Build unsigned iPhone IPA with aired episode state and module search
     runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: a9a7ace2fc9947d94a75470b31759f7234e33734
+          ref: 50eeff37ae5ff5b5b16caa86a01a4768ffa2a169
       - name: Show exact source revision
         run: |
           echo "Building git commit: $(git rev-parse HEAD)"
           echo "Branch: $GITHUB_REF_NAME"
           xcodebuild -version
           test "$GITHUB_REF_NAME" = "feature/smart-playback-recovery-20261021"
-          test "$(git rev-parse HEAD)" = "a9a7ace2fc9947d94a75470b31759f7234e33734"
+          test "$(git rev-parse HEAD)" = "50eeff37ae5ff5b5b16caa86a01a4768ffa2a169"
       - name: Build unsigned iPhone IPA using existing project script
         run: |
           chmod +x ./buildipa.sh
@@ -51,11 +51,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="tv-movie-catalog-a9a7ace2fc99"
+          TAG="dexter-episode-fix-50eeff37ae5f"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --target "a9a7ace2fc9947d94a75470b31759f7234e33734" \
-            --title "Shirox TV and Movie Catalog (unsigned) a9a7ace" \
-            --notes "Unsigned iOS test IPA from source commit a9a7ace2fc9947d94a75470b31759f7234e33734. Adds TVmaze series and Apple movie catalog search with season lists, keeps manually verified source sessions on same-module reload, and includes prior player and skip fixes. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
+            --target "50eeff37ae5ff5b5b16caa86a01a4768ffa2a169" \
+            --title "Shirox Dexter Episode Fix (unsigned) 50eeff3" \
+            --notes "Unsigned iOS test IPA from source commit 50eeff37ae5ff5b5b16caa86a01a4768ffa2a169. Shows aired/upcoming status for live-action seasons and offers find-in-module on aired episodes, with a legible search button. Includes TVmaze series and Apple movie metadata and previous player fixes. Aired does not prove stream availability. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
             --prerelease
           gh release upload "$TAG" build/Shirox.ipa build/Shirox.ipa.sha256 \
             --repo "$GITHUB_REPOSITORY" --clobber
