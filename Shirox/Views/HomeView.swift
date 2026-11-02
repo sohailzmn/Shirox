@@ -61,6 +61,16 @@ struct HomeView: View {
                                 ContinueReadingSection(items: mangaProgress.items, readerContext: $readerContext)
                             }
                             #endif
+                            #if os(iOS)
+                            let suggestions = vm.recommendations(for: continueWatching.items)
+                            if !suggestions.isEmpty {
+                                AnimeSection(
+                                    title: "Because You Watched",
+                                    items: suggestions,
+                                    category: .trending
+                                )
+                            }
+                            #endif
                             if !vm.trending.isEmpty {
                                 AnimeSection(title: "Trending Now",     items: vm.trending, category: .trending)
                             }
@@ -137,6 +147,11 @@ struct HomeView: View {
             #endif
         }
         .task { await vm.load() }
+        #if os(iOS)
+        .task(id: continueWatching.items.first(where: { $0.aniListID != nil })?.aniListID) {
+            await vm.refreshPersonalization(from: continueWatching.items)
+        }
+        #endif
         .onAppear {
             #if os(iOS)
             PlayerPresenter.shared.resetToAppOrientation()

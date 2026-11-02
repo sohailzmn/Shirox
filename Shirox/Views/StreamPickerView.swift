@@ -17,11 +17,18 @@ struct StreamPickerView: View {
                 } else if vm.needsCloudflareVerification {
                     CloudflareVerifyView { vm.verifyCloudflare() }
                 } else if vm.streamOptions.isEmpty {
-                    ContentUnavailableView(
-                        "No Streams Found",
-                        systemImage: "antenna.radiowaves.left.and.right.slash",
-                        description: Text("Could not find any playable streams for this episode.")
-                    )
+                    VStack(spacing: 16) {
+                        ContentUnavailableView(
+                            "Stream Unavailable",
+                            systemImage: "antenna.radiowaves.left.and.right.slash",
+                            description: Text(vm.errorMessage
+                                ?? "Could not find any playable streams for this episode.")
+                        )
+                        if let episode = vm.selectedEpisode {
+                            Button("Retry") { vm.loadStreams(for: episode) }
+                                .buttonStyle(.borderedProminent)
+                        }
+                    }
                 } else {
                     List(vm.streamOptions, id: \.url) { stream in
                         Button {

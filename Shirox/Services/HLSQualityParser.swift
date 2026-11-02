@@ -41,7 +41,14 @@ enum HLSQualityParser {
         return digits.isEmpty ? nil : Int(digits)
     }
 
+    /// Never issue a large media-file GET just to inspect quality metadata.
+    /// Extensionless playlist endpoints remain adaptive in AVPlayer without a manual ladder.
+    static func supportsPlaylistInspection(_ url: URL) -> Bool {
+        url.pathExtension.lowercased() == "m3u8"
+    }
+
     static func parse(url: URL, headers: [String: String]) async -> [HLSQualityLevel] {
+        guard supportsPlaylistInspection(url) else { return [] }
         var request = URLRequest(url: url, timeoutInterval: 10)
         headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
 
@@ -50,7 +57,11 @@ enum HLSQualityParser {
             return []
         }
         let statusCode = (response as? HTTPURLResponse)?.statusCode ?? -1
-        guard let text = String(data: data, encoding: .utf8) else {
+        // HTTP challenge pages and CDN errors are not valid quality ladders.
+        guard (200..<300).contains(statusCode),
+              data.count <= 512_000,
+              let text = String(data: data, encoding: .utf8),
+              text.contains("#EXTM3U") else {
             Logger.shared.log("[HLSQuality] Could not decode response (status=\(statusCode)) for \(Logger.redact(url))", type: "Error")
             return []
         }

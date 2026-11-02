@@ -654,13 +654,18 @@ struct DetailView: View {
         let href = vm.detailHref ?? item.detailHref
         let currentEpCount = vm.detail?.episodes.isEmpty == false ? vm.detail?.episodes.count : nil
 
+        // Resume must preserve the saved MAL identity and recover a linked
+        // AniList identity; otherwise AniSkip silently receives neither ID.
+        let playbackIdentity = item.resolvedPlaybackIdentity(
+            linkedAniListID: vm.aniListID ?? aniListID
+        )
         let context = PlayerContext(
             mediaTitle: item.mediaTitle,
             episodeNumber: item.episodeNumber,
             episodeTitle: item.episodeTitle,
             imageUrl: item.imageUrl,
-            aniListID: item.aniListID,
-            malID: item.aniListID.flatMap { IDMappingService.shared.cachedMalId(forAnilistId: $0) },
+            aniListID: playbackIdentity.aniListID,
+            malID: playbackIdentity.malID,
             moduleId: item.moduleId,
             totalEpisodes: currentEpCount ?? item.totalEpisodes,
             availableEpisodes: currentEpCount ?? item.availableEpisodes,
@@ -694,6 +699,43 @@ struct DetailView: View {
         }}
 
         let storedStreams = item.allStreams?.compactMap { $0.asStreamResult } ?? []
+
+        // Detail-screen Continue Watching used to mount a stored CDN URL
+        // immediately. Those links expire, creating a black 0:00 screen.
+        // Reuse the exact same fullscreen skeleton as a normal episode tap.
+        let isLocal = url.isFileURL || url.host == "localhost" || url.host == "127.0.0.1"
+        if !isLocal, let onExpired {
+            PlaybackPerformance.shared.begin(title: item.mediaTitle, episode: item.episodeNumber)
+            PlayerPresenter.shared.presentResolvingEpisode(
+                title: item.mediaTitle, episode: item.episodeNumber,
+                artwork: item.imageUrl,
+                onResolve: {
+                    let streams = try await onExpired(item.episodeNumber, item.episodeHref)
+                    try Task.checkCancellation()
+                    guard !streams.isEmpty else {
+                        throw NSError(domain: "Shirox.Resume", code: 3,
+                            userInfo: [NSLocalizedDescriptionKey:
+                                "Could not find a fresh stream for this episode."])
+                    }
+                    let chosen = streams.first(where: { $0.title == item.streamTitle })
+                        ?? streams[0]
+                    PlayerPresenter.shared.presentPlayer(
+                        stream: chosen, streams: streams, context: context,
+                        onWatchNext: onWatchNext, onStreamExpired: onExpired,
+                        onFinished: nil)
+                },
+                onChooseSource: {
+                    if let episode = vm.detail?.episodes.first(where: {
+                        $0.href == item.episodeHref
+                    }) ?? vm.detail?.episodes.first(where: {
+                        Int($0.number) == item.episodeNumber
+                    }) {
+                        vm.loadStreamsManually(for: episode)
+                    }
+                }
+            )
+            return
+        }
 
         PlayerPresenter.shared.presentPlayer(
             stream: stream,
@@ -895,14 +937,24 @@ struct DetailView: View {
 
             LinearGradient(
                 stops: [
-                    .init(color: .clear, location: 0),
-                    .init(color: platformBackground.opacity(0.2), location: 0.45),
+                    .init(color: .black.opacity(0.14), location: 0),
+                    .init(color: .clear, location: 0.20),
+                    .init(color: platformBackground.opacity(0.18), location: 0.42),
+                    .init(color: platformBackground.opacity(0.78), location: 0.78),
                     .init(color: platformBackground, location: 1.0)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
             .frame(height: 420)
+
+            // Cinematic edge vignette improves title readability on bright banners.
+            LinearGradient(
+                colors: [.black.opacity(0.32), .clear, .black.opacity(0.18)],
+                startPoint: .leading, endPoint: .trailing
+            )
+            .frame(height: 420)
+            .allowsHitTesting(false)
 
             HStack(alignment: .bottom, spacing: 14) {
                 CachedAsyncImage(urlString: item.image)
@@ -916,7 +968,8 @@ struct DetailView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Text(item.title)
-                        .font(.title3.weight(.bold))
+                        .font(.system(size: 23, weight: .heavy, design: .rounded))
+                        .shadow(color: .black.opacity(0.4), radius: 12, y: 3)
                         .lineLimit(3)
                         .heroTitleAnchor(in: "detailScroll")
                         .copyTitleContextMenu(item.title)
@@ -1776,12 +1829,13 @@ struct DetailView: View {
             // where the user left off instead of restarting from 0 every time.
             // Anchor on the episode's unique href so a downloaded S2 E5 doesn't inherit
             // S1 E5's resume position when their numbers collide on a multi-season list.
-            let saved = ContinueWatchingManager.shared.items.first {
-                $0.matchesEpisode(number: item.episodeNumber, href: item.episodeHref)
-                    && (
-                        ($0.aniListID != nil && $0.aniListID == item.aniListID)
-                        || ($0.mediaTitle == item.mediaTitle && $0.moduleId == item.moduleId)
-                    )
+            let saved: ContinueWatchingItem? = ContinueWatchingManager.shared.items.first { cw in
+                guard cw.matchesEpisode(number: item.episodeNumber, href: item.episodeHref) else {
+                    return false
+                }
+                let matchingAniList = cw.aniListID != nil && cw.aniListID == item.aniListID
+                let matchingModule = cw.mediaTitle == item.mediaTitle && cw.moduleId == item.moduleId
+                return matchingAniList || matchingModule
             }
             // Don't auto-resume if the user has already finished the episode —
             // tapping a completed row should restart it.
@@ -1790,13 +1844,22 @@ struct DetailView: View {
                 return (s.watchedSeconds / s.totalSeconds) < 0.95 ? s.watchedSeconds : nil
             }()
 
+            // DownloadItem is not ContinueWatchingItem. Recover the cached
+            // chapter identity from saved progress when it exists.
+            let savedIdentity = saved?.resolvedPlaybackIdentity(
+                linkedAniListID: item.aniListID ?? aniListID
+            )
+            let playbackAniListID = savedIdentity?.aniListID ?? item.aniListID ?? aniListID
+            let playbackMALID = savedIdentity?.malID ?? playbackAniListID.flatMap {
+                IDMappingService.shared.cachedMalId(forAnilistId: $0)
+            }
             let context = PlayerContext(
                 mediaTitle: item.mediaTitle,
                 episodeNumber: item.episodeNumber,
                 episodeTitle: item.episodeTitle,
                 imageUrl: item.imageUrl,
-                aniListID: item.aniListID,
-                malID: item.aniListID.flatMap { IDMappingService.shared.cachedMalId(forAnilistId: $0) },
+                aniListID: playbackAniListID,
+                malID: playbackMALID,
                 moduleId: item.moduleId,
                 totalEpisodes: saved?.totalEpisodes,
                 availableEpisodes: saved?.availableEpisodes,

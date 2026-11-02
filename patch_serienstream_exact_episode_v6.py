@@ -36,7 +36,15 @@ new = '''        let webView = makeBypassWebView()
         webView.load(URLRequest(url: verificationURL))'''
 
 if old not in text:
-    raise SystemExit("v6: Cloudflare verification root URL block not found")
+    # Current Shirox already opens the exact challenged URL directly,
+    # including search paths. Reapplying the legacy transform must be harmless.
+    if 'webView.load(URLRequest(url: url))' in text and 'Opening challenged path' in text:
+        print("SerienStream v6: current implementation already opens the exact challenged URL")
+        raise SystemExit(0)
+    if 'webView.load(URLRequest(url: verificationURL))' in text:
+        print("SerienStream v6: exact challenged URL logic already present")
+        raise SystemExit(0)
+    raise SystemExit("v6: Cloudflare verification implementation changed unexpectedly")
 
 text = text.replace(old, new, 1)
 path.write_text(text, encoding="utf-8")

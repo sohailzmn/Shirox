@@ -2,8 +2,10 @@ import Foundation
 import Combine
 
 extension JSEngine {
-    func fetchStreams(episodeUrl: String) async throws -> [StreamResult] {
-        let json = try await callAsyncJS("extractStreamUrl", args: [episodeUrl])
+    func fetchStreams(episodeUrl: String, timeout: TimeInterval = 120) async throws -> [StreamResult] {
+        // A time limit applies to the entire JS resolver, including its hoster
+        // attempts. The default remains unchanged for existing providers.
+        let json = try await callAsyncJS("extractStreamUrl", args: [episodeUrl], timeout: timeout)
         let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Some modules return a raw URL string instead of JSON (e.g. animeheaven, animekai)

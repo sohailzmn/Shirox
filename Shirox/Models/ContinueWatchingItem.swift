@@ -54,6 +54,33 @@ struct ContinueWatchingItem: Identifiable, Codable, Hashable {
 }
 
 extension ContinueWatchingItem {
+    /// Recover the identity that AniSkip needs when older Continue Watching entries
+    /// only saved a MAL ID (or the user linked this module title afterwards).
+    /// Stored IDs are authoritative. Never interpret a MAL ID as an AniList ID.
+    func playbackIdentity(
+        mappedAniListID: Int? = nil, linkedAniListID: Int? = nil,
+        mappedMALID: Int? = nil
+    ) -> (aniListID: Int?, malID: Int?) {
+        let resolvedAniListID = aniListID ?? mappedAniListID ?? linkedAniListID
+        return (resolvedAniListID, malID ?? mappedMALID)
+    }
+
+    /// Resolve available cached links before mounting AVPlayer so both the
+    /// Home card and detail-screen resume use the same chapter metadata keys.
+    func resolvedPlaybackIdentity(linkedAniListID: Int? = nil) -> (aniListID: Int?, malID: Int?) {
+        let mappedAniListID = malID.flatMap {
+            IDMappingService.shared.cachedAnilistId(forMALId: $0)
+        }
+        let aid = aniListID ?? mappedAniListID ?? linkedAniListID
+        let mappedMALID = aid.flatMap {
+            IDMappingService.shared.cachedMalId(forAnilistId: $0)
+        }
+        return playbackIdentity(
+            mappedAniListID: mappedAniListID, linkedAniListID: linkedAniListID,
+            mappedMALID: mappedMALID
+        )
+    }
+
     /// True when this item refers to the episode identified by `number`/`href`.
     ///
     /// On a flat multi-season list episode *numbers* repeat (S1 1…12, S2 1…12), so matching an

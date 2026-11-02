@@ -80,6 +80,50 @@ final class SeasonChainMathTests: XCTestCase {
         XCTAssertNil(m, "episode past the last known cour must not map to a nonexistent ep")
     }
 
+    /// Kuroko's Basketball has three separate 25-episode season entries, but a
+    /// module may expose them as one 1...75 episode list. The skip service must
+    /// resolve AniSkip's season-local episode number before looking up chapters.
+    func testKurokoContinuousEpisode26MapsToSecondSeasonEpisode1() {
+        let siblings = [
+            SiblingSeason(aniListID: 11771, malID: 11771, tvdbSeason: 1,
+                          tvdbEpoffset: 0, episodeCount: 25),
+            SiblingSeason(aniListID: 16894, malID: 16894, tvdbSeason: 2,
+                          tvdbEpoffset: 0, episodeCount: 25),
+            SiblingSeason(aniListID: 24415, malID: 24415, tvdbSeason: 3,
+                          tvdbEpoffset: 0, episodeCount: 25)
+        ]
+        let second = SeasonChainMath.map(
+            globalEpisode: 26, anchorAniListID: 11771,
+            anchorMALID: 11771, siblings: siblings
+        )
+        XCTAssertEqual(second?.aniListID, 16894)
+        XCTAssertEqual(second?.relativeEpisode, 1)
+
+        let third = SeasonChainMath.map(
+            globalEpisode: 51, anchorAniListID: 11771,
+            anchorMALID: 11771, siblings: siblings
+        )
+        XCTAssertEqual(third?.aniListID, 24415)
+        XCTAssertEqual(third?.relativeEpisode, 1)
+    }
+
+    func testKurokoSeasonTwoLocalEpisodeDoesNotShiftToWrongSeason() {
+        let siblings = [
+            SiblingSeason(aniListID: 11771, malID: 11771, tvdbSeason: 1,
+                          tvdbEpoffset: 0, episodeCount: 25),
+            SiblingSeason(aniListID: 16894, malID: 16894, tvdbSeason: 2,
+                          tvdbEpoffset: 0, episodeCount: 25),
+            SiblingSeason(aniListID: 24415, malID: 24415, tvdbSeason: 3,
+                          tvdbEpoffset: 0, episodeCount: 25)
+        ]
+        let second = SeasonChainMath.map(
+            globalEpisode: 6, anchorAniListID: 16894,
+            anchorMALID: 16894, siblings: siblings
+        )
+        XCTAssertEqual(second?.aniListID, 16894)
+        XCTAssertEqual(second?.relativeEpisode, 6)
+    }
+
     // MARK: - priorEpisodeCount (forward offset for episode selection)
 
     /// The first season has no preceding episodes.

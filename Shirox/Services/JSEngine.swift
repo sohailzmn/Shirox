@@ -7,6 +7,7 @@ final class JSEngine: ObservableObject {
     static let shared = JSEngine()
 
     private(set) var context: JSContext
+    private var loadedModuleID: String?
 
     private let session: URLSession = {
         let config = URLSessionConfiguration.default
@@ -25,9 +26,13 @@ final class JSEngine: ObservableObject {
     // MARK: - Module Loading
 
     func loadModule(_ module: ModuleDefinition) async throws {
-        // Clear cookies so the previous module's session doesn't bleed into this one
-        HTTPCookieStorage.shared.cookies?.forEach { HTTPCookieStorage.shared.deleteCookie($0) }
-        NetworkFetchManager.clearCookies()
+        // Only clear cookies when changing module identity. Reloading the same
+        // site after a user completed its Cloudflare check must not throw away
+        // that verified browsing session. Never auto-solve CAPTCHA challenges.
+        if loadedModuleID != module.id {
+            HTTPCookieStorage.shared.cookies?.forEach { HTTPCookieStorage.shared.deleteCookie($0) }
+            NetworkFetchManager.clearCookies()
+        }
 
         let script: String
         if let cached = module.scriptContent {
@@ -49,7 +54,9 @@ final class JSEngine: ObservableObject {
         context.evaluateScript(script)
         if let exception = context.exception {
             Logger.shared.log("[JSEngine] Script load error: \(exception)", type: "Error")
+            throw JSEngineError.jsError(exception.toString() ?? "Module script failed to load")
         }
+        loadedModuleID = module.id
     }
 
     // MARK: - Context Setup
@@ -435,17 +442,31 @@ final class JSEngine: ObservableObject {
         }
     }
 
-    static func isTurnstileResponse(status: Int, body: String) -> Bool {
+    nonisolated static func isTurnstileResponse(status: Int, body: String) -> Bool {
+        // Some sites return a 200 HTML "Just a moment" page or a 403
+        // challenge without the word "Cloudflare". Never treat a normal
+        // series page or an ordinary HTTP 403 as a challenge.
+        guard status == 200 || status == 403 || status == 503 else { return false }
         let lower = body.lowercased()
-        guard lower.contains("cloudflare") else { return false }
-        let hasChallenge = lower.contains("cf-turnstile") ||
-               lower.contains("challenges.cloudflare.com") ||
-               lower.contains("__cf_chl_") ||
-               lower.contains("jschl") ||
-               lower.contains("challenge-platform") ||
-               lower.contains("cf-spinner")
-        guard hasChallenge else { return false }
-        return status == 403 || status == 503 || (status == 200 && lower.contains("just a moment"))
+        let challengeMarkers = lower.contains("cf-turnstile") ||
+            lower.contains("challenges.cloudflare.com") ||
+            lower.contains("__cf_chl_") ||
+            lower.contains("jschl") ||
+            lower.contains("challenge-platform") ||
+            lower.contains("cf-spinner") ||
+            lower.contains("cf-mitigated")
+        // Cloudflare often serves a 200 HTML challenge without explicitly
+        // printing the word "Cloudflare" in the rendered page.
+        let browserCheck = lower.contains("checking your browser") ||
+            lower.contains("verify you are human") ||
+            lower.contains("checking if the site connection is secure") ||
+            lower.contains("just a moment")
+        let challengePage = browserCheck &&
+            (lower.contains("<title") || lower.contains("cloudflare") ||
+             lower.contains("challenge"))
+        let brandedSecurityPage = lower.contains("security check") &&
+            (lower.contains("cloudflare") || lower.contains("challenge"))
+        return challengeMarkers || challengePage || brandedSecurityPage
     }
 
     static func jsStringLiteral(_ string: String) -> String {
