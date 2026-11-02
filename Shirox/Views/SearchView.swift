@@ -608,3 +608,162 @@ struct AniListCardView: View {
             .contentShape(Rectangle())
     }
 }
+
+
+// MARK: - Live action search cards (not a streaming source)
+private struct LiveActionPosterCard: View {
+    let title: LiveActionTitle
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            AsyncImage(url: title.posterURL.flatMap(URL.init(string:))) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                ZStack {
+                    Color.secondary.opacity(0.12)
+                    Image(systemName: title.kind == .movie ? "film" : "tv")
+                        .font(.title2).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .aspectRatio(2.0 / 3.0, contentMode: .fit)
+            .clipped()
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            Text(title.name).font(.subheadline.weight(.medium))
+                .foregroundStyle(.primary).lineLimit(2)
+            Text(title.kind.rawValue + (title.requestedSeason.map { " · Season \($0)" } ?? ""))
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+    }
+}
+
+private struct LiveActionDetailView: View {
+    let title: LiveActionTitle
+    let hasStreamingModule: Bool
+    let onSearchModule: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var seasons: [LiveActionSeason] = []
+    @State private var episodes: [LiveActionEpisode] = []
+    @State private var activeSeason: Int?
+    @State private var loading = false
+    @State private var errorText: String?
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .top, spacing: 14) {
+                    AsyncImage(url: title.posterURL.flatMap(URL.init(string:))) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Image(systemName: title.kind == .movie ? "film" : "tv")
+                            .resizable().scaledToFit().foregroundStyle(.secondary)
+                            .padding(25)
+                    }
+                    .frame(width: 112, height: 168)
+                    .clipped().clipShape(RoundedRectangle(cornerRadius: 10))
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(title.name).font(.title2.weight(.bold))
+                        Text(title.kind.rawValue).foregroundStyle(.secondary)
+                        if let date = title.releaseDate {
+                            Text(String(date.prefix(10))).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if let season = title.requestedSeason {
+                            Text("Requested season \(season)").font(.subheadline.weight(.semibold))
+                        }
+                    }
+                }
+                if let synopsis = title.synopsis, !synopsis.isEmpty {
+                    Text(synopsis.replacingOccurrences(of: "<[^>]+>", with: "",
+                                                    options: .regularExpression))
+                        .font(.subheadline)
+                }
+                if hasStreamingModule {
+                    Button {
+                        // Explicitly search the installed module; a catalog result does
+                        // not claim any stream or hoster is available.
+                        onSearchModule(title.name)
+                        dismiss()
+                    } label: {
+                        Label("Search in selected streaming module", systemImage: "magnifyingglass")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                if title.kind == .series {
+                    Text("Seasons & episodes").font(.headline)
+                    if loading { ProgressView() }
+                    if let errorText {
+                        Text(errorText).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !seasons.isEmpty {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack {
+                                ForEach(seasons) { season in
+                                    Button("Season \(season.number)") {
+                                        activeSeason = season.number
+                                        Task { await loadEpisodes(season) }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(activeSeason == season.number ? .primary : .secondary)
+                                }
+                            }
+                        }
+                        ForEach(episodes) { episode in
+                            HStack(spacing: 8) {
+                                Text(episode.number.map { "E\($0)" } ?? "Special")
+                                    .font(.caption.monospacedDigit())
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 55, alignment: .leading)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(episode.name).font(.subheadline)
+                                    if let airdate = episode.airdate {
+                                        Text(airdate).font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                }
+                                Spacer()
+                            }
+                            .padding(.vertical, 5)
+                        }
+                    }
+                }
+                if let urlString = title.sourceURL, let url = URL(string: urlString) {
+                    Link(title.kind == .series ? "TVmaze · Show metadata" : "Apple · Movie metadata",
+                         destination: url)
+                        .font(.footnote)
+                }
+                Text("Metadata only. An episode in this catalog is not proof of a stream being available.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .padding(18)
+        }
+        .navigationTitle(title.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .task {
+            guard title.kind == .series else { return }
+            await loadSeasons()
+        }
+    }
+
+    private func loadSeasons() async {
+        loading = true
+        defer { loading = false }
+        do {
+            let fetched = try await LiveActionCatalog.shared.seasons(showID: title.remoteID)
+            seasons = fetched.filter { $0.number > 0 }
+            if let selected = seasons.first(where: { $0.number == title.requestedSeason })
+                ?? seasons.first {
+                activeSeason = selected.number
+                await loadEpisodes(selected)
+            }
+        } catch { errorText = error.localizedDescription }
+    }
+
+    private func loadEpisodes(_ season: LiveActionSeason) async {
+        do {
+            episodes = try await LiveActionCatalog.shared.episodes(seasonID: season.id)
+            errorText = nil
+        } catch { errorText = error.localizedDescription }
+    }
+}
