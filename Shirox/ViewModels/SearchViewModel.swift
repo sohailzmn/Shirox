@@ -129,3 +129,147 @@ final class SearchViewModel: ObservableObject {
     var hasResults: Bool { !moduleResults.isEmpty || !aniListResults.isEmpty || !liveActionResults.isEmpty }
     var resultCount: Int { moduleResults.count + aniListResults.count + liveActionResults.count }
 }
+
+
+// MARK: - Independent live-action catalog
+// TVmaze provides TV-series metadata; Apple's Search API provides film metadata.
+// These are discovery sources, never streaming endpoints or anime list providers.
+enum LiveActionKind: String, Sendable { case series = "Series", movie = "Movie" }
+
+struct LiveActionTitle: Identifiable, Hashable, Sendable {
+    let id: String
+    let remoteID: Int
+    let kind: LiveActionKind
+    let name: String
+    let posterURL: String?
+    let synopsis: String?
+    let releaseDate: String?
+    let sourceURL: String?
+    let requestedSeason: Int?
+}
+
+struct LiveActionSeason: Identifiable, Decodable {
+    let id: Int
+    let number: Int
+    let episodeCount: Int?
+    let premiereDate: String?
+}
+struct LiveActionEpisode: Identifiable, Decodable {
+    let id: Int
+    let number: Int?
+    let name: String
+    let airdate: String?
+}
+
+@MainActor
+final class LiveActionCatalog {
+    static let shared = LiveActionCatalog()
+    private init() {}
+
+    static func requestedSeason(in query: String) -> Int? {
+        let pattern = #"(?i)\b(?:season|staffel|s)\s*(\d{1,2})\s*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: query, range: NSRange(query.startIndex..., in: query)),
+              let range = Range(match.range(at: 1), in: query) else { return nil }
+        return Int(query[range])
+    }
+    static func seriesQuery(_ query: String) -> String {
+        query.replacingOccurrences(of: #"(?i)\s*\b(?:season|staffel|s)\s*\d{1,2}\s*$"#,
+                                  with: "", options: .regularExpression)
+            .replacingOccurrences(of: "resurrected", with: "resurrection",
+                                  options: .caseInsensitive)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private struct ShowHit: Decodable { let show: Show }
+    private struct Show: Decodable {
+        let id: Int
+        let name: String
+        let summary: String?
+        let premiered: String?
+        let url: String?
+        let image: Poster?
+    }
+    private struct Poster: Decodable { let medium: String?; let original: String? }
+    private struct FilmResponse: Decodable { let results: [Film] }
+    private struct Film: Decodable {
+        let trackId: Int?
+        let trackName: String?
+        let artworkUrl100: String?
+        let longDescription: String?
+        let shortDescription: String?
+        let releaseDate: String?
+        let trackViewUrl: String?
+    }
+
+    private func read<T: Decodable>(_ url: URL, type: T.Type) async throws -> T {
+        var request = URLRequest(url: url)
+        request.setValue("Shirox/1.0 (TV/movie metadata discovery)", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 12
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+        guard (200..<300).contains(http.statusCode) else {
+            throw ProviderError.serverError(http.statusCode)
+        }
+        return try JSONDecoder().decode(T.self, from: data)
+    }
+
+    func search(_ query: String) async throws -> [LiveActionTitle] {
+        let season = Self.requestedSeason(in: query)
+        let clean = Self.seriesQuery(query)
+        async let series = searchShows(clean, season: season)
+        async let movies = searchFilms(clean)
+        let showResult = await series
+        let filmResult = await movies
+        try Task.checkCancellation()
+        if case .failure(let error) = showResult, case .failure = filmResult { throw error }
+        return ((try? showResult.get()) ?? []) + (season == nil ? ((try? filmResult.get()) ?? []) : [])
+    }
+
+    private func searchShows(_ query: String, season: Int?) async -> Result<[LiveActionTitle], Error> {
+        do {
+            var url = URLComponents(string: "https://api.tvmaze.com/search/shows")!
+            url.queryItems = [URLQueryItem(name: "q", value: query)]
+            let hits: [ShowHit] = try await read(url.url!, type: [ShowHit].self)
+            return .success(hits.prefix(20).map { entry in
+                LiveActionTitle(id: "tvmaze-\(entry.show.id)", remoteID: entry.show.id,
+                                kind: .series, name: entry.show.name,
+                                posterURL: entry.show.image?.medium ?? entry.show.image?.original,
+                                synopsis: entry.show.summary, releaseDate: entry.show.premiered,
+                                sourceURL: entry.show.url, requestedSeason: season)
+            })
+        } catch { return .failure(error) }
+    }
+
+    private func searchFilms(_ query: String) async -> Result<[LiveActionTitle], Error> {
+        do {
+            var url = URLComponents(string: "https://itunes.apple.com/search")!
+            url.queryItems = [
+                URLQueryItem(name: "term", value: query),
+                URLQueryItem(name: "country", value: "DE"),
+                URLQueryItem(name: "media", value: "movie"),
+                URLQueryItem(name: "entity", value: "movie"),
+                URLQueryItem(name: "limit", value: "20")
+            ]
+            let response: FilmResponse = try await read(url.url!, type: FilmResponse.self)
+            return .success(response.results.compactMap { film in
+                guard let id = film.trackId, let name = film.trackName else { return nil }
+                return LiveActionTitle(
+                    id: "itunes-\(id)", remoteID: id, kind: .movie, name: name,
+                    posterURL: film.artworkUrl100,
+                    synopsis: film.longDescription ?? film.shortDescription,
+                    releaseDate: film.releaseDate, sourceURL: film.trackViewUrl,
+                    requestedSeason: nil)
+            })
+        } catch { return .failure(error) }
+    }
+
+    func seasons(showID: Int) async throws -> [LiveActionSeason] {
+        try await read(URL(string: "https://api.tvmaze.com/shows/\(showID)/seasons")!,
+                       type: [LiveActionSeason].self)
+    }
+    func episodes(seasonID: Int) async throws -> [LiveActionEpisode] {
+        try await read(URL(string: "https://api.tvmaze.com/seasons/\(seasonID)/episodes")!,
+                       type: [LiveActionEpisode].self)
+    }
+}
