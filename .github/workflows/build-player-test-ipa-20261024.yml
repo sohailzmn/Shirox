@@ -1,4 +1,4 @@
-name: Build Shirox Gesture Fix IPA (Unsigned)
+name: Build Shirox TV and Movie Catalog IPA (Unsigned)
 on:
   push:
     branches:
@@ -12,20 +12,20 @@ permissions:
 
 jobs:
   ipa:
-    name: Build unsigned iPhone IPA with gesture and intro outro fixes
+    name: Build unsigned iPhone IPA with live-action catalog and session improvements
     runs-on: macos-26
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: 3b69f53eb3bbf1fcee7e4513c63a52a7ce1f819c
+          ref: 9c90ed354c7bac72b4f8d016f53498111c2b5422
       - name: Show exact source revision
         run: |
           echo "Building git commit: $(git rev-parse HEAD)"
           echo "Branch: $GITHUB_REF_NAME"
           xcodebuild -version
           test "$GITHUB_REF_NAME" = "feature/smart-playback-recovery-20261021"
-          test "$(git rev-parse HEAD)" = "3b69f53eb3bbf1fcee7e4513c63a52a7ce1f819c"
+          test "$(git rev-parse HEAD)" = "9c90ed354c7bac72b4f8d016f53498111c2b5422"
       - name: Build unsigned iPhone IPA using existing project script
         run: |
           chmod +x ./buildipa.sh
@@ -51,11 +51,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="gesture-fix-3b69f53eb3bb"
+          TAG="tv-movie-catalog-9c90ed354c7b"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --target "3b69f53eb3bbf1fcee7e4513c63a52a7ce1f819c" \
-            --title "Shirox Swipe Gesture Fix (unsigned) 3b69f53" \
-            --notes "Unsigned iOS test IPA from source commit 3b69f53eb3bbf1fcee7e4513c63a52a7ce1f819c. Removes conflicting fullscreen swipe-to-dismiss pan so vertical swipes adjust brightness or volume without closing playback. Includes Kuroko season-aware intro/outro markers and all prior Continue Watching fixes. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
+            --target "9c90ed354c7bac72b4f8d016f53498111c2b5422" \
+            --title "Shirox TV and Movie Catalog (unsigned) 9c90ed3" \
+            --notes "Unsigned iOS test IPA from source commit 9c90ed354c7bac72b4f8d016f53498111c2b5422. Adds TVmaze series and Apple movie catalog search with season lists, keeps manually verified source sessions on same-module reload, and includes prior player and skip fixes. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
             --prerelease
           gh release upload "$TAG" build/Shirox.ipa build/Shirox.ipa.sha256 \
             --repo "$GITHUB_REPOSITORY" --clobber
