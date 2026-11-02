@@ -448,12 +448,18 @@ final class JSEngine: ObservableObject {
             lower.contains("challenge-platform") ||
             lower.contains("cf-spinner") ||
             lower.contains("cf-mitigated")
-        let challengePage = (lower.contains("just a moment") ||
-            lower.contains("checking your browser") ||
+        // Cloudflare often serves a 200 HTML challenge without explicitly
+        // printing the word "Cloudflare" in the rendered page.
+        let browserCheck = lower.contains("checking your browser") ||
             lower.contains("verify you are human") ||
-            lower.contains("security check")) &&
+            lower.contains("checking if the site connection is secure") ||
+            lower.contains("just a moment")
+        let challengePage = browserCheck &&
+            (lower.contains("<title") || lower.contains("cloudflare") ||
+             lower.contains("challenge"))
+        let brandedSecurityPage = lower.contains("security check") &&
             (lower.contains("cloudflare") || lower.contains("challenge"))
-        return challengeMarkers || challengePage
+        return challengeMarkers || challengePage || brandedSecurityPage
     }
 
     static func jsStringLiteral(_ string: String) -> String {
