@@ -10,6 +10,8 @@ import Foundation
 
 enum CloudflareBypassError: Error {
     case timeout
+    case cancelled
+    case verificationIncomplete
 }
 
 extension Notification.Name {
@@ -264,7 +266,9 @@ final class CloudflareBypassManager: ObservableObject {
     func triggerBypass(for url: URL) async throws {
         guard let host = url.host else { return }
         if HostBlocklist.shared.isBlocked(url) { return }
-        if cookie(for: host) != nil { return }
+        // A new rejection invalidates cached clearance via flagPendingVerification.
+        // A cached cookie is sufficient only when no rejection is pending.
+        if cookie(for: host) != nil && pendingVerificationURL?.host != host { return }
 
         // Another caller is already solving this host — wait for it instead of opening a
         // second sheet, then fall through (the cookie will be cached on success).
@@ -279,9 +283,10 @@ final class CloudflareBypassManager: ObservableObject {
         defer { inProgressHosts.remove(host) }
 
         let webView = makeBypassWebView()
-        let rootUrl = URL(string: "\(url.scheme ?? "https")://\(host)/") ?? url
-        Logger.shared.log("[CFBypass] Loading \(rootUrl) for host \(host)", type: "Debug")
-        webView.load(URLRequest(url: rootUrl))
+        // A host's homepage can be public while a specific search/episode URL
+        // requires the challenge. Display the actual URL that failed.
+        Logger.shared.log("[CFBypass] Opening challenged path on \(host)", type: "Debug")
+        webView.load(URLRequest(url: url))
 
         activeBypassWebView = webView
         defer { activeBypassWebView = nil }
@@ -295,7 +300,9 @@ final class CloudflareBypassManager: ObservableObject {
         // 180 polls × 500 ms = 90 s
         for i in 0..<180 {
             try await Task.sleep(nanoseconds: 500_000_000)
-            guard activeBypassWebView != nil else { return }  // user cancelled
+            guard activeBypassWebView != nil else {
+                throw CloudflareBypassError.cancelled
+            }
             if let value = await cfClearanceCookie(for: host, in: webView) {
                 guard Date().timeIntervalSince(lastProbe) >= 2 else { continue }
                 lastProbe = Date()
