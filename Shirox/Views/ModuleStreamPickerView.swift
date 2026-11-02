@@ -431,6 +431,7 @@ private final class ModuleStreamRowViewModel: ObservableObject {
     @Published var selectedEpisodeActualHref: String?  // The matched episode's own unique href (anchors Next Episode)
     @Published var availableCount: Int?        // Track total episodes in this module result
     @Published var cloudflareURL: URL?         // Set when *this* module's runner hit a Turnstile wall
+    @Published var verificationError: String?   // Keep a failed or cancelled check visible
 
     /// Captures whether this row's runner hit Cloudflare, then transitions to a settled state.
     private func settle(_ newState: State) {
@@ -726,11 +727,23 @@ private final class ModuleStreamRowViewModel: ObservableObject {
 
     /// Runs the user-initiated Cloudflare challenge for this module, then re-runs the search.
     func verifyAndRetry() {
-        guard let url = cloudflareURL else { return }
+        guard let url = cloudflareURL, let host = url.host else { return }
+        verificationError = nil
         Task {
-            try? await CloudflareBypassManager.shared.triggerBypass(for: url)
-            reset()
-            startFind()
+            do {
+                try await CloudflareBypassManager.shared.triggerBypass(for: url)
+                guard CloudflareBypassManager.shared.cookie(for: host) != nil else {
+                    verificationError = "The website did not confirm verification."
+                    return
+                }
+                // Search only after a confirmed, user-completed challenge.
+                reset()
+                startFind()
+            } catch CloudflareBypassError.cancelled {
+                verificationError = "Verification cancelled. The search was not restarted."
+            } catch {
+                verificationError = "Website verification did not complete: \(error.localizedDescription)"
+            }
         }
     }
 }
@@ -984,6 +997,12 @@ private struct ModuleStreamRow: View {
     private var verifyBanner: some View {
         if rowVm.cloudflareURL != nil {
             CloudflareVerifyInlineButton { rowVm.verifyAndRetry() }
+            if let error = rowVm.verificationError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
