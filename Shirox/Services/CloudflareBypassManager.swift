@@ -259,87 +259,10 @@ final class CloudflareBypassManager: ObservableObject {
         #endif
     }
 
-    /// Presents a WKWebView sheet so the user can complete the Turnstile challenge.
-    /// Polls up to 90 s for a `cf_clearance` that a probe request confirms actually works,
-    /// then throws `.timeout`. The window has to be long enough for a human to find and tap
-    /// the Turnstile checkbox, since CF's cookie no longer tells us when they have.
+    /// Automatic website-verification windows are disabled in Shirox.
+    /// A refused request must be handled as a blocked source, not bypassed.
     func triggerBypass(for url: URL) async throws {
-        guard let host = url.host else { return }
-        if HostBlocklist.shared.isBlocked(url) { return }
-        // A new rejection invalidates cached clearance via flagPendingVerification.
-        // A cached cookie is sufficient only when no rejection is pending.
-        if cookie(for: host) != nil && pendingVerificationURL?.host != host { return }
-
-        // Another caller is already solving this host — wait for it instead of opening a
-        // second sheet, then fall through (the cookie will be cached on success).
-        if inProgressHosts.contains(host) {
-            for _ in 0..<120 {
-                try await Task.sleep(nanoseconds: 250_000_000)
-                if !inProgressHosts.contains(host) { break }
-            }
-            // Waiting on another tab is not proof of a successful check.
-            guard cookie(for: host) != nil else {
-                throw CloudflareBypassError.verificationIncomplete
-            }
-            return
-        }
-        inProgressHosts.insert(host)
-        defer { inProgressHosts.remove(host) }
-
-        let webView = makeBypassWebView()
-        // A host's homepage can be public while a specific search/episode URL
-        // requires the challenge. Display the actual URL that failed.
-        Logger.shared.log("[CFBypass] Opening challenged path on \(host)", type: "Debug")
-        webView.load(URLRequest(url: url))
-
-        activeBypassWebView = webView
-        defer { activeBypassWebView = nil }
-
-        // Throttles the probe below — it's a real network request against the walled host,
-        // and the cookie shows up within a second, so an unthrottled probe would fire on
-        // every one of the 500 ms polls.
-        var lastProbe = Date.distantPast
-        var loggedUnsolved = false
-
-        // 180 polls × 500 ms = 90 s
-        for i in 0..<180 {
-            try await Task.sleep(nanoseconds: 500_000_000)
-            guard activeBypassWebView != nil else {
-                throw CloudflareBypassError.cancelled
-            }
-            if let value = await cfClearanceCookie(for: host, in: webView) {
-                guard Date().timeIntervalSince(lastProbe) >= 2 else { continue }
-                lastProbe = Date()
-                guard await clearanceIsUsable(for: url, in: webView) else {
-                    if !loggedUnsolved {
-                        loggedUnsolved = true
-                        Logger.shared.log(
-                            "[CFBypass] \(host) has a cf_clearance but requests are still walled — challenge not solved yet",
-                            type: "Debug"
-                        )
-                    }
-                    continue
-                }
-                let fullHeader = await allCookiesHeader(for: host, in: webView)
-                let ua = (try? await webView.evaluateJavaScript("navigator.userAgent") as? String) ?? ""
-                // Log the cookie *names* only. The header's values include the live cf_clearance
-                // session token, and these logs are written to logs.txt and exported from
-                // Settings → App Logs — which is exactly what users paste into bug reports.
-                let cookieNames = fullHeader
-                    .split(separator: ";")
-                    .compactMap { $0.split(separator: "=", maxSplits: 1).first?.trimmingCharacters(in: .whitespaces) }
-                    .joined(separator: ",")
-                Logger.shared.log("[CFBypass] Got cf_clearance for \(host) after \(i + 1) polls, cookies=[\(cookieNames)]", type: "Debug")
-                store(cookie: value, cookieHeader: fullHeader, userAgent: ua, for: host)
-                bypassWebViews[host] = webView
-                if pendingVerificationURL?.host == host { pendingVerificationURL = nil }
-                // Let any placeholder'd images on this host retry now that we have a cookie.
-                NotificationCenter.default.post(name: .cloudflareBypassSolved, object: host)
-                return
-            }
-        }
-        Logger.shared.log("[CFBypass] Timeout waiting for cf_clearance for \(host)", type: "Error")
-        throw CloudflareBypassError.timeout
+        throw CloudflareBypassError.verificationIncomplete
     }
 
     func cancelActiveBypass() {
