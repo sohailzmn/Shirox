@@ -288,7 +288,10 @@ final class AutomaticPlaybackCoordinator {
                             .filter { PlaybackLanguagePolicy.priority($0) == language }
                         return try await self.verified(candidates, legacyModule: legacyModule)
                     }
-                } catch is CancellationError { throw CancellationError() }
+                } catch is CancellationError {
+                    if Task.isCancelled { throw CancellationError() }
+                    lastError = AutomaticPlaybackError.noStream
+                }
                 catch let error as ModuleStreamResolutionError { throw error }
                 catch { lastError = error }
             }
@@ -423,6 +426,7 @@ enum StreamPreflight {
     }
 
     static func check(_ stream: StreamResult, reader: Reader? = nil) async throws -> Bool {
+        guard !isPreviewURL(stream.url) else { return false }
         let fetch = reader ?? { try await read($0, headers: $1) }
         let (data, response) = try await fetch(stream.url, stream.headers)
         guard (200..<300).contains(response.statusCode) else { return false }
@@ -431,8 +435,17 @@ enum StreamPreflight {
             return try await checkSubtitle(stream, fetch: fetch)
         }
         guard response.mimeType?.hasPrefix("video/") == true, mediaBytes(data) else { return false }
+        let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
+        let duration = try await asset.load(.duration)
+        guard isEpisodeLength(duration.seconds) else { return false }
         return try await checkSubtitle(stream, fetch: fetch)
     }
+
+    static func isPreviewURL(_ url: URL) -> Bool {
+        let host = url.host?.lowercased() ?? ""
+        return host == "test-videos.co.uk" || host.hasSuffix(".test-videos.co.uk")
+    }
+    static func isEpisodeLength(_ seconds: Double) -> Bool { seconds.isFinite && seconds >= 30 }
 
     private static func checkSubtitle(_ stream: StreamResult, fetch: Reader) async throws -> Bool {
         guard PlaybackLanguagePolicy.code(stream.audioLanguage) != "de", !stream.isHardsub,
@@ -447,6 +460,12 @@ enum StreamPreflight {
         guard depth < 3, isPlaylist(data) else { return false }
         let text = String(decoding: data, as: UTF8.self)
         let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if text.contains("#EXT-X-ENDLIST") {
+            let duration = lines.filter { $0.hasPrefix("#EXTINF:") }.reduce(0.0) { sum, line in
+                sum + (Double(line.dropFirst(8).split(separator: ",").first.map(String.init) ?? "") ?? 0)
+            }
+            if !isEpisodeLength(duration) { return false }
+        }
         if text.contains("METHOD=SAMPLE-AES") { return false }
         guard let path = lines.first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
               let next = URL(string: path, relativeTo: url)?.absoluteURL else { return false }

@@ -1,4 +1,7 @@
 import Combine
+#if os(iOS)
+import UIKit
+#endif
 
 #if os(tvOS)
     import FakeWebKit
@@ -935,6 +938,13 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
         let jsCode = """
         (function() {
+            // A resolver observes media requests silently. Muted playback also
+            // lets normal HTML players initialise without an extra user tap.
+            const originalMediaPlay = HTMLMediaElement.prototype.play;
+            HTMLMediaElement.prototype.play = function() {
+                this.muted = true;
+                return originalMediaPlay.apply(this, arguments);
+            };
             const originalFetch = window.fetch;
             const originalXHROpen = XMLHttpRequest.prototype.open;
             const originalXHRSend = XMLHttpRequest.prototype.send;
@@ -1162,6 +1172,19 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         #endif
 
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080), configuration: config)
+        #if os(iOS)
+        if let webView {
+            let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }
+            if let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first(where: { !$0.isHidden }) {
+                webView.frame = window.bounds
+                webView.isUserInteractionEnabled = false
+                webView.accessibilityElementsHidden = true
+                // WebKit media initialisation depends on belonging to a window.
+                // Keep capture beneath the app without changing its layout.
+                window.insertSubview(webView, at: 0)
+            }
+        }
+        #endif
         #if !os(tvOS)
         webView?.navigationDelegate = self
         #endif
@@ -1347,6 +1370,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         timer = nil
 
         webView?.stopLoading()
+        #if os(iOS)
+        webView?.removeFromSuperview()
+        #endif
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "networkLogger")
 
         let originalUrl = options?.htmlContent != nil
@@ -1390,7 +1416,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
 #if !os(tvOS)
 extension NetworkFetchMonitor: WKNavigationDelegate {
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {}
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { performCustomInteractions() }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {}
     @available(iOS 15.0, macOS 13.0, *)
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {

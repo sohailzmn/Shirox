@@ -22,6 +22,12 @@ import UIKit
 ///    Now Playing had the same problem in reverse — it published the local player's rate and
 ///    clock, so Control Center showed "paused, 0:00" over a movie the TV was happily playing.
 final class PlaybackRoutingTests: XCTestCase {
+    func testRemoteDemoClipsCannotStandInForAnEpisode() {
+        XCTAssertTrue(StreamPreflight.isPreviewURL(URL(string:"https://test-videos.co.uk/bigbuckbunny/mp4-h264.mp4")!))
+        XCTAssertFalse(StreamPreflight.isEpisodeLength(10))
+        XCTAssertFalse(StreamPreflight.isEpisodeLength(.nan))
+        XCTAssertTrue(StreamPreflight.isEpisodeLength(1200))
+    }
     func testAnimeAndSeriesNeverUseEachOthersCatalogue() {
         XCTAssertTrue(SourceCatalogRouting.accepts("https://aniworld.to/anime/stream/spy-x-family", kind: .anime))
         XCTAssertFalse(SourceCatalogRouting.accepts("https://aniworld.to/anime/stream/spy-x-family", kind: .series))
@@ -76,7 +82,9 @@ final class PlaybackRoutingTests: XCTestCase {
             #if os(iOS)
             try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
             try? AVAudioSession.sharedInstance().setActive(true)
-            let window = UIWindow(frame: CGRect(x:0,y:0,width:640,height:360))
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.frame = scene.coordinateSpace.bounds
             let controller = UIViewController(); window.rootViewController = controller
             layer.frame = window.bounds; controller.view.layer.addSublayer(layer)
             window.makeKeyAndVisible()
