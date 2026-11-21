@@ -28,6 +28,12 @@ final class PlaybackRoutingTests: XCTestCase {
         XCTAssertFalse(StreamPreflight.isEpisodeLength(.nan))
         XCTAssertTrue(StreamPreflight.isEpisodeLength(1200))
     }
+    func testProviderNewTabReusesCaptureButHosterPopupsAreNotFollowed() {
+        let player = URL(string:"https://voe.sx/e/example")!
+        XCTAssertTrue(SourceCatalogRouting.canFollowPlayerWindow(from: URL(string:"https://serienstream.to/r?t=opaque"), to: player))
+        XCTAssertFalse(SourceCatalogRouting.canFollowPlayerWindow(from: player, to: URL(string:"https://ads.example/popup")!))
+        XCTAssertFalse(SourceCatalogRouting.canFollowPlayerWindow(from: URL(string:"https://serienstream.to/r"), to: URL(string:"https://127.0.0.1/private")!))
+    }
     func testAnimeAndSeriesNeverUseEachOthersCatalogue() {
         XCTAssertTrue(SourceCatalogRouting.accepts("https://aniworld.to/anime/stream/spy-x-family", kind: .anime))
         XCTAssertFalse(SourceCatalogRouting.accepts("https://aniworld.to/anime/stream/spy-x-family", kind: .series))

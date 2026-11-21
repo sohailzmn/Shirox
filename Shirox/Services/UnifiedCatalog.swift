@@ -8,6 +8,11 @@ enum CatalogKind: String, Codable, CaseIterable, Sendable {
 }
 
 enum SourceCatalogRouting {
+    static func canFollowPlayerWindow(from source: URL?, to target: URL) -> Bool {
+        guard let host = source?.host?.lowercased(), StreamPreflight.validRemoteURL(target) else { return false }
+        let name = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        return ["aniworld.to", "aniworld.cc", "serienstream.to", "serienstream.cx", "s.to"].contains(name)
+    }
     static func kind(for href: String) -> CatalogKind? {
         guard let url = URL(string: href), let host = url.host?.lowercased() else { return nil }
         let name = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host

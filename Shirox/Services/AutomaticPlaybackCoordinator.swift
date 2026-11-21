@@ -279,6 +279,7 @@ final class AutomaticPlaybackCoordinator {
         runner.allowsVerificationPrompt = false
         if legacyModule?.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true {
             var lastError: Error = AutomaticPlaybackError.noStream
+            var websiteBlocked = false
             for language in 0...2 {
                 try Task.checkCancellation()
                 do {
@@ -292,9 +293,10 @@ final class AutomaticPlaybackCoordinator {
                     if Task.isCancelled { throw CancellationError() }
                     lastError = AutomaticPlaybackError.noStream
                 }
-                catch let error as ModuleStreamResolutionError { throw error }
+                catch let error as ModuleStreamResolutionError { websiteBlocked = true; lastError = error }
                 catch { lastError = error }
             }
+            if websiteBlocked { throw AutomaticPlaybackError.websiteBlocked }
             throw lastError
         }
         let raw = try await PlaybackDeadline.run(seconds: 25) { try await runner.fetchStreams(episodeUrl: episodeHref, preflight: false) }

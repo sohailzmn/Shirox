@@ -1187,6 +1187,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         #endif
         #if !os(tvOS)
         webView?.navigationDelegate = self
+        webView?.uiDelegate = self
         #endif
     }
 
@@ -1425,6 +1426,21 @@ extension NetworkFetchMonitor: WKNavigationDelegate {
             addRequest(url.absoluteString)
         }
         return .allow
+    }
+}
+
+extension NetworkFetchMonitor: WKUIDelegate {
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard navigationAction.targetFrame == nil, let target = navigationAction.request.url else { return nil }
+        addRequest(target.absoluteString)
+        // Provider launch links may use window.open. Reuse the capture view;
+        // never follow advertising popups opened by a third-party hoster.
+        if SourceCatalogRouting.canFollowPlayerWindow(from: webView.url ?? URL(string: originalUrlString), to: target),
+           !HostBlocklist.shared.isBlocked(target) {
+            webView.load(navigationAction.request)
+        }
+        return nil
     }
 }
 #endif
