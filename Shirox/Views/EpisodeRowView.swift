@@ -2,6 +2,9 @@ import SwiftUI
 
 struct EpisodeRowView: View {
     let episode: EpisodeLink
+    /// Display local S2E3 as Episode 3 while keeping the global number
+    /// untouched for progress, downloads and unique episodeHref tracking.
+    var displayNumber: Int? = nil
     var progress: Double? = nil
     let onTap: () -> Void
     var onMarkWatched: (() -> Void)? = nil
@@ -55,7 +58,7 @@ struct EpisodeRowView: View {
                                     .font(.caption2.weight(.bold))
                                     .foregroundStyle(.white)   // green is dark enough in both modes
                             } else {
-                                Text(episode.displayNumber)
+                                Text(displayNumber.map(String.init) ?? episode.displayNumber)
                                     .font(.footnote.weight(.bold))
                                     .foregroundStyle(adaptiveBackground)   // ← now defined locally
                             }
@@ -64,7 +67,7 @@ struct EpisodeRowView: View {
                                 radius: 4, y: 2)
                     }
 
-                    Text("Episode \(episode.displayNumber)")
+                    Text("Episode \(displayNumber.map(String.init) ?? episode.displayNumber)")
                         .font(.callout.weight(.medium))
                         .foregroundStyle(.primary)
 

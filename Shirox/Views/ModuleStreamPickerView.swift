@@ -203,7 +203,7 @@ enum FastSourceDecision {
 
 /// Fast, non-interactive verification of public episode pages. This never
 /// attempts to solve CAPTCHAs or reuse another website's authentication.
-private enum VerifiedDirectEpisode {
+enum VerifiedDirectEpisode {
     private static func normalize(_ text: String) -> String {
         text.replacingOccurrences(of: "<[^>]*>", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "&amp;", with: "&")
