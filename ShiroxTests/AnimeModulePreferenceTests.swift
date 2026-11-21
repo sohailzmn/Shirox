@@ -191,4 +191,19 @@ final class AnimeModulePreferenceTests: XCTestCase {
         XCTAssertEqual(original.number, 13)
     }
 
+    func testTVmazeRequestedEpisodeIsNotAttachedToWrongDexterResult() {
+        XCTAssertTrue(CatalogModuleTitleMatch.matches(
+            candidateTitle: "Dexter: Wiedererwachen",
+            requestedTitle: "Dexter: Resurrection"))
+        XCTAssertTrue(CatalogModuleTitleMatch.matches(
+            candidateTitle: "Dexter: Resurrection (2025)",
+            requestedTitle: "Dexter: Resurrection"))
+        XCTAssertFalse(CatalogModuleTitleMatch.matches(
+            candidateTitle: "Dexter", requestedTitle: "Dexter: Resurrection"))
+        XCTAssertFalse(CatalogModuleTitleMatch.matches(
+            candidateTitle: "Dexter: New Blood", requestedTitle: "Dexter: Resurrection"))
+        XCTAssertFalse(CatalogModuleTitleMatch.matches(
+            candidateTitle: "Dexter: Wiedererwachen", requestedTitle: nil))
+    }
+
 }
