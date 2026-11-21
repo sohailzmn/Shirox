@@ -10,7 +10,7 @@ extension JSEngine {
         }
         return MediaDetail(
             title: title,
-            image: image,
+            image: (first["image"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? image,
             description: first["description"] as? String ?? "N/A",
             aliases: first["aliases"] as? String ?? "N/A",
             airdate: first["airdate"] as? String ?? "N/A",

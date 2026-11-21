@@ -164,10 +164,7 @@ final class ModuleJSRunner {
             throw JSEngineError.parseError("Could not parse stream result")
         }
 
-        if obj["blockedReason"] as? String == "website_verification_required" {
-            throw ModuleStreamResolutionError.websiteVerificationRequired
-        }
-        return parseStreamResults(from: obj)
+        return try parseResolvedStreamResults(from: obj)
     }
 
     // MARK: - Promise resolution

@@ -17,6 +17,45 @@ import XCTest
 ///    Now Playing had the same problem in reverse — it published the local player's rate and
 ///    clock, so Control Center showed "paused, 0:00" over a movie the TV was happily playing.
 final class PlaybackRoutingTests: XCTestCase {
+    func testWebsiteChallengeIsNotAnEmptyVideoResult() {
+        XCTAssertThrowsError(try parseResolvedStreamResults(from: [
+            "streams": [], "blockedReason": "website_verification_required"
+        ])) { error in
+            guard case ModuleStreamResolutionError.websiteVerificationRequired = error else {
+                return XCTFail("Expected a website verification error, got \(error)")
+            }
+        }
+    }
+
+    func testPlayableMirrorWinsOverBlockedMirror() throws {
+        let streams = try parseResolvedStreamResults(from: [
+            "streams": [["streamUrl": "https://media.example/video.m3u8"]],
+            "blockedReason": "website_verification_required"
+        ])
+        XCTAssertEqual(streams.count, 1)
+    }
+
+    func testOrdinaryEmptyResultDoesNotClaimWebsiteVerification() throws {
+        XCTAssertTrue(try parseResolvedStreamResults(from: ["streams": []]).isEmpty)
+    }
+
+    func testSeriesSourceDoesNotUseAnimeMetadataMatching() {
+        XCTAssertTrue(DetailViewModel.isSeriesSource("https://serienstream.to/serie/dexter"))
+        XCTAssertTrue(DetailViewModel.isSeriesSource("https://s.to/serie/stream/dexter"))
+        XCTAssertFalse(DetailViewModel.isSeriesSource("https://aniworld.to/anime/stream/naruto"))
+        XCTAssertFalse(DetailViewModel.isSeriesSource("https://serienstream.to.evil.example/serie/dexter"))
+    }
+
+    func testDexterSourceEpisodeNumberPreservesProgressIdentity() {
+        let context = PlayerContext(
+            mediaTitle: "Dexter", episodeNumber: 12, episodeTitle: nil, imageUrl: "",
+            aniListID: nil, malID: nil, moduleId: nil, totalEpisodes: nil,
+            availableEpisodes: nil, isAiring: nil, resumeFrom: nil, detailHref: nil,
+            episodeHref: "https://serienstream.to/serie/dexter/staffel-2/episode-6",
+            streamTitle: nil, workingDetailHref: nil, thumbnailUrl: nil)
+        XCTAssertEqual(context.sourceEpisodeNumber, 6)
+        XCTAssertEqual(context.episodeNumber, 12)
+    }
     // MARK: - Premature end-of-item (the interrupted-playback data loss)
 
     /// THE BUG: a stream that died mid-episode posted `didPlayToEndTime`, the player took it

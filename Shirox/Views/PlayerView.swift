@@ -762,7 +762,7 @@ struct PlayerView: View {
                 Text(currentContext?.mediaTitle ?? currentStream.title)
                     .font(.title3.weight(.semibold)).foregroundStyle(.white)
                     .multilineTextAlignment(.center).lineLimit(2)
-                if let ep = currentContext?.episodeNumber {
+                if let ep = currentContext?.sourceEpisodeNumber {
                     Text("Episode \(ep)").font(.subheadline).foregroundStyle(.white.opacity(0.65))
                 }
 
@@ -2230,7 +2230,7 @@ struct PlayerView: View {
 
     private func updateNowPlaying(player p: AVPlayer) {
         let mediaTitle = currentContext?.mediaTitle ?? currentStream.title
-        let epNumber = currentContext?.episodeNumber
+        let epNumber = currentContext?.sourceEpisodeNumber
         let epTitle = tvdbEpisodeTitle ?? currentContext?.episodeTitle
         let subtitleString: String
         if let n = epNumber {

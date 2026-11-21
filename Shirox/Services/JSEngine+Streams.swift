@@ -18,11 +18,19 @@ extension JSEngine {
             throw JSEngineError.parseError("Could not parse stream result")
         }
 
-        return parseStreamResults(from: obj)
+        return try parseResolvedStreamResults(from: obj)
     }
 }
 
 // MARK: - Shared parsing
+
+func parseResolvedStreamResults(from obj: [String: Any]) throws -> [StreamResult] {
+    let streams = parseStreamResults(from: obj)
+    if streams.isEmpty, obj["blockedReason"] as? String == "website_verification_required" {
+        throw ModuleStreamResolutionError.websiteVerificationRequired
+    }
+    return streams
+}
 
 func parseStreamResults(from obj: [String: Any]) -> [StreamResult] {
     let subtitleUrl = (obj["subtitle"] as? String ?? obj["subtitles"] as? String).flatMap { $0.isEmpty ? nil : $0 }

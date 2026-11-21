@@ -374,14 +374,6 @@ class NetworkFetchSimpleMonitor: NSObject, ObservableObject {
 
         let jsCode = """
         (function() {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            delete window.navigator.__proto__.webdriver;
-
-            window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'permissions', { get: () => undefined });
-
             const originalFetch = window.fetch;
             const originalXHROpen = XMLHttpRequest.prototype.open;
             const originalXHRSend = XMLHttpRequest.prototype.send;
@@ -544,14 +536,22 @@ class NetworkFetchSimpleMonitor: NSObject, ObservableObject {
         #if !os(tvOS)
         webView?.navigationDelegate = self
         #endif
-        webView?.customUserAgent = URLSession.randomUserAgent
     }
 
     private func loadURL(url: URL, headers: [String: String] = [:]) {
         guard let webView = webView else { return }
+        var headers = headers
+        if let host = url.host {
+            let manager = CloudflareBypassManager.shared
+            if let cookie = manager.fullCookieHeader(for: host) {
+                headers = headers.filter { $0.key.lowercased() != "cookie" && $0.key.lowercased() != "user-agent" }
+                headers["Cookie"] = cookie
+                if let ua = manager.bypassUserAgent(for: host) { headers["User-Agent"] = ua }
+            }
+        }
+        webView.customUserAgent = headers.first { $0.key.lowercased() == "user-agent" }?.value
         addRequest(url.absoluteString)
         var request = URLRequest(url: url)
-        request.setValue(URLSession.randomUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", forHTTPHeaderField: "Accept")
         request.setValue("en-US,en;q=0.5", forHTTPHeaderField: "Accept-Language")
         request.setValue("gzip, deflate, br", forHTTPHeaderField: "Accept-Encoding")
@@ -905,14 +905,6 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
         let jsCode = """
         (function() {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            delete window.navigator.__proto__.webdriver;
-
-            window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'permissions', { get: () => undefined });
-
             const originalFetch = window.fetch;
             const originalXHROpen = XMLHttpRequest.prototype.open;
             const originalXHRSend = XMLHttpRequest.prototype.send;
@@ -1143,7 +1135,6 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         #if !os(tvOS)
         webView?.navigationDelegate = self
         #endif
-        webView?.customUserAgent = URLSession.randomUserAgent
     }
 
     private func loadHTMLContent(_ html: String) {
@@ -1161,9 +1152,18 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
     private func loadURL(url: URL, headers: [String: String]) {
         guard let webView = webView, options != nil else { return }
+        var headers = headers
+        if let host = url.host {
+            let manager = CloudflareBypassManager.shared
+            if let cookie = manager.fullCookieHeader(for: host) {
+                headers = headers.filter { $0.key.lowercased() != "cookie" && $0.key.lowercased() != "user-agent" }
+                headers["Cookie"] = cookie
+                if let ua = manager.bypassUserAgent(for: host) { headers["User-Agent"] = ua }
+            }
+        }
+        webView.customUserAgent = headers.first { $0.key.lowercased() == "user-agent" }?.value
         addRequest(url.absoluteString)
         var request = URLRequest(url: url)
-        request.setValue(URLSession.randomUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", forHTTPHeaderField: "Accept")
         request.setValue("en-US,en;q=0.5", forHTTPHeaderField: "Accept-Language")
         request.setValue("gzip, deflate, br", forHTTPHeaderField: "Accept-Encoding")
@@ -1289,7 +1289,6 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         #if !os(tvOS)
         guard let webView = webView, let host = webView.url?.host else { return }
         // cf_clearance is UA-bound — capture the UA this webView solved under so reuse replays it.
-        let solvedUA = webView.customUserAgent ?? ""
         let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
         cookieStore.getAllCookies { cookies in
             guard let cf = cookies.first(where: {
@@ -1303,6 +1302,10 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             }
             let fullHeader = hostCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
             Task { @MainActor in
+                guard let solvedUA = try? await webView.evaluateJavaScript("navigator.userAgent") as? String,
+                      !solvedUA.isEmpty,
+                      let page = try? await webView.evaluateJavaScript("document.documentElement.outerHTML") as? String,
+                      !JSEngine.isTurnstileResponse(status: 200, body: page) else { return }
                 CloudflareBypassManager.shared.store(cookie: cf.value, cookieHeader: fullHeader, userAgent: solvedUA, for: host)
             }
         }

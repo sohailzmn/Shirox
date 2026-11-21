@@ -45,24 +45,34 @@ final class DetailViewModel: ObservableObject {
     private(set) var detailHref: String?
     private var streamsTask: Task<Void, Never>?
 
+    nonisolated static func isSeriesSource(_ href: String) -> Bool {
+        guard let host = URL(string: href)?.host?.lowercased() else { return false }
+        return ["s.to", "www.s.to", "serienstream.to", "www.serienstream.to"].contains(host)
+    }
+
     func load(item: SearchItem) {
-        guard !isMatchingAniList else { return }
         guard !item.href.isEmpty else { return }
         detailHref = item.href
 
         // Check if we have a saved mapping first
-        if aniListID == nil {
+        let isSeriesSource = Self.isSeriesSource(item.href)
+        if isSeriesSource {
+            aniListID = nil
+            aniListMedia = nil
+            isMatchingAniList = false
+        }
+        if !isSeriesSource, aniListID == nil {
             if let savedID = AniListMappingManager.shared.getMapping(title: item.title) {
                 aniListID = savedID
             }
         }
 
         // If still no ID, try auto-matching
-        if aniListID == nil {
+        if !isSeriesSource, aniListID == nil {
             Task {
-                await autoMatch(title: item.title)
+                await autoMatch(title: item.title, href: item.href)
             }
-        } else if let aid = aniListID {
+        } else if !isSeriesSource, let aid = aniListID {
             // Already have ID (passed in or from mapping), fetch metadata
             fetchAniListMetadata(id: aid)
         }
@@ -71,11 +81,13 @@ final class DetailViewModel: ObservableObject {
             isLoadingDetail = true
             errorMessage = nil
             do {
-                var d = try await JSEngine.shared.fetchDetails(
+                var d = (try? await JSEngine.shared.fetchDetails(
                     url: item.href,
                     title: item.title,
                     image: item.image
-                )
+                )) ?? MediaDetail(title: item.title, image: item.image,
+                                  description: "", aliases: "", airdate: "", episodes: [])
+                guard detailHref == item.href else { return }
                 // Snapshot is authoritative for text fields: AniList synopsis/year are
                 // higher-quality than the module's, and an offline JS module that swallows
                 // its own network errors often returns the error string as `description`.
@@ -97,6 +109,7 @@ final class DetailViewModel: ObservableObject {
 
                 isLoadingEpisodes = true
                 let fetched = try await JSEngine.shared.fetchEpisodes(url: item.href)
+                guard detailHref == item.href else { return }
                 // Only overwrite the existing episode list when the fetched one looks
                 // strictly real. Modules that swallow their own network errors often
                 // return [] or [{href: "stub"}] which parses to episode-0 entries —
@@ -193,19 +206,24 @@ final class DetailViewModel: ObservableObject {
     #endif
 
     private func fetchAniListMetadata(id: Int) {
+        let href = detailHref
         Task {
             isLoadingAniListMedia = true
             if let raw = try? await AniListService.shared.detail(id: id) {
+                guard detailHref == href, aniListID == id else { return }
                 self.aniListMedia = AniListProvider.shared.mapMedia(raw)
             }
             isLoadingAniListMedia = false
         }
     }
 
-    private func autoMatch(title: String) async {
+    private func autoMatch(title: String, href: String) async {
+        guard detailHref == href, !Self.isSeriesSource(href) else { return }
         isMatchingAniList = true
+        defer { if detailHref == href { isMatchingAniList = false } }
         do {
             let results = try await AniListService.shared.search(keyword: title)
+            guard detailHref == href, !Self.isSeriesSource(href) else { return }
             // Look for a perfect match (case-insensitive) in the top 3 results
             let perfectMatch = results.prefix(3).first { media in
                 media.title.displayTitle.lowercased() == title.lowercased() ||
@@ -246,7 +264,7 @@ final class DetailViewModel: ObservableObject {
             title: detail?.title ?? "Episode", episode: Int(episode.number))
         PlayerPresenter.shared.presentResolvingEpisode(
             title: detail?.title ?? "Episode",
-            episode: Int(episode.number),
+            episode: ModuleSeasonRouting.episodeNumber(for: episode.href) ?? Int(episode.number),
             artwork: detail?.image ?? "",
             onResolve: { [weak self] in
                 guard let self else { throw CancellationError() }
