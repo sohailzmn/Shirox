@@ -1,4 +1,5 @@
 import XCTest
+import AVFoundation
 #if os(iOS)
 import SwiftUI
 import UIKit
@@ -41,7 +42,45 @@ final class PlaybackRoutingTests: XCTestCase {
         }
         XCTAssertFalse(streams.isEmpty, "The real source did not return a preflight-verified stream.")
         print("LIVE_ANIWORLD_PREFLIGHT streams=\(streams.count) german=\(streams.contains { PlaybackLanguagePolicy.priority($0) == 0 })")
+        try await verifyLivePlayer(streams, source: "ANIWORLD")
     }
+    @MainActor func testLiveSerienStreamPlaybackProbe() async throws {
+        guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else {
+            throw XCTSkip("Live provider probe is opt-in.")
+        }
+        let module = try XCTUnwrap(BundledUnifiedSource.module)
+        let runner = ModuleJSRunner(); try await runner.load(module: module)
+        let streams: [StreamResult] = try await PlaybackDeadline.run(seconds: 100) {
+            let matches = try await runner.search(keyword: "Dexter: Resurrection", kind: .series)
+            let match = try XCTUnwrap(matches.first { CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: "Dexter: Resurrection") || CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: "Dexter: Wiedererwachen") })
+            XCTAssertTrue(SourceCatalogRouting.accepts(match.href, kind: .series))
+            let episodes = try await runner.fetchEpisodes(url: match.href, season: 1)
+            let episode = try XCTUnwrap(ModuleSeasonRouting.exactEpisode(episodes, season: 1, episode: 1))
+            return try await runner.fetchStreams(episodeUrl: episode.href)
+        }
+        try await verifyLivePlayer(streams, source: "SERIENSTREAM")
+    }
+
+    @MainActor private func verifyLivePlayer(_ streams: [StreamResult], source: String) async throws {
+        let stream = try XCTUnwrap(streams.first)
+        let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
+        let video = try await asset.loadTracks(withMediaType: .video)
+        let audio = try await asset.loadTracks(withMediaType: .audio)
+        XCTAssertFalse(video.isEmpty, "The real media must contain video.")
+        XCTAssertFalse(audio.isEmpty, "The real media must contain audio.")
+        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
+        defer { player.pause(); player.replaceCurrentItem(with: nil) }
+        player.automaticallyWaitsToMinimizeStalling = false
+        player.play()
+        let deadline = Date().addingTimeInterval(30)
+        while player.currentTime().seconds < 2, Date() < deadline {
+            if let error = player.currentItem?.error { throw error }
+            try await Task.sleep(nanoseconds: 200_000_000)
+        }
+        XCTAssertGreaterThanOrEqual(player.currentTime().seconds, 2, "AVPlayer did not advance through the real episode.")
+        print("LIVE_\(source)_PLAYBACK seconds=\(player.currentTime().seconds) videoTracks=\(video.count) audioTracks=\(audio.count)")
+    }
+
     func testRemoteResumeKeepsEpisodeAndPositionWithoutPersistingSignedMedia() throws {
         var item = ContinueWatchingItem(id:UUID(), mediaTitle:"Dexter", episodeNumber:6,
             episodeTitle:nil, imageUrl:"", streamUrl:"", headers:nil, subtitle:nil,
