@@ -1034,7 +1034,7 @@ private struct ShiroxInstantPlaybackScreen: View {
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.72))
                     if state.failed {
-                        Text("No playable stream was found. The source may be blocked or German audio may be unavailable.")
+                        Text(state.provider)
                             .foregroundStyle(.white.opacity(0.8))
                             .multilineTextAlignment(.center)
                             .font(.footnote)
@@ -1074,8 +1074,11 @@ private struct ShiroxInstantPlaybackScreen: View {
                     mediaId: mediaId, animeTitle: title, episodeNumber: episode,
                     alternateTitles: alternativeTitles, onDismiss: {},
                     headless: true,
-                    onStatus: { provider in state.provider = "Connecting to \(provider)…" },
-                    onFailure: { state.failed = true },
+                    onStatus: { provider in state.provider = "Prüfe \(provider)…" },
+                    onFailure: { reason in
+                        state.provider = reason
+                        state.failed = true
+                    },
                     onStreamsLoaded: onStreamsLoaded
                 )
                     .id(state.retryID)

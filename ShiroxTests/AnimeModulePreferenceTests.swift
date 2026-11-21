@@ -43,4 +43,31 @@ final class AnimeModulePreferenceTests: XCTestCase {
         XCTAssertTrue(result.episode?.href.contains("/staffel-3/episode-1") == true)
     }
 
+    func testDexterSearchAddsGermanTitle() {
+        let queries = ModuleSeasonFallback.queries(for: "Dexter: Resurrection")
+        XCTAssertTrue(queries.contains("Dexter: Wiedererwachen"))
+        XCTAssertEqual(queries.first, "Dexter: Resurrection")
+    }
+
+    func testSourceFailureReasonRemainsSpecific() {
+        XCTAssertTrue(FastSourceDecision.error(foundSeries: false, foundEpisodes: false, foundStream: false)
+            .contains("Serie"))
+        XCTAssertTrue(FastSourceDecision.error(foundSeries: true, foundEpisodes: false, foundStream: false)
+            .contains("Folge"))
+        XCTAssertTrue(FastSourceDecision.error(foundSeries: true, foundEpisodes: true, foundStream: false)
+            .contains("Videolink"))
+        XCTAssertTrue(FastSourceDecision.error(foundSeries: false, foundEpisodes: false,
+                                               foundStream: false, timedOut: true).contains("langsam"))
+    }
+
+    func testSTOSeriesExplicitSeasonDoesNotChooseWrongEpisode() {
+        let module = mod("s.to German Dub", manga: false)
+        let episodes = [
+            EpisodeLink(number: 1, href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-1"),
+            EpisodeLink(number: 4, href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-2/episode-4")
+        ]
+        let matched = ModuleSeasonFallback.aniWorldEpisode(from: episodes, title: "Dexter: Wiedererwachen Season 2", module: module, number: 4)
+        XCTAssertTrue(matched.handled)
+        XCTAssertTrue(matched.episode?.href.hasSuffix("/staffel-2/episode-4") == true)
+    }
 }
