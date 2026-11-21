@@ -43,6 +43,7 @@ final class ModuleJSRunner {
     /// Host-scoped to this module, so the picker only offers verification for the module
     /// that's actually Cloudflare-protected (not every visible module).
     var lastTurnstileURL: URL?
+    var allowsVerificationPrompt = true
 
     // Ephemeral config gives each runner its own isolated cookie store so bypass
     // cookies from search persist through to fetchEpisodes without bleeding into
@@ -371,7 +372,9 @@ final class ModuleJSRunner {
                             responseText = String(data: recovered.data, encoding: .utf8) ?? ""
                         } else {
                             self.lastTurnstileURL = cfResponseURL
-                            await CloudflareBypassManager.shared.flagPendingVerification(for: cfResponseURL)
+                            if self.allowsVerificationPrompt {
+                                await CloudflareBypassManager.shared.flagPendingVerification(for: cfResponseURL)
+                            }
                         }
                     }
 

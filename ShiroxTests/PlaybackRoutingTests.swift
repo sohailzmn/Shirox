@@ -36,7 +36,7 @@ final class PlaybackRoutingTests: XCTestCase {
             throw XCTSkip("Live provider probe is opt-in; fixture tests are not evidence of live playback.")
         }
         let module = try XCTUnwrap(BundledUnifiedSource.module)
-        let runner = ModuleJSRunner(); try await runner.load(module: module)
+        let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
         let streams = try await PlaybackDeadline.run(seconds: 90) {
             try await runner.fetchStreams(episodeUrl: "https://aniworld.to/anime/stream/spy-x-family/staffel-1/episode-1")
         }
@@ -49,7 +49,7 @@ final class PlaybackRoutingTests: XCTestCase {
             throw XCTSkip("Live provider probe is opt-in.")
         }
         let module = try XCTUnwrap(BundledUnifiedSource.module)
-        let runner = ModuleJSRunner(); try await runner.load(module: module)
+        let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
         let streams: [StreamResult] = try await PlaybackDeadline.run(seconds: 100) {
             let matches = try await runner.search(keyword: "Dexter: Resurrection", kind: .series)
             let match = try XCTUnwrap(matches.first { CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: "Dexter: Resurrection") || CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: "Dexter: Wiedererwachen") })

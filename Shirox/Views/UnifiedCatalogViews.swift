@@ -214,7 +214,7 @@ struct CatalogDetailScreen: View {
         .task {
             if let href = title.sourceHref, let module = BundledUnifiedSource.module {
                 do {
-                    let runner = ModuleJSRunner(); try await runner.load(module: module)
+                    let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
                     sourceEpisodes = try await PlaybackDeadline.run(seconds: 25) { try await runner.fetchEpisodes(url: href) }
                     let groups = Dictionary(grouping: sourceEpisodes) { ModuleSeasonRouting.seasonNumber(for: $0.href) ?? 1 }
                     seasons = groups.keys.sorted().map { CatalogSeason(number: $0, name: "Staffel \($0)", episodeCount: groups[$0]?.count ?? 0) }

@@ -54,6 +54,7 @@ final class SourceCatalog: ObservableObject {
         do {
             let items: [SearchItem] = try await PlaybackDeadline.run(seconds: 15) {
                 let runner = ModuleJSRunner()
+                runner.allowsVerificationPrompt = false
                 try await runner.load(module: module)
                 return try await runner.sourceCatalog(kind: kind)
             }
@@ -265,7 +266,7 @@ final class UnifiedCatalog: ObservableObject {
         guard title.kind == .anime,
               let module = ModuleManager.shared.modules.first(where: { $0.sourceName.contains("Unified GER") }) else { return nil }
         let result: String? = try? await PlaybackDeadline.run(seconds: 5) {
-            let runner = ModuleJSRunner(); try await runner.load(module: module)
+            let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
             let matches = try await runner.search(keyword: title.name, kind: .anime)
             guard let match = matches.first(where: { CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: title.name) }) else { return nil }
             return try await runner.sourceDescription(url: match.href)

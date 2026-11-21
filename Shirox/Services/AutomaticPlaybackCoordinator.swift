@@ -201,6 +201,7 @@ final class AutomaticPlaybackCoordinator {
             try Task.checkCancellation()
             status?("Passende Quelle wird gesucht …")
             let runner = ModuleJSRunner()
+            runner.allowsVerificationPrompt = false
             do {
                 try await PlaybackDeadline.run(seconds: 5) { try await runner.load(module: module) }
                 var items: [SearchItem] = []
@@ -275,6 +276,7 @@ final class AutomaticPlaybackCoordinator {
     }
 
     func streams(runner: ModuleJSRunner, episodeHref: String, legacyModule: ModuleDefinition? = nil) async throws -> [StreamResult] {
+        runner.allowsVerificationPrompt = false
         if legacyModule?.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true {
             var lastError: Error = AutomaticPlaybackError.noStream
             for language in 0...2 {
