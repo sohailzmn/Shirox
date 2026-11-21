@@ -41,29 +41,38 @@ final class SourceCatalog: ObservableObject {
         loading = true
         defer { loading = false }
         errors = []
-        await withTaskGroup(of: (CatalogKind, [SearchItem]).self) { group in
-            for kind in [CatalogKind.anime, .series] {
-                group.addTask { @MainActor in
-                    let items = (try? await PlaybackDeadline.run(seconds: 15) {
-                        let runner = ModuleJSRunner(); try await runner.load(module: module)
-                        return try await runner.sourceCatalog(kind: kind)
-                    }) ?? []
-                    return (kind, items)
-                }
-            }
-            for await (kind, items) in group {
-                let titles = items.filter { SourceCatalogRouting.accepts($0.href, kind: kind) }.map {
-                    CatalogTitle(id: "source-" + $0.href, remoteID: 0, kind: kind, name: $0.title,
-                                 poster: $0.image, sourceHref: $0.href, moduleID: module.id)
-                }
-                rows.removeAll { $0.id == "source-" + kind.rawValue }
-                if titles.isEmpty { errors.append(kind == .anime ? "AniWorld ist derzeit nicht erreichbar oder liefert keine Titel." : "SerienStream ist derzeit nicht erreichbar oder liefert keine Titel.") }
-                else { rows.append(CatalogRow(id: "source-" + kind.rawValue, name: kind == .anime ? "Auf AniWorld" : "Auf SerienStream", titles: titles)) }
-            }
-        }
+        async let anime = fetchTitles(kind: .anime, module: module)
+        async let series = fetchTitles(kind: .series, module: module)
+        let animeTitles = await anime
+        publish(animeTitles, kind: .anime)
+        let seriesTitles = await series
+        publish(seriesTitles, kind: .series)
         rows.sort { $0.id < $1.id }
         loadedAt = Date()
     }
+    private func fetchTitles(kind: CatalogKind, module: ModuleDefinition) async -> [CatalogTitle] {
+        do {
+            let items: [SearchItem] = try await PlaybackDeadline.run(seconds: 15) {
+                let runner = ModuleJSRunner()
+                try await runner.load(module: module)
+                return try await runner.sourceCatalog(kind: kind)
+            }
+            return items.filter { SourceCatalogRouting.accepts($0.href, kind: kind) }.map { item in
+                CatalogTitle(id: "source-" + item.href, remoteID: 0, kind: kind, name: item.title,
+                             poster: item.image, sourceHref: item.href, moduleID: module.id)
+            }
+        } catch { return [] }
+    }
+    private func publish(_ titles: [CatalogTitle], kind: CatalogKind) {
+        let rowID = "source-" + kind.rawValue
+        rows.removeAll { $0.id == rowID }
+        if titles.isEmpty {
+            errors.append(kind == .anime ? "AniWorld ist derzeit nicht erreichbar oder liefert keine Titel." : "SerienStream ist derzeit nicht erreichbar oder liefert keine Titel.")
+        } else {
+            rows.append(CatalogRow(id: rowID, name: kind == .anime ? "Auf AniWorld" : "Auf SerienStream", titles: titles))
+        }
+    }
+
 }
 
 struct CatalogTitle: Identifiable, Codable, Hashable, Sendable {
