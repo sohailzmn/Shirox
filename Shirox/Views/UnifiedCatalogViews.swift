@@ -142,6 +142,7 @@ struct CatalogDetailScreen: View {
     @State private var loading = false
     @State private var error: String?
     @State private var playTask: Task<Void, Never>?
+    @State private var sourceSynopsis: String?
     @ObservedObject private var availability = CatalogAvailabilityStore.shared
     @ObservedObject private var watchlist = CatalogWatchlist.shared
 
@@ -157,7 +158,7 @@ struct CatalogDetailScreen: View {
                         Label(watchlist.contains(title) ? "Aus Merkliste entfernen" : "Zur Merkliste hinzufügen",
                               systemImage: watchlist.contains(title) ? "checkmark" : "plus")
                     }.buttonStyle(.bordered)
-                    if let synopsis = title.synopsis, !synopsis.isEmpty { Text(synopsis) }
+                    if let synopsis = title.synopsis ?? sourceSynopsis, !synopsis.isEmpty { Text(synopsis) }
                     else { Text("Deutsche Beschreibung nicht verfügbar.").foregroundStyle(.secondary) }
                     if let media = title.anime {
                         NavigationLink("Anime-Details und Merkliste") { AniListDetailView(mediaId: media.id, preloadedMedia: media) }
@@ -198,6 +199,7 @@ struct CatalogDetailScreen: View {
         .task {
             do { seasons = try await UnifiedCatalog.shared.seasons(title); await loadEpisodes() }
             catch { self.error = error.localizedDescription }
+            if title.kind == .anime { sourceSynopsis = await UnifiedCatalog.shared.germanDescription(title) }
         }
         .onChange(of: season) { _ in Task { await loadEpisodes() } }
     }

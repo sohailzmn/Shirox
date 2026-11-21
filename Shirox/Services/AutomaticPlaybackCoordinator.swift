@@ -155,7 +155,7 @@ final class AutomaticPlaybackCoordinator {
                 } else {
                     let queries = Array(ModuleSeasonFallback.queries(for: request.title, alternatives: request.aliases).prefix(2))
                     for query in queries {
-                        let found = try await PlaybackDeadline.run(seconds: 5) { try await runner.search(keyword: query) }
+                        let found = try await PlaybackDeadline.run(seconds: 5) { try await runner.search(keyword: query, kind: request.kind) }
                         items += found.filter { item in
                             CatalogModuleTitleMatch.matches(candidateTitle: item.title, requestedTitle: request.title)
                                 || request.aliases.contains { alias in
@@ -181,7 +181,8 @@ final class AutomaticPlaybackCoordinator {
                         episode = EpisodeLink(number: Double(request.episode), href: href)
                         episodes = []
                     } else {
-                        episodes = try await PlaybackDeadline.run(seconds: 8) { try await runner.fetchEpisodes(url: item.href) }
+                        let targetedSeason: Int? = seasonOffset > 0 ? nil : request.season
+                        episodes = try await PlaybackDeadline.run(seconds: 8) { try await runner.fetchEpisodes(url: item.href, season: targetedSeason) }
                         if request.kind == .anime, seasonOffset > 0,
                            let exact = EpisodeNavigator.resolve(href: nil, orNumber: seasonOffset + request.episode, in: episodes) {
                             episode = exact

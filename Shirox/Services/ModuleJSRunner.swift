@@ -60,7 +60,7 @@ final class ModuleJSRunner {
 
     func load(module: ModuleDefinition) async throws {
         loadedModule = module
-        moduleCacheKey = module.id + "|" + module.scriptUrl
+        moduleCacheKey = module.id + "|" + module.version + "|" + module.scriptUrl
         // Never globally wipe shared WKWebView cookies just because a new
         // episode is starting. It added I/O and invalidated legitimate website
         // verification from prior sessions. This runner still has its own session.
@@ -97,8 +97,9 @@ final class ModuleJSRunner {
 
     // MARK: - Search
 
-    func search(keyword: String) async throws -> [SearchItem] {
-        let json = try await callAsyncJS("searchResults", args: [keyword])
+    func search(keyword: String, kind: CatalogKind? = nil) async throws -> [SearchItem] {
+        let args: [Any] = kind.map { [keyword, ["kind": $0.rawValue]] } ?? [keyword]
+        let json = try await callAsyncJS("searchResults", args: args)
         guard let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw JSEngineError.parseError("Could not parse search results")
@@ -113,14 +114,24 @@ final class ModuleJSRunner {
 
     // MARK: - Episodes
 
-    func fetchEpisodes(url: String) async throws -> [EpisodeLink] {
-        let key = moduleCacheKey + "|" + url
+    func sourceDescription(url: String) async throws -> String? {
+        let json = try await callAsyncJS("extractDetails", args: [url])
+        guard let data = json.data(using: .utf8),
+              let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              let value = array.first?["description"] as? String,
+              value.count > 30 else { return nil }
+        return value.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+    }
+
+    func fetchEpisodes(url: String, season: Int? = nil) async throws -> [EpisodeLink] {
+        let key = moduleCacheKey + "|" + url + (season.map { "|season=\($0)" } ?? "")
         if let cached = Self.episodesCache[key],
            Date().timeIntervalSince(cached.storedAt) < Self.episodesTTL {
             PlaybackPerformance.shared.cacheHit(script: false)
             return cached.episodes
         }
-        let json = try await callAsyncJS("extractEpisodes", args: [url])
+        let args: [Any] = season.map { [url, ["season": $0]] } ?? [url]
+        let json = try await callAsyncJS("extractEpisodes", args: args)
         guard let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw JSEngineError.parseError("Could not parse episodes")

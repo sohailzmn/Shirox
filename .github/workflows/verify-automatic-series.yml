@@ -40,8 +40,16 @@ jobs:
           grep -E '(Executed|TEST SUCCEEDED)' "$RUNNER_TEMP/series-tests.log" | tail -10
       - name: Collect catalogue visual snapshot
         run: |
-          APP_DATA=$(xcrun simctl get_app_container "$SIMULATOR_ID" com.shirox.app data)
-          cp "$APP_DATA/Library/Caches/catalog-detail-ipad.png" "$RUNNER_TEMP/catalog-detail-ipad.png"
+          SNAPSHOT=$(find "$HOME/Library/Developer/CoreSimulator/Devices" -name catalog-detail-ipad.png -type f -print -quit)
+          if [ -n "$SNAPSHOT" ]; then
+            cp "$SNAPSHOT" "$RUNNER_TEMP/catalog-detail-ipad.png"
+          else
+            RESULT=$(find "$RUNNER_TEMP/SeriesTests/Logs/Test" -maxdepth 1 -name '*.xcresult' -type d -print -quit)
+            xcrun xcresulttool export attachments --path "$RESULT" --output-path "$RUNNER_TEMP/visual-attachments"
+            SNAPSHOT=$(find "$RUNNER_TEMP/visual-attachments" -name '*.png' -type f -print -quit)
+            test -n "$SNAPSHOT"
+            cp "$SNAPSHOT" "$RUNNER_TEMP/catalog-detail-ipad.png"
+          fi
       - uses: actions/upload-artifact@v4
         if: always()
         with:

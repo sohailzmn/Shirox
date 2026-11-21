@@ -184,8 +184,28 @@ final class UnifiedCatalog: ObservableObject {
     @Published var error: String?
     private struct Cached: Codable { let date: Date; let data: Data }
     private var cache: [String: Cached] = [:]
+    private var germanDescriptions: [String: String] = [:]
     private init() {
+        germanDescriptions = UserDefaults.standard.dictionary(forKey: "catalogGermanDescriptionsV2") as? [String: String] ?? [:]
         if let data = UserDefaults.standard.data(forKey: "catalogMetadataV2"), let saved = try? JSONDecoder().decode([String: Cached].self, from: data) { cache = saved }
+    }
+
+    func germanDescription(_ title: CatalogTitle) async -> String? {
+        if let cached = germanDescriptions[title.id] { return cached }
+        guard title.kind == .anime,
+              let module = ModuleManager.shared.modules.first(where: { $0.sourceName.contains("Unified GER") }) else { return nil }
+        let result: String? = try? await PlaybackDeadline.run(seconds: 5) {
+            let runner = ModuleJSRunner(); try await runner.load(module: module)
+            let matches = try await runner.search(keyword: title.name, kind: .anime)
+            guard let match = matches.first(where: { CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: title.name) }) else { return nil }
+            return try await runner.sourceDescription(url: match.href)
+        }
+        if let result {
+            if germanDescriptions.count >= 200 { germanDescriptions.removeAll() }
+            germanDescriptions[title.id] = result
+            UserDefaults.standard.set(germanDescriptions, forKey: "catalogGermanDescriptionsV2")
+        }
+        return result
     }
 
     struct TMDBPage: Decodable { let results: [TMDBTitle] }
