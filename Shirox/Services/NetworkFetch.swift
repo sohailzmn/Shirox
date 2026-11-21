@@ -1136,13 +1136,21 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                             }
                         });
                         allFound = waitSelectors.every(function(selector) { return results.waitResults[selector]; });
-                        if (allFound || elapsed >= maxWaitTime) {
+                        // A play button can create the video element. Do not wait for
+                        // that video (or an inherently invisible <source>) first.
+                        const playReady = clickSelectors.some(function(selector) {
+                            return Array.from(document.querySelectorAll(selector)).some(function(element) {
+                                return element.offsetParent !== null && !element.disabled && !element.__shiroxCaptureClicked;
+                            });
+                        });
+                        if (allFound || playReady || elapsed >= maxWaitTime) {
                             clickSelectors.forEach(function(selector) {
                                 try {
                                     const elements = document.querySelectorAll(selector);
                                     let clicked = false;
                                     elements.forEach(function(element) {
-                                        if (element && element.offsetParent !== null && !(element.matches('[data-play-url]') && element.__shiroxProviderActivated)) {
+                                        if (element && element.offsetParent !== null && !element.disabled && !element.__shiroxCaptureClicked && !(element.matches('[data-play-url]') && element.__shiroxProviderActivated)) {
+                                            element.__shiroxCaptureClicked = true;
                                             if (element.matches('[data-play-url]')) { element.__shiroxProviderActivated = true; window.__shiroxProviderActivated=true; }
                                             try {
                                                 element.click();
