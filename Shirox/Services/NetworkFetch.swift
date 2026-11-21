@@ -1381,7 +1381,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                !cutoffTriggered {
                 cutoffTriggered = true
                 cutoffUrl = urlString
-                stopMonitoring(reason: "cutoff")
+                if options?.returnHTML == true { captureDataThenComplete() }
+                else { stopMonitoring(reason: "cutoff") }
             }
         }
     }

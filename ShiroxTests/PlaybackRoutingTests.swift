@@ -21,6 +21,27 @@ import UIKit
 ///    Now Playing had the same problem in reverse — it published the local player's rate and
 ///    clock, so Control Center showed "paused, 0:00" over a movie the TV was happily playing.
 final class PlaybackRoutingTests: XCTestCase {
+    func testAnimeAndSeriesNeverUseEachOthersCatalogue() {
+        XCTAssertTrue(SourceCatalogRouting.accepts("https://aniworld.to/anime/stream/spy-x-family", kind: .anime))
+        XCTAssertFalse(SourceCatalogRouting.accepts("https://aniworld.to/anime/stream/spy-x-family", kind: .series))
+        XCTAssertTrue(SourceCatalogRouting.accepts("https://serienstream.cx/serie/dexter", kind: .series))
+        XCTAssertFalse(SourceCatalogRouting.accepts("https://serienstream.to/serie/dexter", kind: .anime))
+        XCTAssertTrue(DetailViewModel.isSeriesSource("https://serienstream.cx/serie/dexter"))
+        XCTAssertFalse(SourceCatalogRouting.accepts("https://aniworld.to.evil.example/anime/stream/test", kind: .anime))
+    }
+
+    @MainActor func testLiveAniWorldPlaybackProbe() async throws {
+        guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else {
+            throw XCTSkip("Live provider probe is opt-in; fixture tests are not evidence of live playback.")
+        }
+        let module = try XCTUnwrap(BundledUnifiedSource.module)
+        let runner = ModuleJSRunner(); try await runner.load(module: module)
+        let streams = try await PlaybackDeadline.run(seconds: 90) {
+            try await runner.fetchStreams(episodeUrl: "https://aniworld.to/anime/stream/spy-x-family/staffel-1/episode-1")
+        }
+        XCTAssertFalse(streams.isEmpty, "The real source did not return a preflight-verified stream.")
+        print("LIVE_ANIWORLD_PREFLIGHT streams=\(streams.count) german=\(streams.contains { PlaybackLanguagePolicy.priority($0) == 0 })")
+    }
     func testRemoteResumeKeepsEpisodeAndPositionWithoutPersistingSignedMedia() throws {
         var item = ContinueWatchingItem(id:UUID(), mediaTitle:"Dexter", episodeNumber:6,
             episodeTitle:nil, imageUrl:"", streamUrl:"", headers:nil, subtitle:nil,
@@ -86,22 +107,26 @@ final class PlaybackRoutingTests: XCTestCase {
     #if os(iOS)
     @MainActor func testCatalogueDetailVisualSnapshot() async throws {
         let title = CatalogTitle(id:"fixture-series", remoteID:1, kind:.series, name:"Serienvorschau", synopsis:"Deutsche Beschreibung für die visuelle Prüfung der neuen Detailseite.", year:"2026")
-        let controller = UIHostingController(rootView: NavigationStack { CatalogDetailScreen(title:title) }.preferredColorScheme(.dark))
-        let size = CGSize(width:1024,height:768)
-        let window = UIWindow(frame:CGRect(origin:.zero,size:size))
-        window.rootViewController=controller
-        window.isHidden=false
-        defer { window.isHidden=true; window.rootViewController=nil }
-        controller.view.frame=window.bounds
-        controller.view.layoutIfNeeded()
-        try await Task.sleep(nanoseconds:100_000_000)
-        let image = UIGraphicsImageRenderer(size:size).image { _ in
-            controller.view.drawHierarchy(in:controller.view.bounds,afterScreenUpdates:true)
+        for size in [CGSize(width:390,height:844), CGSize(width:500,height:768), CGSize(width:1024,height:768)] {
+            let controller = UIHostingController(rootView: NavigationStack { CatalogDetailScreen(title:title) }
+                .environment(\.horizontalSizeClass, size.width < 600 ? .compact : .regular).preferredColorScheme(.dark))
+            let window = UIWindow(frame:CGRect(origin:.zero,size:size))
+            window.rootViewController=controller
+            window.isHidden=false
+            controller.view.frame=window.bounds
+            controller.view.layoutIfNeeded()
+            try await Task.sleep(nanoseconds:100_000_000)
+            let image = UIGraphicsImageRenderer(size:size).image { _ in
+                controller.view.drawHierarchy(in:controller.view.bounds,afterScreenUpdates:true)
+            }
+            XCTAssertEqual(image.size.width,size.width)
+            let data = try XCTUnwrap(image.pngData())
+            let name = size.width == 1024 ? "catalog-detail-ipad.png" : "catalog-detail-\(Int(size.width)).png"
+            let path = FileManager.default.urls(for:.cachesDirectory,in:.userDomainMask)[0].appendingPathComponent(name)
+            try data.write(to:path)
+            let attachment=XCTAttachment(image:image); attachment.name=name; attachment.lifetime = .keepAlways; add(attachment)
+            window.isHidden=true; window.rootViewController=nil
         }
-        let data = try XCTUnwrap(image.pngData())
-        let path = FileManager.default.urls(for:.cachesDirectory,in:.userDomainMask)[0].appendingPathComponent("catalog-detail-ipad.png")
-        try data.write(to:path)
-        let attachment=XCTAttachment(image:image); attachment.lifetime = .keepAlways; add(attachment)
     }
     #endif
     func testLanguageOrderAndUnknownAudio() {
@@ -176,7 +201,7 @@ final class PlaybackRoutingTests: XCTestCase {
 
     func testBundledResolverMatchesAppLanguageContract() throws {
         let bundled = try XCTUnwrap(BundledUnifiedSource.module)
-        XCTAssertEqual(bundled.version, "2.0.0")
+        XCTAssertEqual(bundled.version, "2.0.1")
         XCTAssertTrue(bundled.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true)
     }
     func testWebsiteChallengeIsNotAnEmptyVideoResult() {

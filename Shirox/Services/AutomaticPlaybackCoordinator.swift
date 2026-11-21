@@ -155,7 +155,7 @@ final class AutomaticPlaybackCoordinator {
     func resolve(_ request: AutomaticPlaybackRequest,
                  status: ((String) -> Void)? = nil) async throws -> AutomaticPlaybackResult {
         do {
-            return try await PlaybackDeadline.run(seconds: 30) {
+            return try await PlaybackDeadline.run(seconds: 100) {
                 try await self.resolveWithinDeadline(request, status: status)
             }
         } catch {
@@ -179,10 +179,10 @@ final class AutomaticPlaybackCoordinator {
                 await SeasonChainMapper.shared.resolveOffset(anchorAniListID: id, anchorMALID: nil) ?? 0
             }) ?? 0
         } else { seasonOffset = 0 }
-        var modules = ModuleManager.shared.modules.filter { !$0.isManga && !$0.isLocalPlayback && !$0.isJellyfin }
+        var modules = ModuleManager.shared.modules.filter { !$0.isManga && !$0.isLocalPlayback && !$0.isJellyfin && SourceCatalogRouting.acceptsModule($0, kind: request.kind) }
         if modules.isEmpty {
             await ModuleManager.shared.ensureUnifiedGermanSource()
-            modules = ModuleManager.shared.modules.filter { !$0.isManga && !$0.isLocalPlayback && !$0.isJellyfin }
+            modules = ModuleManager.shared.modules.filter { !$0.isManga && !$0.isLocalPlayback && !$0.isJellyfin && SourceCatalogRouting.acceptsModule($0, kind: request.kind) }
         }
         guard !modules.isEmpty else { throw AutomaticPlaybackError.noSource }
         modules.sort {
@@ -226,7 +226,7 @@ final class AutomaticPlaybackCoordinator {
                 for item in items where visited.insert(item.href).inserted {
                     // Unified search covers both catalogues; never ask an anime
                     // URL to stand in for an unrelated live-action episode.
-                    if request.kind != .anime && item.href.contains("aniworld.to") { continue }
+                    if !SourceCatalogRouting.accepts(item.href, kind: request.kind) { continue }
                     status?("Staffel und Folge werden geprüft …")
                     let episodes: [EpisodeLink]
                     let episode: EpisodeLink
@@ -280,7 +280,7 @@ final class AutomaticPlaybackCoordinator {
             for language in 0...2 {
                 try Task.checkCancellation()
                 do {
-                    return try await PlaybackDeadline.run(seconds: 10) {
+                    return try await PlaybackDeadline.run(seconds: 28) {
                         let raw = try await runner.fetchStreams(episodeUrl: episodeHref, languagePriority: language, preflight: false)
                         let candidates = raw.map { PlaybackLanguagePolicy.prepare($0, preferredSubtitleLanguage: language == 0 ? nil : language == 1 ? "de" : "en") }
                             .filter { PlaybackLanguagePolicy.priority($0) == language }

@@ -3,11 +3,18 @@ on:
   push:
     branches: [codex/automatic-series-playback-20261121]
   workflow_dispatch:
+    inputs:
+      live_source_probe:
+        description: Probe one real AniWorld episode through native WebKit and media preflight
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
   ios-tests:
     runs-on: macos-26
+    env:
+      SHIROX_LIVE_SOURCE_PROBE: ${{ inputs.live_source_probe && '1' || '0' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +49,7 @@ jobs:
           grep -E '(Executed|TEST SUCCEEDED)' "$RUNNER_TEMP/series-tests.log" | tail -10
       - name: Collect catalogue visual snapshot
         run: |
+          find "$HOME/Library/Developer/CoreSimulator/Devices" -name 'catalog-detail-*.png' -type f -exec cp {} "$RUNNER_TEMP/" \;
           SNAPSHOT=$(find "$HOME/Library/Developer/CoreSimulator/Devices" -name catalog-detail-ipad.png -type f -print -quit)
           if [ -n "$SNAPSHOT" ]; then
             cp "$SNAPSHOT" "$RUNNER_TEMP/catalog-detail-ipad.png"
@@ -58,4 +66,4 @@ jobs:
           name: automatic-series-test-log
           path: |
             ${{ runner.temp }}/series-tests.log
-            ${{ runner.temp }}/catalog-detail-ipad.png
+            ${{ runner.temp }}/catalog-detail-*.png

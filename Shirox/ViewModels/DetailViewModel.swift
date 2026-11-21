@@ -47,7 +47,7 @@ final class DetailViewModel: ObservableObject {
 
     nonisolated static func isSeriesSource(_ href: String) -> Bool {
         guard let host = URL(string: href)?.host?.lowercased() else { return false }
-        return ["s.to", "www.s.to", "serienstream.to", "www.serienstream.to"].contains(host)
+        return ["s.to", "www.s.to", "serienstream.to", "www.serienstream.to", "serienstream.cx", "www.serienstream.cx"].contains(host)
     }
 
     func load(item: SearchItem) {

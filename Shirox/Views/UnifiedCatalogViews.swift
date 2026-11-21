@@ -27,16 +27,16 @@ struct CatalogAccessSettings: View {
 struct UnifiedHomeSections: View {
     @ObservedObject var animeVM: HomeViewModel
     @ObservedObject private var catalog = UnifiedCatalog.shared
+    @ObservedObject private var sources = SourceCatalog.shared
     @ObservedObject private var availability = CatalogAvailabilityStore.shared
     @ObservedObject private var configuration = CatalogConfiguration.shared
     @ObservedObject private var history = ContinueWatchingManager.shared
     @ObservedObject private var watchlist = CatalogWatchlist.shared
     @State private var filter = "Alle"
     private var rows: [CatalogRow] {
-        var rows = catalog.rows
-        rows.append(CatalogRow(id: "anime-popular", name: "Beliebte Anime", titles: animeVM.popular.map(CatalogTitle.anime)))
-        rows.append(CatalogRow(id: "anime-new", name: "Anime dieser Saison", titles: animeVM.seasonal.map(CatalogTitle.anime)))
-        rows.append(CatalogRow(id: "anime-top", name: "Top bewertete Anime", titles: animeVM.topRated.map(CatalogTitle.anime)))
+        // Browse the catalogues that actually supply this app's episodes.
+        var rows = sources.rows
+        if filter == "Filme" { rows = catalog.rows.filter { $0.titles.first?.kind == .movie } }
         let visible = rows.map { row in
             CatalogRow(id: row.id, name: row.name, titles: availability.rank(row.titles.filter { filter == "Alle" || $0.kind.label == filter }))
         }.filter { !$0.titles.isEmpty }
@@ -62,22 +62,22 @@ struct UnifiedHomeSections: View {
                 NavigationLink { CatalogDetailScreen(title: featured) } label: { CatalogHero(title: featured) }
                     .buttonStyle(.plain)
             }
-            if catalog.loading || animeVM.isLoading { ProgressView("Katalog wird geladen …").padding(.horizontal) }
+            if sources.loading { ProgressView("Quellenkatalog wird geladen …").padding(.horizontal) }
             ForEach(rows) { row in CatalogShelf(row: row) }
-            if let error = catalog.error, filter != "Anime" {
+            ForEach(sources.errors, id: \.self) { message in
+                Text(message).font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
+            }
+            if let error = catalog.error, filter == "Filme" {
                 Label(error, systemImage: "info.circle").font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
             }
-            if let error = animeVM.error, filter == "Anime" {
-                Text(error).font(.footnote).foregroundStyle(.secondary).padding(.horizontal)
-            }
-            if rows.isEmpty, !catalog.loading, !animeVM.isLoading {
+            if rows.isEmpty, !sources.loading {
                 Text("Noch keine Katalogdaten verfügbar. Die Suche in deinen Streamingquellen bleibt nutzbar.")
                     .foregroundStyle(.secondary).padding()
             }
             Link("Metadaten und Bilder: TMDB", destination: URL(string: "https://www.themoviedb.org")!)
                 .font(.caption2).foregroundStyle(.secondary).padding(.horizontal)
         }
-        .task { await catalog.load() }
+        .task { async let metadata: () = catalog.load(); async let source: () = sources.load(); _ = await (metadata, source) }
         .onChange(of: configuration.hasToken) { _ in Task { await catalog.load() } }
     }
 }
@@ -105,9 +105,11 @@ struct CatalogPoster: View {
     @ObservedObject private var availability = CatalogAvailabilityStore.shared
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            AsyncImage(url: title.poster.flatMap(URL.init(string:))) { image in image.resizable().scaledToFill() }
-            placeholder: { ZStack { Color.gray.opacity(0.2); Image(systemName: "play.rectangle").font(.largeTitle) } }
-                .frame(height: 215).frame(maxWidth: .infinity).clipped()
+            GeometryReader { geometry in
+                AsyncImage(url: title.poster.flatMap(URL.init(string:))) { image in image.resizable().scaledToFill() }
+                placeholder: { ZStack { Color.gray.opacity(0.2); Image(systemName: "play.rectangle").font(.largeTitle) } }
+                    .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+            }.aspectRatio(2.0 / 3.0, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             Text(title.name).font(.subheadline.weight(.semibold)).lineLimit(2)
             Text(availability.state(title.id).label).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
@@ -117,20 +119,29 @@ struct CatalogPoster: View {
 
 private struct CatalogHero: View {
     let title: CatalogTitle
+    var showsAction = true
+    @Environment(\.horizontalSizeClass) private var sizeClass
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
-            AsyncImage(url: (title.backdrop ?? title.poster).flatMap(URL.init(string:))) { image in image.resizable().scaledToFill() }
-            placeholder: { Color.gray.opacity(0.2) }
-            LinearGradient(colors: [.clear, .black.opacity(0.95)], startPoint: .top, endPoint: .bottom)
-            VStack(alignment: .leading, spacing: 10) {
-                Text(title.kind.label.uppercased()).font(.caption.bold()).tracking(2)
-                Text(title.name).font(.largeTitle.bold()).lineLimit(2)
-                if let synopsis = title.synopsis, !synopsis.isEmpty { Text(synopsis).font(.subheadline).lineLimit(3) }
-                Label("Details und Wiedergabe", systemImage: "play.fill")
-                    .font(.headline).padding(.horizontal, 16).padding(.vertical, 10)
-                    .background(.white, in: Capsule()).foregroundStyle(.black)
-            }.foregroundStyle(.white).padding(24)
-        }.frame(height: 350).clipped().clipShape(RoundedRectangle(cornerRadius: 18)).padding(.horizontal)
+        GeometryReader { geometry in
+            ZStack(alignment: .bottomLeading) {
+                AsyncImage(url: (title.backdrop ?? title.poster).flatMap(URL.init(string:))) { image in image.resizable().scaledToFill() }
+                placeholder: { Color.gray.opacity(0.2) }
+                    .frame(width: geometry.size.width, height: geometry.size.height).clipped()
+                LinearGradient(colors: [.clear, .black.opacity(0.95)], startPoint: .top, endPoint: .bottom)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(title.kind.label.uppercased()).font(.caption.bold()).tracking(2)
+                    Text(title.name).font(sizeClass == .compact ? .title2.bold() : .largeTitle.bold()).lineLimit(2)
+                    if let synopsis = title.synopsis, !synopsis.isEmpty { Text(synopsis).font(.subheadline).lineLimit(2) }
+                    if showsAction {
+                        Label("Details und Wiedergabe", systemImage: "play.fill")
+                            .font(.subheadline.bold()).padding(.horizontal, 16).padding(.vertical, 10)
+                            .background(.white, in: Capsule()).foregroundStyle(.black)
+                    }
+                }.foregroundStyle(.white).padding(sizeClass == .compact ? 16 : 24)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }.frame(width: geometry.size.width, height: geometry.size.height).clipped()
+        }.frame(height: sizeClass == .compact ? 260 : 330)
+            .clipShape(RoundedRectangle(cornerRadius: 18)).padding(.horizontal)
     }
 }
 
@@ -143,13 +154,14 @@ struct CatalogDetailScreen: View {
     @State private var error: String?
     @State private var playTask: Task<Void, Never>?
     @State private var sourceSynopsis: String?
+    @State private var sourceEpisodes: [EpisodeLink] = []
     @ObservedObject private var availability = CatalogAvailabilityStore.shared
     @ObservedObject private var watchlist = CatalogWatchlist.shared
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                CatalogHero(title: title)
+                CatalogHero(title: title, showsAction: false)
                 VStack(alignment: .leading, spacing: 16) {
                     Text(title.name).font(.title.bold())
                     Text([title.kind.label, title.year].compactMap { $0 }.joined(separator: " · ")).foregroundStyle(.secondary)
@@ -166,7 +178,7 @@ struct CatalogDetailScreen: View {
                     Button { play(episode: 1) } label: {
                         Label(title.kind == .movie ? "Abspielen" : "Folge 1 abspielen", systemImage: "play.fill")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
-                    }.buttonStyle(.borderedProminent).disabled(loading)
+                    }.buttonStyle(.borderedProminent).disabled(loading || (title.sourceHref != nil && episodes.isEmpty))
                     Text("Deutsch bevorzugt · danach deutsche, zuletzt englische Untertitel")
                         .font(.caption).foregroundStyle(.secondary)
                     if !seasons.isEmpty {
@@ -193,10 +205,26 @@ struct CatalogDetailScreen: View {
                             .font(.caption)
                     }
                 }.padding(.horizontal, 20)
-            }.padding(.bottom, 28)
+            }.padding(.bottom, 28).frame(maxWidth: 1100).frame(maxWidth: .infinity)
         }
         .navigationTitle(title.name)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .task {
+            if let href = title.sourceHref, let module = BundledUnifiedSource.module {
+                do {
+                    let runner = ModuleJSRunner(); try await runner.load(module: module)
+                    sourceEpisodes = try await PlaybackDeadline.run(seconds: 25) { try await runner.fetchEpisodes(url: href) }
+                    let groups = Dictionary(grouping: sourceEpisodes) { ModuleSeasonRouting.seasonNumber(for: $0.href) ?? 1 }
+                    seasons = groups.keys.sorted().map { CatalogSeason(number: $0, name: "Staffel \($0)", episodeCount: groups[$0]?.count ?? 0) }
+                    season = seasons.first?.number ?? 1
+                    await loadEpisodes()
+                    sourceSynopsis = try? await runner.sourceDescription(url: href)
+                    if sourceEpisodes.isEmpty { error = "Die Quelle hat keine Folgen geliefert. Bitte später erneut versuchen." }
+                } catch { self.error = error.localizedDescription }
+                return
+            }
             do { seasons = try await UnifiedCatalog.shared.seasons(title); await loadEpisodes() }
             catch { self.error = error.localizedDescription }
             if let anime = title.anime {
@@ -212,6 +240,13 @@ struct CatalogDetailScreen: View {
     }
 
     private func loadEpisodes() async {
+        if title.sourceHref != nil {
+            episodes = sourceEpisodes.filter { (ModuleSeasonRouting.seasonNumber(for: $0.href) ?? 1) == season }.map { link in
+                let number = Int((link.href.range(of: #"/episode-(\d+)"#, options: .regularExpression)).map { String(link.href[$0]).replacingOccurrences(of: "/episode-", with: "") } ?? "") ?? Int(link.number)
+                return CatalogEpisode(number: number, name: "Folge \(number)", airDate: nil, knownReleased: true)
+            }
+            return
+        }
         guard title.isTMDB, title.kind != .movie else { return }
         let selected = season
         do {
@@ -226,7 +261,7 @@ struct CatalogDetailScreen: View {
         let request = AutomaticPlaybackRequest(catalogID: title.id, title: title.name,
                                                aliases: [title.originalName].compactMap { $0 }, kind: title.kind,
                                                animeID: title.anime?.provider == .anilist ? title.anime?.id : nil,
-                                               seasonIsExplicit: title.kind != .anime,
+                                               seasonIsExplicit: title.sourceHref != nil || title.kind != .anime,
                                                season: season, episode: episode, detailHref: title.sourceHref, moduleID: title.moduleID)
         #if os(iOS)
         PlayerPresenter.shared.presentResolvingEpisode(title: title.name, episode: episode, artwork: title.poster ?? "", onResolve: {

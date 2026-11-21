@@ -114,6 +114,16 @@ final class ModuleJSRunner {
 
     // MARK: - Episodes
 
+    func sourceCatalog(kind: CatalogKind) async throws -> [SearchItem] {
+        let json = try await callAsyncJS("extractCatalog", args: [["kind": kind.rawValue]])
+        guard let data = json.data(using: .utf8),
+              let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        return array.compactMap {
+            guard let title = $0["title"] as? String, let href = $0["href"] as? String else { return nil }
+            return SearchItem(title: title, image: $0["image"] as? String ?? "", href: href)
+        }
+    }
+
     func sourceDescription(url: String) async throws -> String? {
         let json = try await callAsyncJS("extractDetails", args: [url])
         guard let data = json.data(using: .utf8),

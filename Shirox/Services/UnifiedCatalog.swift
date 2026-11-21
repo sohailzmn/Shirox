@@ -7,6 +7,65 @@ enum CatalogKind: String, Codable, CaseIterable, Sendable {
     var label: String { switch self { case .series: return "Serien"; case .anime: return "Anime"; case .movie: return "Filme" } }
 }
 
+enum SourceCatalogRouting {
+    static func kind(for href: String) -> CatalogKind? {
+        guard let url = URL(string: href), let host = url.host?.lowercased() else { return nil }
+        let name = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        if ["aniworld.to", "aniworld.cc"].contains(name), url.path.hasPrefix("/anime/stream/") { return .anime }
+        if ["s.to", "serienstream.to", "serienstream.cx"].contains(name), url.path.hasPrefix("/serie/") { return .series }
+        return nil
+    }
+    static func accepts(_ href: String, kind: CatalogKind) -> Bool { self.kind(for: href) == kind }
+    static func acceptsModule(_ module: ModuleDefinition, kind: CatalogKind) -> Bool {
+        let name = module.sourceName.lowercased()
+        if name.contains("unified") { return kind != .movie }
+        if name.contains("aniworld") { return kind == .anime }
+        if name.contains("serienstream") || name.contains("s.to") { return kind == .series }
+        return true
+    }
+}
+
+/// Source-backed shelves need no metadata API key. A listed title is not a
+/// playback guarantee; the exact episode and media are still checked on Play.
+@MainActor
+final class SourceCatalog: ObservableObject {
+    static let shared = SourceCatalog()
+    @Published var rows: [CatalogRow] = []
+    @Published var errors: [String] = []
+    @Published var loading = false
+    private var loadedAt: Date?
+    func load() async {
+        guard !loading else { return }
+        if let loadedAt, Date().timeIntervalSince(loadedAt) < 300 { return }
+        guard let module = BundledUnifiedSource.module else { return }
+        loading = true
+        defer { loading = false }
+        errors = []
+        await withTaskGroup(of: (CatalogKind, [SearchItem]).self) { group in
+            for kind in [CatalogKind.anime, .series] {
+                group.addTask { @MainActor in
+                    let items = (try? await PlaybackDeadline.run(seconds: 15) {
+                        let runner = ModuleJSRunner(); try await runner.load(module: module)
+                        return try await runner.sourceCatalog(kind: kind)
+                    }) ?? []
+                    return (kind, items)
+                }
+            }
+            for await (kind, items) in group {
+                let titles = items.filter { SourceCatalogRouting.accepts($0.href, kind: kind) }.map {
+                    CatalogTitle(id: "source-" + $0.href, remoteID: 0, kind: kind, name: $0.title,
+                                 poster: $0.image, sourceHref: $0.href, moduleID: module.id)
+                }
+                rows.removeAll { $0.id == "source-" + kind.rawValue }
+                if titles.isEmpty { errors.append(kind == .anime ? "AniWorld ist derzeit nicht erreichbar oder liefert keine Titel." : "SerienStream ist derzeit nicht erreichbar oder liefert keine Titel.") }
+                else { rows.append(CatalogRow(id: "source-" + kind.rawValue, name: kind == .anime ? "Auf AniWorld" : "Auf SerienStream", titles: titles)) }
+            }
+        }
+        rows.sort { $0.id < $1.id }
+        loadedAt = Date()
+    }
+}
+
 struct CatalogTitle: Identifiable, Codable, Hashable, Sendable {
     let id: String
     let remoteID: Int
