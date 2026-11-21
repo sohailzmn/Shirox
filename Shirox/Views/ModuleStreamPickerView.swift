@@ -229,6 +229,11 @@ struct ModuleStreamPickerView: View {
 
         autoPlayTask = Task { @MainActor in
             defer { autoPlayLoading = false }
+            // First-launch auto-install is asynchronous. If Watch is tapped
+            // immediately, wait for it before taking the Smart Play snapshot.
+            // An offline failure still leaves existing modules available.
+            await moduleManager.ensureUnifiedGermanSource()
+            guard !Task.isCancelled else { return }
             let last = UserDefaults.standard.string(forKey: "lastUsedModuleId")
             let active = moduleManager.activeModule?.id
             let candidates: [ModuleDefinition]
