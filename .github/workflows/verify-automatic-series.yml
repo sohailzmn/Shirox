@@ -28,6 +28,20 @@ jobs:
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write('SIMULATOR_ID=' + selected + '\n')
           PY
+      - name: Pass live probe flag into the XCTest app
+        run: |
+          python3 - <<'PY'
+          import os, xml.etree.ElementTree as ET
+          path = 'Shirox.xcodeproj/xcshareddata/xcschemes/Shirox_iOS.xcscheme'
+          tree = ET.parse(path)
+          action = tree.getroot().find('LaunchAction')
+          variables = action.find('EnvironmentVariables')
+          if variables is None:
+              variables = ET.SubElement(action, 'EnvironmentVariables')
+          ET.SubElement(variables, 'EnvironmentVariable', key='SHIROX_LIVE_SOURCE_PROBE',
+                        value=os.environ['SHIROX_LIVE_SOURCE_PROBE'], isEnabled='YES')
+          tree.write(path, encoding='UTF-8', xml_declaration=True)
+          PY
       - name: Build and test actual source without legacy patches
         run: |
           set -o pipefail
