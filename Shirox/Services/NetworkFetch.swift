@@ -148,6 +148,8 @@ extension JSContext {
                             url: result.originalUrl,
                             originalUrl: result.originalUrl,
                             mediaPageURL: result.mediaPageURL || null,
+                            verificationResponsePresent: result.verificationResponsePresent || false,
+                            verifiedContinuationClicked: result.verifiedContinuationClicked || false,
                             requests: result.requests,
                             html: result.html || null,
                             cookies: result.cookies || null,
@@ -782,6 +784,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     private var cookies: [String: String] = [:]
     private var originalUrlString: String = ""
     private var mediaPageURL: String?
+    private var verificationResponsePresent = false
+    private var verifiedContinuationClicked = false
 
     @Published private(set) var networkRequests: [String] = []
     @Published private(set) var cutoffTriggered = false
@@ -794,6 +798,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         self.options = options
         originalUrlString = urlString
         mediaPageURL = nil
+        verificationResponsePresent = false
+        verifiedContinuationClicked = false
         completionHandler = completion
         networkRequests.removeAll()
         cutoffTriggered = false
@@ -945,6 +951,46 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         let autoMaxWait = options?.maxWaitTime ?? 3
         let jsCode = """
         (function() {
+            const sourceHosts = ['aniworld.to','aniworld.cc','serienstream.to','serienstream.cx','s.to'];
+            const sourceDocument = sourceHosts.includes(location.hostname.toLowerCase().replace(/^www\\./,''));
+            const passiveDocument = sourceDocument || location.hostname.toLowerCase() === 'challenges.cloudflare.com';
+            if (passiveDocument) {
+                try {
+                    new PerformanceObserver(function(list) {
+                        list.getEntries().forEach(function(entry) {
+                            window.webkit.messageHandlers.networkLogger.postMessage({type:'resource',url:entry.name});
+                        });
+                    }).observe({type:'resource',buffered:true});
+                } catch(e) {}
+                document.addEventListener('play', function(event) {
+                    if (event.target instanceof HTMLMediaElement) {
+                        event.target.muted = true;
+                        const url = event.target.currentSrc || event.target.src;
+                        if (url) window.webkit.messageHandlers.networkLogger.postMessage({type:'media',url:url});
+                    }
+                }, true);
+                if (sourceDocument) setInterval(function() {
+                    const response = document.querySelector('input[name="cf-turnstile-response"]');
+                    const responsePresent = !!(response && response.value);
+                    let continued = false;
+                    // Continue only after the site's own widget has produced a
+                    // response. Never click or solve the verification widget.
+                    if (responsePresent && window.__shiroxProviderActivated) {
+                        document.querySelectorAll('button').forEach(function(button) {
+                            if (button.disabled || button.offsetParent === null || button.__shiroxContinued ||
+                                button.textContent.trim().toLowerCase() !== 'weiter') return;
+                            let parent = button.parentElement, inVideoGate = false;
+                            for (let depth=0; parent && depth<5 && parent.tagName!=='BODY'; depth++,parent=parent.parentElement) {
+                                if (/video\\s+wird\\s+vorbereitet/i.test(parent.textContent)) { inVideoGate=true; break; }
+                            }
+                            if (inVideoGate) { button.__shiroxContinued=true; button.click(); continued=true; }
+                        });
+                    }
+                    window.webkit.messageHandlers.networkLogger.postMessage({type:'verification-state',responsePresent:responsePresent,continued:continued});
+                },500);
+            }
+            if (!passiveDocument) {
+
             // A resolver observes media requests silently. Muted playback also
             // lets normal HTML players initialise without an extra user tap.
             const originalMediaPlay = HTMLMediaElement.prototype.play;
@@ -1071,6 +1117,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             };
             aggressiveJWHook();
 
+            }
+
             window.waitForElementAndClick = function(waitSelectors, clickSelectors, maxWaitTime) {
                 return new Promise(function(resolve) {
                     const results = { waitResults: {}, clickResults: [] };
@@ -1095,7 +1143,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                                     let clicked = false;
                                     elements.forEach(function(element) {
                                         if (element && element.offsetParent !== null && !(element.matches('[data-play-url]') && element.__shiroxProviderActivated)) {
-                                            if (element.matches('[data-play-url]')) element.__shiroxProviderActivated = true;
+                                            if (element.matches('[data-play-url]')) { element.__shiroxProviderActivated = true; window.__shiroxProviderActivated=true; }
                                             try {
                                                 element.click();
                                                 clicked = true;
@@ -1147,16 +1195,12 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                         }
                     }
                 });
-                const clickableSelectors = ['button', '.play', '.play-button', '[data-play]', '.video-play', '.jwplayer', '.player', '[id*="player"]', '[class*="play"]', 'div[onclick]', 'span[onclick]', 'a[onclick]'];
-                clickableSelectors.forEach(function(selector) {
-                    document.querySelectorAll(selector).forEach(function(el) {
-                        try { el.click(); } catch(e) {}
-                    });
-                });
             };
-            setTimeout(nuclearScan, 500);
-            setTimeout(nuclearScan, 1500);
-            setTimeout(nuclearScan, 3000);
+            if (!passiveDocument) {
+                setTimeout(nuclearScan, 500);
+                setTimeout(nuclearScan, 1500);
+                setTimeout(nuclearScan, 3000);
+            }
 
             window.captureCookies = function() {
                 const cookies = {};
@@ -1395,6 +1439,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         let result: [String: Any] = [
             "originalUrl": originalUrl,
             "mediaPageURL": mediaPageURL as Any? ?? NSNull(),
+            "verificationResponsePresent": verificationResponsePresent,
+            "verifiedContinuationClicked": verifiedContinuationClicked,
             "requests": networkRequests,
             "html": htmlContent as Any? ?? NSNull(),
             "cookies": cookies.isEmpty ? NSNull() as Any : cookies as Any,
@@ -1485,6 +1531,9 @@ extension NetworkFetchMonitor: WKScriptMessageHandler {
                         }
                     }
                 }
+            } else if type == "verification-state" {
+                verificationResponsePresent = verificationResponsePresent || (body["responsePresent"] as? Bool == true)
+                verifiedContinuationClicked = verifiedContinuationClicked || (body["continued"] as? Bool == true)
             } else if type == "cookies", let cookiesData = body["cookies"] as? [String: String] {
                 for (key, value) in cookiesData {
                     cookies[key] = value
