@@ -275,7 +275,7 @@ final class DetailViewModel: ObservableObject {
                     throw NSError(
                         domain: "Shirox.InstantPlayback", code: 1,
                         userInfo: [NSLocalizedDescriptionKey:
-                            "No playable video was returned. Try another source."]
+                            "Die geprüfte Quelle liefert derzeit kein abspielbares Video."]
                     )
                 }
                 self.selectedEpisode = episode
@@ -349,7 +349,7 @@ final class DetailViewModel: ObservableObject {
             if needsCloudflareVerification {
                 errorMessage = "This provider requires website verification before streaming."
             } else if pendingStream == nil && streamOptions.isEmpty && errorMessage == nil {
-                errorMessage = "No playable stream was returned. Try another source or retry."
+                errorMessage = "Die geprüften Quellen liefern derzeit kein abspielbares Video. Bitte später erneut versuchen."
             }
             isLoadingStreams = false
         }

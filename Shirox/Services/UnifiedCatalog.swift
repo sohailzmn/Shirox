@@ -11,7 +11,10 @@ enum SourceCatalogRouting {
     static func canFollowPlayerWindow(from source: URL?, to target: URL) -> Bool {
         guard let host = source?.host?.lowercased(), StreamPreflight.validRemoteURL(target) else { return false }
         let name = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
-        return ["aniworld.to", "aniworld.cc", "serienstream.to", "serienstream.cx", "s.to"].contains(name)
+        let sources = ["aniworld.to", "aniworld.cc", "serienstream.to", "serienstream.cx", "s.to"]
+        guard sources.contains(name), let destination = target.host?.lowercased() else { return false }
+        let players = sources + ["voe.sx", "vidmoly.net", "vidmoly.to", "filemoon.sx", "doodstream.com", "dood.watch", "dood.to", "speedfiles.net", "mp4upload.com"]
+        return players.contains { destination == $0 || destination.hasSuffix("." + $0) }
     }
     static func kind(for href: String) -> CatalogKind? {
         guard let url = URL(string: href), let host = url.host?.lowercased() else { return nil }

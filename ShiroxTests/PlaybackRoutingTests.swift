@@ -31,6 +31,7 @@ final class PlaybackRoutingTests: XCTestCase {
     func testProviderNewTabReusesCaptureButHosterPopupsAreNotFollowed() {
         let player = URL(string:"https://voe.sx/e/example")!
         XCTAssertTrue(SourceCatalogRouting.canFollowPlayerWindow(from: URL(string:"https://serienstream.to/r?t=opaque"), to: player))
+        XCTAssertFalse(SourceCatalogRouting.canFollowPlayerWindow(from: URL(string:"https://serienstream.to/serie/dexter"), to: URL(string:"https://ads.example/popup")!))
         XCTAssertFalse(SourceCatalogRouting.canFollowPlayerWindow(from: player, to: URL(string:"https://ads.example/popup")!))
         XCTAssertFalse(SourceCatalogRouting.canFollowPlayerWindow(from: URL(string:"https://serienstream.to/r"), to: URL(string:"https://127.0.0.1/private")!))
     }
@@ -101,16 +102,16 @@ final class PlaybackRoutingTests: XCTestCase {
             let deadline = Date().addingTimeInterval(45)
             while Date() < deadline {
                 if item.status == .failed { break }
-                if player.currentTime().seconds >= 2 && layer.isReadyForDisplay {
+                if player.currentTime().seconds >= 2 && layer.isReadyForDisplay && item.duration.seconds >= 600 && item.duration.seconds.isFinite {
                     let audio = item.tracks.filter { $0.assetTrack?.mediaType == .audio }.count
                     XCTAssertGreaterThan(audio,0,"Playing media must include an audio track.")
-                    print("LIVE_\(source)_PLAYBACK seconds=\(player.currentTime().seconds) videoReady=\(layer.isReadyForDisplay) audioTracks=\(audio)")
+                    print("LIVE_\(source)_PLAYBACK seconds=\(player.currentTime().seconds) duration=\(item.duration.seconds) videoReady=\(layer.isReadyForDisplay) audioTracks=\(audio)")
                     return
                 }
                 try await Task.sleep(nanoseconds: 200_000_000)
             }
             let errorCodes = item.errorLog()?.events.map { "\($0.errorDomain):\($0.errorStatusCode)" }.joined(separator:",") ?? "none"
-            let entry = "candidate=\(stream.title) host=\(stream.url.host ?? "unknown") status=\(item.status.rawValue) control=\(player.timeControlStatus.rawValue) waiting=\(player.reasonForWaitingToPlay?.rawValue ?? "none") seconds=\(player.currentTime().seconds) videoReady=\(layer.isReadyForDisplay) errors=\(errorCodes)"
+            let entry = "candidate=\(stream.title) host=\(stream.url.host ?? "unknown") status=\(item.status.rawValue) control=\(player.timeControlStatus.rawValue) waiting=\(player.reasonForWaitingToPlay?.rawValue ?? "none") seconds=\(player.currentTime().seconds) duration=\(item.duration.seconds) videoReady=\(layer.isReadyForDisplay) errors=\(errorCodes)"
             diagnostics.append(entry); print("LIVE_\(source)_DIAGNOSTIC \(entry)")
         }
         XCTFail("No candidate rendered video and advanced: " + diagnostics.joined(separator:"; "))

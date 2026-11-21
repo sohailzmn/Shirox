@@ -146,6 +146,8 @@ extension JSContext {
                     networkFetchNative(url, finalOptions, function(result) {
                         resolve({
                             url: result.originalUrl,
+                            originalUrl: result.originalUrl,
+                            mediaPageURL: result.mediaPageURL || null,
                             requests: result.requests,
                             html: result.html || null,
                             cookies: result.cookies || null,
@@ -779,6 +781,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     private var waitResults: [String: Bool] = [:]
     private var cookies: [String: String] = [:]
     private var originalUrlString: String = ""
+    private var mediaPageURL: String?
 
     @Published private(set) var networkRequests: [String] = []
     @Published private(set) var cutoffTriggered = false
@@ -790,6 +793,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     func startMonitoring(urlString: String, options: NetworkFetchOptions, completion: @escaping ([String: Any]) -> Void) {
         self.options = options
         originalUrlString = urlString
+        mediaPageURL = nil
         completionHandler = completion
         networkRequests.removeAll()
         cutoffTriggered = false
@@ -936,6 +940,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         #endif
         config.mediaTypesRequiringUserActionForPlayback = []
 
+        let autoWaitSelectors = (options?.waitForSelectors ?? []).map { JSEngine.jsStringLiteral($0) }.joined(separator: ",")
+        let autoClickSelectors = (options?.clickSelectors ?? []).map { JSEngine.jsStringLiteral($0) }.joined(separator: ",")
+        let autoMaxWait = options?.maxWaitTime ?? 3
         let jsCode = """
         (function() {
             // A resolver observes media requests silently. Muted playback also
@@ -1087,7 +1094,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                                     const elements = document.querySelectorAll(selector);
                                     let clicked = false;
                                     elements.forEach(function(element) {
-                                        if (element && element.offsetParent !== null) {
+                                        if (element && element.offsetParent !== null && !(element.matches('[data-play-url]') && element.__shiroxProviderActivated)) {
+                                            if (element.matches('[data-play-url]')) element.__shiroxProviderActivated = true;
                                             try {
                                                 element.click();
                                                 clicked = true;
@@ -1114,6 +1122,10 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                     checkAndClick();
                 });
             };
+
+            document.addEventListener('DOMContentLoaded', function() {
+                window.waitForElementAndClick([\(autoWaitSelectors)], [\(autoClickSelectors)], \(autoMaxWait));
+            }, { once: true });
 
             const nuclearScan = function() {
                 Object.keys(window).forEach(function(key) {
@@ -1288,8 +1300,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     private func performCustomInteractions() {
         guard let webView = webView, let options = options else { return }
         if !options.waitForSelectors.isEmpty || !options.clickSelectors.isEmpty {
-            let waitSels = options.waitForSelectors.map { "'\($0)'" }.joined(separator: ", ")
-            let clickSels = options.clickSelectors.map { "'\($0)'" }.joined(separator: ", ")
+            let waitSels = options.waitForSelectors.map { JSEngine.jsStringLiteral($0) }.joined(separator: ", ")
+            let clickSels = options.clickSelectors.map { JSEngine.jsStringLiteral($0) }.joined(separator: ", ")
             let js = "if (typeof window.waitForElementAndClick === 'function') { window.waitForElementAndClick([\(waitSels)], [\(clickSels)], \(options.maxWaitTime)); }"
             webView.evaluateJavaScript(js, completionHandler: nil)
         } else {
@@ -1382,6 +1394,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
         let result: [String: Any] = [
             "originalUrl": originalUrl,
+            "mediaPageURL": mediaPageURL as Any? ?? NSNull(),
             "requests": networkRequests,
             "html": htmlContent as Any? ?? NSNull(),
             "cookies": cookies.isEmpty ? NSNull() as Any : cookies as Any,
@@ -1436,7 +1449,7 @@ extension NetworkFetchMonitor: WKUIDelegate {
         addRequest(target.absoluteString)
         // Provider launch links may use window.open. Reuse the capture view;
         // never follow advertising popups opened by a third-party hoster.
-        if SourceCatalogRouting.canFollowPlayerWindow(from: webView.url ?? URL(string: originalUrlString), to: target),
+        if SourceCatalogRouting.canFollowPlayerWindow(from: navigationAction.sourceFrame.request.url ?? webView.url ?? URL(string: originalUrlString), to: target),
            !HostBlocklist.shared.isBlocked(target) {
             webView.load(navigationAction.request)
         }
@@ -1452,6 +1465,10 @@ extension NetworkFetchMonitor: WKScriptMessageHandler {
               let body = message.body as? [String: Any] else { return }
 
         if let url = body["url"] as? String {
+            if let media = URL(string: url), ["m3u8", "mp4"].contains(media.pathExtension.lowercased()),
+               let page = message.frameInfo.request.url, StreamPreflight.validRemoteURL(page) {
+                mediaPageURL = page.absoluteString
+            }
             addRequest(url)
         }
 
