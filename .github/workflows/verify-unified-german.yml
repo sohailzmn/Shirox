@@ -1,0 +1,23 @@
+name: Verify Shirox unified German integration
+on:
+  pull_request:
+    branches:
+      - feature/smart-playback-recovery-20261021
+  workflow_dispatch:
+jobs:
+  build-ios:
+    runs-on: macos-26
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Build iOS IPA without signing
+        run: |
+          chmod +x ./buildipa.sh
+          ./buildipa.sh
+      - name: Upload test IPA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shirox-Unified-GER-test-IPA
+          path: build/Shirox.ipa
+          if-no-files-found: ignore
