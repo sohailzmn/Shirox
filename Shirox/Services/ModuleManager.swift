@@ -25,8 +25,45 @@ final class ModuleManager: ObservableObject {
     private let storageKey = "savedModules"
     private let activeKey = "activeModuleId"
 
+    // Optional, self-contained German source shipped by this fork. Install it once
+    // without replacing users' selected modules, credentials, or local files.
+    private let unifiedGermanURL =
+        "https://raw.githubusercontent.com/sohailzmn/sora-modules/main/UnifiedGerman_v1.json"
+    private let unifiedGermanInstalledKey = "shiroxUnifiedGermanBootstrappedV1"
+    private var unifiedGermanBootstrapTask: Task<Void, Never>?
+
     private init() {
         loadFromStorage()
+        Task { [weak self] in
+            await self?.ensureUnifiedGermanSource()
+        }
+    }
+
+    /// Safe to call at launch and again when the user taps Watch immediately:
+    /// both callers await the same task, never installing duplicate modules.
+    /// A failed network import is retried on next launch. Removing this optional
+    /// module later is respected because the successful bootstrap flag persists.
+    func ensureUnifiedGermanSource() async {
+        if let inFlight = unifiedGermanBootstrapTask {
+            await inFlight.value
+            return
+        }
+        guard !UserDefaults.standard.bool(forKey: unifiedGermanInstalledKey) else { return }
+
+        let task = Task { @MainActor in
+            if modules.contains(where: { $0.jsonUrl == unifiedGermanURL }) {
+                UserDefaults.standard.set(true, forKey: unifiedGermanInstalledKey)
+                return
+            }
+            guard let url = URL(string: unifiedGermanURL) else { return }
+            await addModule(from: url)
+            if modules.contains(where: { $0.jsonUrl == unifiedGermanURL }) {
+                UserDefaults.standard.set(true, forKey: unifiedGermanInstalledKey)
+            }
+        }
+        unifiedGermanBootstrapTask = task
+        await task.value
+        unifiedGermanBootstrapTask = nil
     }
 
     // MARK: - Add Module
