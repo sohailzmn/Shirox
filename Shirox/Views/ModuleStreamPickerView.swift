@@ -241,7 +241,7 @@ private enum VerifiedDirectEpisode {
                   !lower.contains("cf-mitigated"),
                   !lower.contains("checking your browser"),
                   lower.contains("episode") || lower.contains("folge") else { return false }
-            let pattern = #"<(?:h1|title)\\b[^>]*>([\\s\\S]*?)</(?:h1|title)>"#
+            let pattern = #"<(?:h1|title)\b[^>]*>([\s\S]*?)</(?:h1|title)>"#
             guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
                 return false
             }
