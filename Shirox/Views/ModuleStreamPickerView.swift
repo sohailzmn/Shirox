@@ -1289,7 +1289,6 @@ private struct ModuleStreamRow: View {
             VStack(alignment: .leading, spacing: 6) {
                 titleField
                 if rowVm.cloudflareURL != nil {
-                    Text("Blocked by Cloudflare").font(.caption).foregroundStyle(.secondary)
                     verifyBanner
                 } else {
                     Text("No results found")
@@ -1306,18 +1305,16 @@ private struct ModuleStreamRow: View {
         }
     }
 
-    /// Inline "Verify Cloudflare" button shown whenever a Turnstile wall was hit while
-    /// loading this module (data fetch or a blocked poster image).
+    /// Show a non-blocking source error instead of opening a website challenge
+    /// over the player. Never treat a protected page as a playable stream.
     @ViewBuilder
     private var verifyBanner: some View {
         if rowVm.cloudflareURL != nil {
-            CloudflareVerifyInlineButton { rowVm.verifyAndRetry() }
-            if let error = rowVm.verificationError {
-                Text(error)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Label("Diese Quelle erfordert eine Website-Bestätigung. Bitte eine andere Quelle wählen oder später erneut versuchen.",
+                  systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

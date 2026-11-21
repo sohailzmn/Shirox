@@ -206,4 +206,11 @@ final class AnimeModulePreferenceTests: XCTestCase {
             candidateTitle: "Dexter: Wiedererwachen", requestedTitle: nil))
     }
 
+    func testBlockedModuleSearchExplainsSourceRestrictionWithoutClaimingPlayback() {
+        let message = ModuleSearchFailure.websiteRestricted.errorDescription ?? ""
+        XCTAssertTrue(message.contains("blockiert"))
+        XCTAssertTrue(message.contains("andere"))
+        XCTAssertFalse(message.contains("Umgehung"))
+    }
+
 }
