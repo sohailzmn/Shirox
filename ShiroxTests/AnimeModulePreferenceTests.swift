@@ -88,6 +88,18 @@ final class AnimeModulePreferenceTests: XCTestCase {
         XCTAssertNil(result.episode)
     }
 
+    func testSeasonTwoRequiresVerifiableSeasonPath() {
+        let module = mod("Shirox Unified GER (AniWorld + S.to)", manga: false)
+        let episodes = [
+            EpisodeLink(number: 1, href: "https://example.org/episode-1"),
+            EpisodeLink(number: 2, href: "https://example.org/episode-2")
+        ]
+        let result = ModuleSeasonFallback.aniWorldEpisode(from: episodes,
+            title: "Dexter: Resurrection Season 2", module: module, number: 1)
+        XCTAssertTrue(result.handled)
+        XCTAssertNil(result.episode)
+    }
+
     func testSTOSeriesExplicitSeasonDoesNotChooseWrongEpisode() {
         let module = mod("s.to German Dub", manga: false)
         let episodes = [
