@@ -56,7 +56,7 @@ struct UnifiedHomeSections: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             Picker("Inhalte", selection: $filter) {
-                ForEach(["Alle", "Serien", "Anime", "Filme"], id: \.self) { Text($0).tag($0) }
+                ForEach(["Alle", "Serien", "Anime"], id: \.self) { Text($0).tag($0) }
             }.pickerStyle(.segmented).padding(.horizontal)
             if let featured = rows.first?.titles.first {
                 NavigationLink { CatalogDetailScreen(title: featured) } label: { CatalogHero(title: featured) }
@@ -319,7 +319,7 @@ struct CatalogWatchlistScreen: View {
     var body: some View {
         ScrollView {
             if watchlist.titles.isEmpty {
-                Text("Deine Serien- und Filmmerkliste ist noch leer.").foregroundStyle(.secondary).padding(30)
+                Text("Deine Merkliste ist noch leer.").foregroundStyle(.secondary).padding(30)
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 16) {
                     ForEach(watchlist.titles) { title in

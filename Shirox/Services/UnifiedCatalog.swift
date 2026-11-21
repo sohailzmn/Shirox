@@ -382,7 +382,7 @@ final class UnifiedCatalog: ObservableObject {
     func search(_ query: String) async throws -> [CatalogTitle] {
         var output: [CatalogTitle] = []
         var lastError: Error?
-        for kind in [CatalogKind.series, .movie] {
+        for kind in [CatalogKind.series] {
             do {
                 let page = try await read("search/\(kind == .movie ? "movie" : "tv")",
                                           query: [URLQueryItem(name: "query", value: LiveActionCatalog.seriesQuery(query))], as: TMDBPage.self)
