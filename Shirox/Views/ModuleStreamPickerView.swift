@@ -87,6 +87,75 @@ enum ModuleSeasonFallback {
         return Array(result.prefix(8))
     }
 
+    struct DirectEpisodeCandidate: Equatable {
+        let episodeHref: String
+        let seriesHref: String
+        let expectedTitle: String
+    }
+
+    /// Generate only canonical paths on the two installed German catalogues.
+    /// These are untrusted candidates until the HTTP page has been validated.
+    /// The requested season/episode is immutable, even if Jev changes title order.
+    static func directEpisodeCandidates(
+        for title: String, alternatives: [String], episodeNumber: Int, module: ModuleDefinition
+    ) -> [DirectEpisodeCandidate] {
+        let intent = mediaIntent(for: title)
+        guard let season = intent.seasonNumber, (1...99).contains(season),
+              (1...500).contains(episodeNumber) else { return [] }
+
+        let source = module.sourceName.lowercased()
+        let isUnified = source.contains("unified ger")
+        let supportsAnime = isUnified || source.contains("aniworld")
+        let supportsSeries = isUnified || source.contains("serienstream") || source.contains("s.to")
+        guard supportsAnime || supportsSeries else { return [] }
+
+        var names = queries(for: title, alternatives: alternatives)
+            .map { mediaIntent(for: $0).seriesTitle }
+        // On S.to this licensed metadata title is often localized.
+        let dexter = intent.seriesTitle.folding(
+            options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        if dexter.contains("dexter") && dexter.contains("resurrection") {
+            names.insert("Dexter: Wiedererwachen", at: 0)
+        }
+
+        var seen = Set<String>()
+        var slugs: [(String, String)] = []
+        for candidate in names {
+            let base = mediaIntent(for: candidate).seriesTitle
+            let ascii = base.lowercased()
+                .replacingOccurrences(of: "ß", with: "ss")
+                .folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+            let slug = ascii.replacingOccurrences(
+                of: "[^a-z0-9]+", with: "-", options: .regularExpression)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+            guard slug.count >= 3, slug.count <= 100,
+                  seen.insert(slug).inserted else { continue }
+            slugs.append((slug, base))
+            if slugs.count >= 3 { break }
+        }
+
+        let preferSeries = dexter.contains("dexter")
+        let origins = (supportsSeries && preferSeries
+            ? ["https://serienstream.to/serie/", "https://aniworld.to/anime/stream/"]
+            : ["https://aniworld.to/anime/stream/", "https://serienstream.to/serie/"])
+            .filter {
+                ($0.contains("aniworld") && supportsAnime) ||
+                ($0.contains("serienstream") && supportsSeries)
+            }
+
+        var output: [DirectEpisodeCandidate] = []
+        for origin in origins {
+            for (slug, base) in slugs {
+                let series = origin + slug
+                output.append(DirectEpisodeCandidate(
+                    episodeHref: series + "/staffel-\(season)/episode-\(episodeNumber)",
+                    seriesHref: series, expectedTitle: base))
+                if output.count >= 3 { return output }
+            }
+        }
+        return output
+    }
+
     /// For a grouped AniWorld listing, match the actual season URL. When S2 is
     /// missing, report no match instead of accidentally selecting S1E1.
     static func aniWorldEpisode(
@@ -129,6 +198,87 @@ enum FastSourceDecision {
             return "Folge gefunden, aber kein abspielbarer Videolink. Anderen Hoster versuchen."
         }
         return "Die Wiedergabe konnte nicht gestartet werden."
+    }
+}
+
+/// Fast, non-interactive verification of public episode pages. This never
+/// attempts to solve CAPTCHAs or reuse another website's authentication.
+private enum VerifiedDirectEpisode {
+    private static func normalize(_ text: String) -> String {
+        text.replacingOccurrences(of: "<[^>]*>", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .lowercased()
+            .replacingOccurrences(of: "ß", with: "ss")
+            .folding(options: .diacriticInsensitive, locale: Locale(identifier: "en_US_POSIX"))
+            .replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func isVerified(
+        _ candidate: ModuleSeasonFallback.DirectEpisodeCandidate
+    ) async -> Bool {
+        guard let url = URL(string: candidate.episodeHref),
+              url.scheme == "https",
+              ["aniworld.to", "serienstream.to"].contains(url.host ?? "") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 2.5
+        request.setValue("text/html", forHTTPHeaderField: "Accept")
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard !Task.isCancelled,
+                  let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  http.url?.host == url.host,
+                  http.url?.path == url.path,
+                  data.count < 2_000_000,
+                  let html = String(data: data, encoding: .utf8) else { return false }
+            // HTTP 200 alone is never evidence. Challenge and generic landing
+            // pages must not be accepted as episode pages.
+            let lower = html.lowercased()
+            guard !lower.contains("cf-chl-"),
+                  !lower.contains("cf-mitigated"),
+                  !lower.contains("checking your browser"),
+                  lower.contains("episode") || lower.contains("folge") else { return false }
+            let pattern = #"<(?:h1|title)\b[^>]*>([\s\S]*?)</(?:h1|title)>"#
+            guard let re = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
+                return false
+            }
+            let range = NSRange(html.startIndex..<html.endIndex, in: html)
+            let expected = normalize(candidate.expectedTitle)
+            guard expected.count >= 3 else { return false }
+            let matchedTitle = re.matches(in: html, range: range).contains { match in
+                guard let titleRange = Range(match.range(at: 1), in: html) else { return false }
+                return normalize(String(html[titleRange])).contains(expected)
+            }
+            // Never run a resolver on a title collision, CAPTCHA page or redirect.
+            guard matchedTitle,
+                  lower.contains("data-play-url") ||
+                  lower.contains("episode-links") ||
+                  lower.contains("link-box") ||
+                  lower.contains("data-lang-key") else { return false }
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func firstVerified(
+        _ candidates: [ModuleSeasonFallback.DirectEpisodeCandidate]
+    ) async -> ModuleSeasonFallback.DirectEpisodeCandidate? {
+        await withTaskGroup(of: ModuleSeasonFallback.DirectEpisodeCandidate?.self) { group in
+            for candidate in candidates.prefix(3) {
+                group.addTask { await isVerified(candidate) ? candidate : nil }
+            }
+            for await result in group {
+                if let result {
+                    group.cancelAll()
+                    return result
+                }
+            }
+            return nil
+        }
     }
 }
 
@@ -358,6 +508,56 @@ struct ModuleStreamPickerView: View {
                     if let previous = ModuleSearchAliasManager.shared.getLastSearchResultHref(
                         mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id) {
                         hrefs.append(previous)
+                    }
+
+                    // Fast path: with an explicit season and episode, check a few
+                    // trusted public episode URL patterns before expensive
+                    // full-catalogue search + all-season enumeration.
+                    // A valid page needs a matching actual title and hoster markup.
+                    // Blocked pages fail silently here; normal recovery still works.
+                    if hrefs.isEmpty {
+                        let directCandidates = ModuleSeasonFallback.directEpisodeCandidates(
+                            for: animeTitle, alternatives: alternateTitles,
+                            episodeNumber: episodeNumber, module: module)
+                        if let direct = await VerifiedDirectEpisode.firstVerified(directCandidates),
+                           !Task.isCancelled {
+                            foundSeries = true
+                            foundEpisode = true
+                            if headless {
+                                PlaybackPerformance.shared.moduleResolved()
+                                PlaybackPerformance.shared.episodeResolved()
+                            }
+                            let directStreams = (try? await runner.fetchStreams(
+                                episodeUrl: direct.episodeHref)) ?? []
+                            if !directStreams.isEmpty && !Task.isCancelled {
+                                foundStreams = true
+                                let savedTitle = ModuleSearchAliasManager.shared.getLastStreamTitle(
+                                    moduleId: module.id)
+                                let winner: StreamResult
+                                if let saved = directStreams.first(where: { $0.title == savedTitle }) {
+                                    winner = saved
+                                } else if headless {
+                                    winner = directStreams.first(where: {
+                                        $0.title.localizedCaseInsensitiveContains("480p")
+                                    }) ?? directStreams[0]
+                                } else {
+                                    winner = await Self.fastestResponsiveStream(in: directStreams)
+                                }
+                                guard !Task.isCancelled else { return }
+                                ModuleSearchAliasManager.shared.setLastSearchResultHref(
+                                    mediaId: mediaId, animeTitle: animeTitle,
+                                    moduleId: module.id, href: direct.seriesHref)
+                                ModuleSearchAliasManager.shared.setLastStreamTitle(
+                                    moduleId: module.id, title: winner.title)
+                                UserDefaults.standard.set(module.id, forKey: "lastUsedModuleId")
+                                moduleManager.selectModule(module)
+                                if headless { PlaybackPerformance.shared.streamResolved() }
+                                if !headless { onDismiss() }
+                                onStreamsLoaded(directStreams, winner, direct.seriesHref,
+                                                nil, direct.episodeHref)
+                                return
+                            }
+                        }
                     }
 
                     // Pass 0: reuse a known result. Search the AniList title, then
