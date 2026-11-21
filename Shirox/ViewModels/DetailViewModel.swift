@@ -236,9 +236,55 @@ final class DetailViewModel: ObservableObject {
 
     // MARK: - Streams
 
+    /// The normal path never presents a source picker. It shows the same
+    /// fullscreen skeleton used by AniList immediately, then resolves this
+    /// *exact* module episode URL (no duplicate title/season search).
     func loadStreams(for episode: EpisodeLink) {
         selectedEpisode = episode
+        #if os(iOS)
+        PlaybackPerformance.shared.begin(
+            title: detail?.title ?? "Episode", episode: Int(episode.number))
+        PlayerPresenter.shared.presentResolvingEpisode(
+            title: detail?.title ?? "Episode",
+            episode: Int(episode.number),
+            artwork: detail?.image ?? "",
+            onResolve: { [weak self] in
+                guard let self else { throw CancellationError() }
+                let streams = try await self.fetchStreams(for: episode)
+                try Task.checkCancellation()
+                guard !streams.isEmpty else {
+                    throw NSError(
+                        domain: "Shirox.InstantPlayback", code: 1,
+                        userInfo: [NSLocalizedDescriptionKey:
+                            "No playable video was returned. Try another source."]
+                    )
+                }
+                self.selectedEpisode = episode
+                self.streamOptions = streams
+                let saved = ModuleManager.shared.activeModule.flatMap {
+                    ModuleSearchAliasManager.shared.getLastStreamTitle(moduleId: $0.id)
+                }
+                let preferred = streams.first(where: { $0.title == saved })
+                    ?? streams.first!
+                self.selectStream(preferred)
+            },
+            onChooseSource: { [weak self] in
+                self?.loadStreamsManually(for: episode)
+            }
+        )
+        #else
+        loadStreamsManually(for: episode)
+        #endif
+    }
+
+    /// Explicit recovery UI only: the old picker remains accessible through
+    /// "Choose Source" when a provider fails.
+    func loadStreamsManually(for episode: EpisodeLink) {
+        streamsTask?.cancel()
+        selectedEpisode = episode
+        pendingStream = nil
         streamOptions = []
+        errorMessage = nil
         needsCloudflareVerification = false
         CloudflareBypassManager.shared.pendingVerificationURL = nil
         showStreamPicker = true
@@ -246,20 +292,31 @@ final class DetailViewModel: ObservableObject {
 
         streamsTask = Task {
             do {
-                let streams = try await JSEngine.shared.fetchStreams(episodeUrl: episode.href)
+                let isSerienStream = ModuleManager.shared.activeModule?.sourceName
+                    .localizedCaseInsensitiveContains("SerienStream") == true
+                let streams = try await JSEngine.shared.fetchStreams(
+                    episodeUrl: episode.href,
+                    timeout: isSerienStream ? 35 : 120
+                )
                 guard !Task.isCancelled else { return }
                 let sorted = streams.sorted { $0.title < $1.title }
-                if sorted.count == 1 {
-                    pendingStream = sorted[0]
-                    showStreamPicker = false
-                } else if UserDefaults.standard.bool(forKey: "autoPickLastStream"),
-                          let moduleId = ModuleManager.shared.activeModule?.id,
-                          let savedTitle = ModuleSearchAliasManager.shared.getLastStreamTitle(moduleId: moduleId),
-                          let match = sorted.first(where: { $0.title == savedTitle }) {
-                    pendingStream = match
-                    showStreamPicker = false
-                } else {
+                if !sorted.isEmpty {
+                    // Play immediately. Keep the choice of hoster/quality available
+                    // inside the player, but never force a second selection sheet.
                     streamOptions = sorted
+                    let savedTitle = ModuleManager.shared.activeModule.flatMap {
+                        ModuleSearchAliasManager.shared.getLastStreamTitle(moduleId: $0.id)
+                    }
+                    let saved = sorted.first { $0.title == savedTitle }
+                    let lowBitrate = sorted.first {
+                        $0.title.localizedCaseInsensitiveContains("480p") ||
+                        $0.title.localizedCaseInsensitiveContains("Schnell")
+                    }
+                    pendingStream = saved ?? lowBitrate ?? sorted[0]
+                    if let module = ModuleManager.shared.activeModule, let stream = pendingStream {
+                        ModuleSearchAliasManager.shared.setLastStreamTitle(moduleId: module.id, title: stream.title)
+                    }
+                    showStreamPicker = false
                 }
             } catch {
                 if !Task.isCancelled {
@@ -268,8 +325,15 @@ final class DetailViewModel: ObservableObject {
             }
             // A CF wall during the fetch leaves no streams but a flagged host — offer
             // a user-initiated "Verify Cloudflare" button instead of "No Streams Found".
-            needsCloudflareVerification = streamOptions.isEmpty
+            guard !Task.isCancelled else { return }
+            needsCloudflareVerification = pendingStream == nil
+                && streamOptions.isEmpty
                 && CloudflareBypassManager.shared.pendingVerificationURL != nil
+            if needsCloudflareVerification {
+                errorMessage = "This provider requires website verification before streaming."
+            } else if pendingStream == nil && streamOptions.isEmpty && errorMessage == nil {
+                errorMessage = "No playable stream was returned. Try another source or retry."
+            }
             isLoadingStreams = false
         }
     }
@@ -280,9 +344,22 @@ final class DetailViewModel: ObservableObject {
         guard let url = CloudflareBypassManager.shared.pendingVerificationURL,
               let episode = selectedEpisode else { return }
         Task {
-            try? await CloudflareBypassManager.shared.triggerBypass(for: url)
-            needsCloudflareVerification = false
-            loadStreams(for: episode)
+            do {
+                // User completes the site's challenge in the app. Re-run only
+                // after usable verification has actually been persisted.
+                try await CloudflareBypassManager.shared.triggerBypass(for: url)
+                guard let host = url.host,
+                      CloudflareBypassManager.shared.cookie(for: host) != nil else {
+                    needsCloudflareVerification = true
+                    errorMessage = "Verification was not completed. Please try again."
+                    return
+                }
+                needsCloudflareVerification = false
+                loadStreams(for: episode)
+            } catch {
+                needsCloudflareVerification = true
+                errorMessage = "Website verification failed: \(error.localizedDescription)"
+            }
         }
     }
 

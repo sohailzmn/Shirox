@@ -55,4 +55,14 @@ final class HLSQualityPreferenceTests: XCTestCase {
         let level = HLSQualityLevel(label: "720p", bandwidth: 1, resolution: "")
         XCTAssertEqual(HLSQualityParser.height(of: level), 720)
     }
+    func testQualityInspectionNeverDownloadsAnMP4() {
+        XCTAssertFalse(HLSQualityParser.supportsPlaylistInspection(URL(string: "https://cdn.example.com/episode.mp4")!))
+        XCTAssertFalse(HLSQualityParser.supportsPlaylistInspection(URL(string: "https://cdn.example.com/episode.mov?token=abc")!))
+    }
+
+    func testQualityInspectionAllowsHLSIncludingTokenQueries() {
+        XCTAssertTrue(HLSQualityParser.supportsPlaylistInspection(URL(string: "https://cdn.example.com/master.m3u8?expires=42")!))
+        XCTAssertTrue(HLSQualityParser.supportsPlaylistInspection(URL(string: "https://cdn.example.com/MASTER.M3U8")!))
+    }
+
 }

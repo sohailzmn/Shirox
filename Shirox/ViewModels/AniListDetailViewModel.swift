@@ -60,7 +60,37 @@ final class AniListDetailViewModel: ObservableObject {
 
     func watchEpisode(_ number: Int) {
         selectedEpisodeNumber = number
+        #if os(iOS)
+        guard let media else {
+            showStreamPicker = true
+            return
+        }
+        PlaybackPerformance.shared.begin(title: media.title.displayTitle, episode: number)
+        let artwork = media.bannerImage ?? media.coverImage.extraLarge
+            ?? media.coverImage.large ?? ""
+        // Present immediately. The actual source search runs headlessly inside
+        // the full-screen skeleton, then the existing selectStream() constructs
+        // the normal player, next-episode loader, resume state and subtitles.
+        PlayerPresenter.shared.presentResolvingPlayer(
+            mediaId: media.id,
+            title: media.title.searchTitle,
+            episode: number,
+            artwork: artwork,
+            alternativeTitles: [media.title.english, media.title.romaji, media.title.native]
+                .compactMap { $0 },
+            onStreamsLoaded: { [weak self] streams, chosen, showHref, available, actualHref in
+                guard let self, let stream = chosen ?? streams.first else { return }
+                self.pendingStreams = streams
+                self.selectStream(stream, searchResultHref: showHref,
+                                  episodeActualHref: actualHref, availableEpisodes: available)
+            },
+            onChooseSource: { [weak self] in
+                self?.showStreamPicker = true
+            }
+        )
+        #else
         showStreamPicker = true
+        #endif
     }
 
     func dismissModulePicker() {

@@ -490,6 +490,11 @@ struct SettingsView: View {
                     } label: {
                         Label("App Logs", systemImage: "terminal")
                     }
+                    NavigationLink {
+                        PlaybackPerformanceDashboard()
+                    } label: {
+                        Label("Playback Performance", systemImage: "gauge.with.dots.needle.50percent")
+                    }
                 }
                 #endif
 
@@ -1342,5 +1347,88 @@ private struct ReplacePreviewSheet: View {
             Text("\(count)")
                 .foregroundStyle(tint)
         }
+    }
+}
+
+
+// MARK: - Real session timing; no guesswork from the spinner
+@MainActor
+private struct PlaybackPerformanceDashboard: View {
+    @ObservedObject private var performance = PlaybackPerformance.shared
+
+    private func format(_ milliseconds: Int?) -> String {
+        guard let milliseconds else { return "—" }
+        return String(format: "%.2f s", Double(milliseconds) / 1_000)
+    }
+
+    private func elapsedBetween(_ start: Int?, _ end: Int?) -> Int? {
+        guard let start, let end, end >= start else { return nil }
+        return end - start
+    }
+
+    var body: some View {
+        List {
+            Section("Cache this session") {
+                HStack {
+                    Text("Episode lists")
+                    Spacer()
+                    Text("\(performance.metadataCacheHits) hits")
+                        .foregroundStyle(.secondary)
+                }
+                HStack {
+                    Text("Module scripts")
+                    Spacer()
+                    Text("\(performance.scriptCacheHits) hits")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            Section {
+                if performance.samples.isEmpty {
+                    ContentUnavailableView(
+                        "No playback samples yet", systemImage: "play.circle",
+                        description: Text("Start a video to measure lookup, resolution, and first frame.")
+                    )
+                } else {
+                    ForEach(performance.samples) { sample in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("\(sample.title) · Episode \(sample.episode)")
+                                    .font(.headline)
+                                Spacer()
+                                Text(sample.outcome)
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                            Text(sample.provider).font(.caption).foregroundStyle(.secondary)
+                            LabeledContent("Module search") {
+                                Text(format(elapsedBetween(sample.sourceSearchMs, sample.moduleReadyMs)))
+                            }
+                            LabeledContent("Episode resolution") {
+                                Text(format(elapsedBetween(sample.moduleReadyMs, sample.episodeReadyMs)))
+                            }
+                            LabeledContent("Stream URL resolution") {
+                                Text(format(elapsedBetween(sample.episodeReadyMs, sample.streamReadyMs)))
+                            }
+                            LabeledContent("AVPlayer ready") {
+                                Text(format(elapsedBetween(sample.streamReadyMs, sample.playerReadyMs)))
+                            }
+                            LabeledContent("First rendered frame") {
+                                Text(format(elapsedBetween(sample.playerReadyMs, sample.firstFrameMs)))
+                            }
+                            LabeledContent("Total startup") { Text(format(sample.firstFrameMs)) }
+                        }
+                    }
+                }
+            } header: {
+                Text("Recent playback attempts")
+            } footer: {
+                Text("Each stage is measured independently when its events are observable; missing stages show —. Total startup is measured from the episode tap to AVPlayerLayer.isReadyForDisplay, not just an open player or animated loader.")
+            }
+            Section {
+                Button("Clear measurements", role: .destructive) { performance.clear() }
+            }
+        }
+        .navigationTitle("Playback Performance")
     }
 }

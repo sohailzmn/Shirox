@@ -37,7 +37,11 @@ final class PlayerPresenter: ObservableObject {
 
     #if os(iOS)
     private weak var playerVC: UIViewController?
+    /// The skeleton player is replaced in-place when the source resolves.
+    private weak var loadingPlayerVC: PlayerHostingController<AnyView>?
     private var sourceView: UIView?
+    private var miniWindow: ShiroxMiniPlayerWindow?
+    private var miniController: ShiroxMiniPlayerController?
     /// Last interface orientation observed during a player session via device-orientation notifications.
     private var trackedPlayerOrientation: UIInterfaceOrientation = .portrait
     private var orientationObserver: NSObjectProtocol?
@@ -88,6 +92,80 @@ final class PlayerPresenter: ObservableObject {
     /// Retries left for the in-flight `presentPlayer` attempt (see `presentPlayer`).
     private var presentRetriesRemaining = PlayerPresenter.maxPresentRetries
 
+    /// Present the full-screen experience immediately, before any provider
+    /// request. The hidden module resolver uses the same logic as the manual
+    /// source picker but never displays its navigation sheet.
+    /// Direct playback for a known module episode or a Continue Watching
+    /// resume. The content is rendered immediately; only extraction runs
+    /// asynchronously, inside the same full-screen presentation.
+    func presentResolvingEpisode(
+        title: String, episode: Int, artwork: String,
+        onResolve: @escaping @MainActor () async throws -> Void,
+        onChooseSource: @escaping () -> Void
+    ) {
+        guard let top = Self.findTopViewController(),
+              playerVC?.viewIfLoaded?.window == nil else { return }
+        let content = ShiroxInstantPlaybackScreen(
+            mediaId: nil, title: title, episode: episode, artwork: artwork,
+            alternativeTitles: [],
+            onCancel: { [weak self] in
+                PlaybackPerformance.shared.cancelled()
+                self?.dismissPlayer()
+            },
+            onChooseSource: { [weak self] in
+                self?.dismissPlayer()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    onChooseSource()
+                }
+            },
+            onStreamsLoaded: { _, _, _, _, _ in },
+            directResolver: onResolve
+        )
+        let hosting = PlayerHostingController(rootView: AnyView(content))
+        hosting.modalPresentationStyle = .overFullScreen
+        loadingPlayerVC = hosting
+        playerVC = hosting
+        orientationLock = .allButUpsideDown
+        trackedPlayerOrientation = snapshotCurrentOrientation()
+        startTrackingOrientation()
+        top.present(hosting, animated: false)
+    }
+
+    func presentResolvingPlayer(
+        mediaId: Int?, title: String, episode: Int, artwork: String,
+        alternativeTitles: [String] = [],
+        onStreamsLoaded: @escaping ([StreamResult], StreamResult?, String?, Int?, String?) -> Void,
+        onChooseSource: @escaping () -> Void
+    ) {
+        guard let top = Self.findTopViewController(),
+              playerVC?.viewIfLoaded?.window == nil else { return }
+        let content = ShiroxInstantPlaybackScreen(
+            mediaId: mediaId, title: title, episode: episode, artwork: artwork,
+            alternativeTitles: alternativeTitles,
+            onCancel: { [weak self] in
+                PlaybackPerformance.shared.cancelled()
+                self?.dismissPlayer()
+            },
+            onChooseSource: { [weak self] in
+                self?.dismissPlayer()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    onChooseSource()
+                }
+            },
+            onStreamsLoaded: onStreamsLoaded
+        )
+        .environmentObject(ModuleManager.shared)
+        let hosting = PlayerHostingController(rootView: AnyView(content))
+        hosting.modalPresentationStyle = .overFullScreen
+        loadingPlayerVC = hosting
+        playerVC = hosting
+        orientationLock = .allButUpsideDown
+        trackedPlayerOrientation = snapshotCurrentOrientation()
+        startTrackingOrientation()
+        // No modal transition or intermediate picker animation on Watch.
+        top.present(hosting, animated: false)
+    }
+
     func presentPlayer(stream: StreamResult, streams: [StreamResult] = [], context: PlayerContext? = nil, onWatchNext: WatchNextLoader? = nil, onStreamExpired: StreamRefetchLoader? = nil, onSequelNeeded: SequelLoader? = nil, onSequelAdvanced: ((SequelNavigation) -> Void)? = nil, onFinished: ((PlayerContext) -> Void)? = nil, from sourceView: UIView? = nil) {
         guard let topVC = Self.findTopViewController() else { return }
 
@@ -96,7 +174,10 @@ final class PlayerPresenter: ObservableObject {
         // AVPlayers, both holding audio focus. Checked against the window so a stale reference
         // can never wedge playback shut; a player on its way out falls through to the retry
         // below instead, so relaunching straight after a dismiss still works.
-        if let existing = playerVC, existing.viewIfLoaded?.window != nil, !existing.isBeingDismissed { return }
+        let replacingSkeleton = loadingPlayerVC != nil &&
+            playerVC === loadingPlayerVC
+        if let existing = playerVC, existing.viewIfLoaded?.window != nil,
+           !existing.isBeingDismissed, !replacingSkeleton { return }
 
         // UIKit silently refuses to present on a controller that is still presenting something
         // else — which is exactly what happens when the stream-picker sheet is still animating
@@ -104,7 +185,8 @@ final class PlayerPresenter: ObservableObject {
         // isn't long enough (slow device, heavy detail screen, a sheet that dismissed late) the
         // player just never appeared and the user was left staring at the episode list. Wait for
         // the hierarchy to settle instead of dropping the launch on the floor.
-        if topVC.presentedViewController != nil || topVC.isBeingDismissed || topVC.isBeingPresented {
+        if !replacingSkeleton &&
+            (topVC.presentedViewController != nil || topVC.isBeingDismissed || topVC.isBeingPresented) {
             guard presentRetriesRemaining > 0 else {
                 Logger.shared.log("[Player] Presentation blocked and retries exhausted — giving up", type: "Error")
                 presentRetriesRemaining = Self.maxPresentRetries
@@ -135,8 +217,22 @@ final class PlayerPresenter: ObservableObject {
         .tint(.primary)
         .ignoresSafeArea()
         
+        if replacingSkeleton, let skeleton = loadingPlayerVC {
+            // The resolver has finished. Keep the SAME full-screen hosting
+            // controller and replace only its SwiftUI content, without a
+            // dismiss/present flash or a second AVPlayer.
+            loadingPlayerVC = nil
+            skeleton.rootView = AnyView(playerView)
+            orientationLock = UserDefaults.standard.bool(forKey: "forceLandscape")
+                ? .landscape : .allButUpsideDown
+            UIView.performWithoutAnimation { refreshSupportedOrientations() }
+            return
+        }
+
         let hostingController = PlayerHostingController(rootView: playerView)
-        hostingController.modalPresentationStyle = UIModalPresentationStyle.fullScreen
+        // Keep the app alive underneath so it becomes interactive when the
+        // full-screen playback surface is temporarily minimized.
+        hostingController.modalPresentationStyle = .overFullScreen
 
         let forceLandscape = UserDefaults.standard.bool(forKey: "forceLandscape")
         let lastRaw = UserDefaults.standard.integer(forKey: "lastLandscapeOrientation")
@@ -170,7 +266,10 @@ final class PlayerPresenter: ObservableObject {
     }
 
     func dismissPlayer() {
+        loadingPlayerVC = nil
+        closeMiniPlayerWindow()
         guard let playerVC = playerVC else { return }
+        playerVC.view.isHidden = false
         let wasLandscape = trackedPlayerOrientation.isLandscape
         // Save the side one last time before dismissing
         if wasLandscape {
@@ -186,6 +285,53 @@ final class PlayerPresenter: ObservableObject {
             self?.playerVC = nil
             self?.sourceView = nil
         }
+    }
+
+    /// This is a genuine in-app mini player: the video layer uses the SAME
+    /// AVPlayer instance as full-screen playback. The full-screen SwiftUI view
+    /// stays mounted in its overFullScreen controller, so position, subtitles,
+    /// background tasks and the Next Episode loader are not restarted.
+    func minimizePlayer(player: AVPlayer) {
+        guard let fullscreen = playerVC,
+              let scene = fullscreen.view.window?.windowScene,
+              miniWindow == nil else { return }
+        let controller = ShiroxMiniPlayerController(player: player)
+        controller.onRestore = { [weak self] in self?.restoreMiniPlayer() }
+        controller.onClose = { [weak self] in self?.dismissPlayer() }
+        let window = ShiroxMiniPlayerWindow(windowScene: scene)
+        window.windowLevel = .normal + 2
+        window.backgroundColor = .clear
+        window.rootViewController = controller
+        window.isHidden = false
+        miniController = controller
+        miniWindow = window
+        fullscreen.view.isHidden = true
+        fullscreen.view.isUserInteractionEnabled = false
+        orientationLock = .portrait
+        UIView.performWithoutAnimation { refreshSupportedOrientations() }
+    }
+
+    func refreshMiniPlayer(player: AVPlayer) {
+        miniController?.replacePlayer(player)
+    }
+
+    func restoreMiniPlayer() {
+        closeMiniPlayerWindow()
+        guard let fullscreen = playerVC else { return }
+        fullscreen.view.isHidden = false
+        fullscreen.view.isUserInteractionEnabled = true
+        NotificationCenter.default.post(
+            name: Notification.Name("ShiroxMiniPlayerRestored"), object: nil)
+        orientationLock = .allButUpsideDown
+        UIView.performWithoutAnimation { refreshSupportedOrientations() }
+    }
+
+    private func closeMiniPlayerWindow() {
+        miniController?.detachVideo()
+        miniWindow?.isHidden = true
+        miniWindow?.rootViewController = nil
+        miniController = nil
+        miniWindow = nil
     }
 
     /// Called after the player view has already been manually animated off screen (drag-to-dismiss).
@@ -816,6 +962,256 @@ extension CastManager: GCKRequestDelegate {
         // A load that fails leaves the TV on its idle screen; say so instead of presenting
         // a cast overlay for media that never started.
         Task { @MainActor in self.lastError = error.localizedDescription }
+    }
+}
+#endif
+
+
+// MARK: - Small, touch-through in-app playback overlay
+
+// MARK: - Instant episode launch (visible before source extraction)
+#if os(iOS)
+@MainActor
+private final class ShiroxLaunchStatus: ObservableObject {
+    @Published var provider = "Preparing your episode"
+    @Published var failed = false
+    @Published var retryID = UUID()
+}
+
+@MainActor
+private struct ShiroxInstantPlaybackScreen: View {
+    let mediaId: Int?
+    let title: String
+    let episode: Int
+    let artwork: String
+    let alternativeTitles: [String]
+    let onCancel: () -> Void
+    let onChooseSource: () -> Void
+    let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
+    var directResolver: (@MainActor () async throws -> Void)? = nil
+
+    @StateObject private var state = ShiroxLaunchStatus()
+    @State private var glowing = false
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            if let url = URL(string: artwork), !artwork.isEmpty {
+                AsyncImage(url: url) { image in
+                    image.resizable().scaledToFill()
+                        .blur(radius: 40)
+                        .overlay(.black.opacity(0.8))
+                } placeholder: { Color.black }
+                .ignoresSafeArea()
+                .accessibilityHidden(true)
+            }
+
+            VStack(spacing: 22) {
+                HStack {
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 17, weight: .bold))
+                            .frame(width: 44, height: 44)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .accessibilityLabel("Close player")
+                    Spacer()
+                }
+                Spacer()
+                RoundedRectangle(cornerRadius: 13)
+                    .fill(.white.opacity(glowing ? 0.18 : 0.07))
+                    .frame(width: 184, height: 104)
+                    .overlay {
+                        Image(systemName: "play.rectangle.fill")
+                            .font(.system(size: 35))
+                            .foregroundStyle(.white.opacity(glowing ? 0.6 : 0.25))
+                    }
+                VStack(spacing: 10) {
+                    Text(title)
+                        .font(.title2.weight(.bold))
+                        .lineLimit(2)
+                    Text("Episode \(episode)")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.72))
+                    if state.failed {
+                        Text("Video couldn't be loaded from the available sources.")
+                            .foregroundStyle(.white.opacity(0.8))
+                            .multilineTextAlignment(.center)
+                            .font(.footnote)
+                        HStack {
+                            Button("Retry") {
+                                state.failed = false
+                                state.provider = "Retrying…"
+                                state.retryID = UUID()
+                            }.buttonStyle(.borderedProminent)
+                            Button("Choose Source", action: onChooseSource)
+                                .buttonStyle(.bordered)
+                        }
+                    } else {
+                        ProgressView().tint(.white)
+                        Text(state.provider)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.65))
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                // The extractor is a headless view. Its original search and
+                // episode-matching behavior is reused without duplicating it.
+                if let directResolver {
+                    Color.clear.frame(width: 1, height: 1)
+                        .task(id: state.retryID) {
+                            do {
+                                try await directResolver()
+                            } catch {
+                                guard !Task.isCancelled else { return }
+                                state.provider = error.localizedDescription
+                                state.failed = true
+                            }
+                        }
+                } else {
+                    ModuleStreamPickerView(
+                    mediaId: mediaId, animeTitle: title, episodeNumber: episode,
+                    alternateTitles: alternativeTitles, onDismiss: {},
+                    headless: true,
+                    onStatus: { provider in state.provider = "Connecting to \(provider)…" },
+                    onFailure: { state.failed = true },
+                    onStreamsLoaded: onStreamsLoaded
+                )
+                    .id(state.retryID)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.001)
+                    .accessibilityHidden(true)
+                }
+            }
+            .padding(24)
+            .foregroundStyle(.white)
+        }
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                glowing = true
+            }
+        }
+    }
+}
+#endif
+
+#if os(iOS)
+@MainActor
+private final class ShiroxMiniPlayerWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        // No full-screen transparent shield: taps outside the video go through
+        // to the underlying tab, search and detail screens.
+        return hit === rootViewController?.view ? nil : hit
+    }
+}
+
+@MainActor
+private final class ShiroxMiniVideoSurface: UIView {
+    override class var layerClass: AnyClass { AVPlayerLayer.self }
+    var videoLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+}
+
+@MainActor
+private final class ShiroxMiniPlayerController: UIViewController {
+    let card = UIView()
+    let surface = ShiroxMiniVideoSurface()
+    private let playButton = UIButton(type: .system)
+    private let expandButton = UIButton(type: .system)
+    private let closeButton = UIButton(type: .system)
+    private var isPositioned = false
+    private var player: AVPlayer?
+    var onRestore: (() -> Void)?
+    var onClose: (() -> Void)?
+
+    init(player: AVPlayer) {
+        self.player = player
+        super.init(nibName: nil, bundle: nil)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .clear
+        card.backgroundColor = .black
+        card.layer.cornerRadius = 14
+        card.layer.masksToBounds = true
+        card.layer.borderWidth = 1
+        card.layer.borderColor = UIColor.white.withAlphaComponent(0.17).cgColor
+        view.addSubview(card)
+        surface.videoLayer.player = player
+        surface.videoLayer.videoGravity = .resizeAspect
+        card.addSubview(surface)
+        for (button, symbol, action) in [
+            (playButton, "pause.fill", #selector(togglePlayback)),
+            (expandButton, "arrow.up.left.and.arrow.down.right", #selector(expand)),
+            (closeButton, "xmark", #selector(close))
+        ] {
+            button.setImage(UIImage(systemName: symbol), for: .normal)
+            button.tintColor = .white
+            button.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+            button.layer.cornerRadius = 15
+            button.addTarget(self, action: action, for: .touchUpInside)
+            card.addSubview(button)
+        }
+        card.addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(drag(_:))))
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        if !isPositioned {
+            card.frame = CGRect(
+                x: max(12, view.bounds.width - 274),
+                y: max(60, view.bounds.height - view.safeAreaInsets.bottom - 200),
+                width: 260, height: 148)
+            isPositioned = true
+        }
+        surface.frame = card.bounds
+        playButton.frame = CGRect(x: 8, y: 8, width: 31, height: 31)
+        expandButton.frame = CGRect(x: card.bounds.width - 77, y: 8, width: 31, height: 31)
+        closeButton.frame = CGRect(x: card.bounds.width - 39, y: 8, width: 31, height: 31)
+    }
+
+    @objc private func togglePlayback() {
+        guard let player else { return }
+        if player.rate > 0 {
+            player.pause()
+            playButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
+        } else {
+            player.play()
+            playButton.setImage(UIImage(systemName: "pause.fill"), for: .normal)
+        }
+    }
+
+    @objc private func expand() { onRestore?() }
+    @objc private func close() { onClose?() }
+
+    @objc private func drag(_ pan: UIPanGestureRecognizer) {
+        let delta = pan.translation(in: view)
+        var next = card.center
+        next.x += delta.x
+        next.y += delta.y
+        next.x = min(max(card.bounds.width / 2 + 8, next.x),
+                     view.bounds.width - card.bounds.width / 2 - 8)
+        next.y = min(max(card.bounds.height / 2 + view.safeAreaInsets.top, next.y),
+                     view.bounds.height - card.bounds.height / 2 - view.safeAreaInsets.bottom)
+        card.center = next
+        pan.setTranslation(.zero, in: view)
+    }
+
+    func replacePlayer(_ replacement: AVPlayer) {
+        guard replacement !== player else { return }
+        player = replacement
+        surface.videoLayer.player = replacement
+        playButton.setImage(UIImage(systemName: replacement.rate > 0
+            ? "pause.fill" : "play.fill"), for: .normal)
+    }
+
+    func detachVideo() {
+        surface.videoLayer.player = nil
+        player = nil
     }
 }
 #endif

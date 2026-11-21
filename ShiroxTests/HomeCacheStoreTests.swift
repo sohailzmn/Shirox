@@ -16,13 +16,15 @@ final class HomeCacheStoreTests: XCTestCase {
         return dir
     }
 
-    private func makeMedia(id: Int, title: String, provider: ProviderType) -> Media {
+    private func makeMedia(
+        id: Int, title: String, provider: ProviderType, genres: [String]? = nil
+    ) -> Media {
         Media(
             id: id, idMal: nil, provider: provider,
             title: MediaTitle(romaji: title, english: title, native: nil),
             coverImage: MediaCoverImage(large: nil, extraLarge: nil),
             bannerImage: nil, description: nil, episodes: 12,
-            status: nil, averageScore: nil, genres: nil,
+            status: nil, averageScore: nil, genres: genres,
             season: nil, seasonYear: nil, nextAiringEpisode: nil,
             relations: nil, type: nil, format: nil)
     }
@@ -94,4 +96,89 @@ final class HomeCacheStoreTests: XCTestCase {
         XCTAssertNil(store.snapshot(provider: .anilist))
         XCTAssertNil(HomeCacheStore(directory: dir).snapshot(provider: .anilist))
     }
+
+    // MARK: - Home personalization, using only already fetched anime
+    private func watchedItem(title: String, aniListID: Int?) -> ContinueWatchingItem {
+        ContinueWatchingItem(
+            id: UUID(), mediaTitle: title, episodeNumber: 2,
+            episodeTitle: nil, imageUrl: "", streamUrl: "https://example.test/master.m3u8",
+            headers: nil, subtitle: nil, streamTitle: nil,
+            aniListID: aniListID, malID: nil, moduleId: nil, detailHref: nil,
+            episodeHref: nil, watchedSeconds: 420, totalSeconds: 1_400,
+            totalEpisodes: 12, availableEpisodes: 12, isAiring: false,
+            lastWatchedAt: .now, thumbnailUrl: nil
+        )
+    }
+
+    func testPersonalRecommendationsRankSharedGenresAndExcludeWatchedAnime() {
+        let vm = HomeViewModel(seedCachedFeed: false)
+        vm.trending = [makeMedia(id: 10, title: "Blue Lock", provider: .anilist,
+                                 genres: ["Sports", "Drama"])]
+        vm.seasonal = [makeMedia(id: 11, title: "Haikyuu", provider: .anilist,
+                                 genres: ["Sports", "Comedy"]),
+                       makeMedia(id: 12, title: "Romance Show", provider: .anilist,
+                                 genres: ["Romance"])]
+        vm.popular = [makeMedia(id: 13, title: "Another Sports Anime", provider: .anilist,
+                                genres: ["Sports", "Drama"])]
+        let items = vm.recommendations(for: [watchedItem(title: "Blue Lock", aniListID: 10)])
+        XCTAssertEqual(items.map(\.id), [13, 11],
+                       "Overlap should rank recommendations and never repeat watched shows")
+    }
+
+    func testRecommendationsAreDeduplicatedAcrossFeedRows() {
+        let vm = HomeViewModel(seedCachedFeed: false)
+        vm.trending = [makeMedia(id: 10, title: "Blue Lock", provider: .anilist,
+                                 genres: ["Sports"])]
+        let repeated = makeMedia(id: 11, title: "Haikyuu", provider: .anilist, genres: ["Sports"])
+        vm.seasonal = [repeated]
+        vm.popular = [repeated]
+        XCTAssertEqual(vm.recommendations(for: [
+            watchedItem(title: "Blue Lock", aniListID: 10)
+        ]).map(\.id), [11])
+    }
+
+    func testRecommendationsStayEmptyWithoutViewingHistory() {
+        let vm = HomeViewModel(seedCachedFeed: false)
+        vm.trending = [makeMedia(id: 10, title: "Blue Lock", provider: .anilist,
+                                 genres: ["Sports"])]
+        XCTAssertTrue(vm.recommendations(for: []).isEmpty)
+    }
+    // Playback Performance must never confuse AVPlayer.readyToPlay with a visible frame.
+    func testPlaybackTimingKeepsFiveSeparateMilestones() {
+        let diagnostics = PlaybackPerformance.shared
+        diagnostics.clear()
+        diagnostics.begin(title: "Test Episode", episode: 6)
+        diagnostics.sourceSearch(provider: "Test Module")
+        diagnostics.moduleResolved()
+        diagnostics.episodeResolved()
+        diagnostics.streamResolved()
+        diagnostics.playerReady()
+
+        guard let pending = diagnostics.samples.first else {
+            XCTFail("Missing performance sample")
+            return
+        }
+        XCTAssertNotNil(pending.moduleReadyMs)
+        XCTAssertNotNil(pending.episodeReadyMs)
+        XCTAssertNotNil(pending.streamReadyMs)
+        XCTAssertNotNil(pending.playerReadyMs)
+        XCTAssertNil(pending.firstFrameMs)
+        XCTAssertEqual(pending.outcome, "Buffering", "readyToPlay must not count as video rendered")
+
+        diagnostics.firstFrameReady()
+        guard let rendered = diagnostics.samples.first else {
+            XCTFail("Missing completed performance sample")
+            return
+        }
+        XCTAssertNotNil(rendered.firstFrameMs)
+        XCTAssertEqual(rendered.outcome, "Playing")
+
+        // A playable five-second placeholder can render a frame but is not
+        // the requested full episode; the metric must revoke false success.
+        diagnostics.rejectedInvalidEpisode()
+        XCTAssertNil(diagnostics.samples.first?.firstFrameMs)
+        XCTAssertEqual(diagnostics.samples.first?.outcome, "Invalid episode source")
+        diagnostics.clear()
+    }
+
 }

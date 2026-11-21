@@ -9,6 +9,9 @@ struct PlayerDoubleTapSeek: View {
     /// still jumped when a pocket or a passing hand caught the screen twice — the one thing
     /// locking is for. The single tap stays live: it's what reveals the unlock button.
     var isLocked: Bool = false
+    /// Swipe up/down: left side brightness, right side video volume.
+    /// Delta is normalized to screen height; positive means swipe up.
+    var onVerticalSwipe: ((Bool, CGFloat) -> Void)? = nil
 
     @State private var showLeftFeedback = false
     @State private var showRightFeedback = false
@@ -24,7 +27,11 @@ struct PlayerDoubleTapSeek: View {
             FullScreenSeekView(
                 onSingleTap: onSingleTap,
                 onSeekLeft:  { guard !isLocked else { return }; showFeedback(left: true);  onSeekBackward() },
-                onSeekRight: { guard !isLocked else { return }; showFeedback(left: false); onSeekForward()  }
+                onSeekRight: { guard !isLocked else { return }; showFeedback(left: false); onSeekForward() },
+                onVerticalSwipe: { rightSide, delta in
+                    guard !isLocked else { return }
+                    onVerticalSwipe?(rightSide, delta)
+                }
             )
             #else
             HStack(spacing: 0) {
@@ -117,9 +124,11 @@ private struct FullScreenSeekView: UIViewRepresentable {
     var onSingleTap: () -> Void
     var onSeekLeft: () -> Void
     var onSeekRight: () -> Void
+    var onVerticalSwipe: ((Bool, CGFloat) -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onSingleTap: onSingleTap, onSeekLeft: onSeekLeft, onSeekRight: onSeekRight)
+        Coordinator(onSingleTap: onSingleTap, onSeekLeft: onSeekLeft,
+                    onSeekRight: onSeekRight, onVerticalSwipe: onVerticalSwipe)
     }
 
     func makeUIView(context: Context) -> UIView {
@@ -146,6 +155,11 @@ private struct FullScreenSeekView: UIViewRepresentable {
 
         view.addGestureRecognizer(doubleTap)
         view.addGestureRecognizer(singleTap)
+        let verticalPan = UIPanGestureRecognizer(
+            target: context.coordinator, action: #selector(Coordinator.handleVerticalPan(_:)))
+        verticalPan.maximumNumberOfTouches = 1
+        verticalPan.cancelsTouchesInView = false
+        view.addGestureRecognizer(verticalPan)
         return view
     }
 
@@ -153,19 +167,23 @@ private struct FullScreenSeekView: UIViewRepresentable {
         context.coordinator.onSingleTap = onSingleTap
         context.coordinator.onSeekLeft  = onSeekLeft
         context.coordinator.onSeekRight = onSeekRight
+        context.coordinator.onVerticalSwipe = onVerticalSwipe
     }
 
     final class Coordinator: NSObject {
         var onSingleTap: () -> Void
         var onSeekLeft: () -> Void
         var onSeekRight: () -> Void
+        var onVerticalSwipe: ((Bool, CGFloat) -> Void)?
 
         init(onSingleTap: @escaping () -> Void,
              onSeekLeft: @escaping () -> Void,
-             onSeekRight: @escaping () -> Void) {
+             onSeekRight: @escaping () -> Void,
+             onVerticalSwipe: ((Bool, CGFloat) -> Void)?) {
             self.onSingleTap = onSingleTap
             self.onSeekLeft  = onSeekLeft
             self.onSeekRight = onSeekRight
+            self.onVerticalSwipe = onVerticalSwipe
         }
 
         @objc func handleSingle(_ gr: UITapGestureRecognizer) {
@@ -175,6 +193,17 @@ private struct FullScreenSeekView: UIViewRepresentable {
         @objc func handleDouble(_ gr: UITapGestureRecognizer) {
             let isLeft = gr.location(in: gr.view).x < (gr.view?.bounds.width ?? 0) / 2
             if isLeft { onSeekLeft() } else { onSeekRight() }
+        }
+
+        @objc func handleVerticalPan(_ gr: UIPanGestureRecognizer) {
+            guard gr.state == .changed, let view = gr.view else { return }
+            let movement = gr.translation(in: view)
+            guard abs(movement.y) > abs(movement.x) * 1.4,
+                  abs(movement.y) > 3 else { return }
+            let rightSide = gr.location(in: view).x >= view.bounds.midX
+            let delta = -movement.y / max(1, view.bounds.height) * 1.6
+            onVerticalSwipe?(rightSide, delta)
+            gr.setTranslation(.zero, in: view)
         }
     }
 }

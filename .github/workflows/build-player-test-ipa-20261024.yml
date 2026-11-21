@@ -1,0 +1,61 @@
+name: Build Shirox Dexter Episode Status IPA (Unsigned)
+on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/build-player-test-ipa-20261024.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  ipa:
+    name: Build unsigned iPhone IPA with aired episode state and module search
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 50eeff37ae5ff5b5b16caa86a01a4768ffa2a169
+      - name: Show exact source revision
+        run: |
+          echo "Building git commit: $(git rev-parse HEAD)"
+          echo "Branch: $GITHUB_REF_NAME"
+          xcodebuild -version
+          test "$GITHUB_REF_NAME" = "feature/smart-playback-recovery-20261021"
+          test "$(git rev-parse HEAD)" = "50eeff37ae5ff5b5b16caa86a01a4768ffa2a169"
+      - name: Build unsigned iPhone IPA using existing project script
+        run: |
+          chmod +x ./buildipa.sh
+          ./buildipa.sh
+      - name: Verify IPA structure and record checksum
+        run: |
+          test -s build/Shirox.ipa
+          unzip -tq build/Shirox.ipa
+          unzip -Z1 build/Shirox.ipa | grep -E '^Payload/[^/]+\.app/' >/dev/null
+          shasum -a 256 build/Shirox.ipa | tee build/Shirox.ipa.sha256
+          ls -lh build/Shirox.ipa
+      - name: Upload test IPA as GitHub Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Shirox-Playback-Test-IPA
+          path: |
+            build/Shirox.ipa
+            build/Shirox.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Publish convenient prerelease download
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="dexter-episode-fix-50eeff37ae5f"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --target "50eeff37ae5ff5b5b16caa86a01a4768ffa2a169" \
+            --title "Shirox Dexter Episode Fix (unsigned) 50eeff3" \
+            --notes "Unsigned iOS test IPA from source commit 50eeff37ae5ff5b5b16caa86a01a4768ffa2a169. Shows aired/upcoming status for live-action seasons and offers find-in-module on aired episodes, with a legible search button. Includes TVmaze series and Apple movie metadata and previous player fixes. Aired does not prove stream availability. Requires signing before iPhone installation. Live hoster and playback behavior need real-device testing." \
+            --prerelease
+          gh release upload "$TAG" build/Shirox.ipa build/Shirox.ipa.sha256 \
+            --repo "$GITHUB_REPOSITORY" --clobber

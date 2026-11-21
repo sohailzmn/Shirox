@@ -7,15 +7,76 @@ final class SkipTimestampsService {
     private struct CacheKey: Hashable {
         let aniListID: Int
         let episodeNumber: Int
+        let malID: Int?
+        let durationBucket: Int
     }
 
     private var cache: [CacheKey: SkipSegments] = [:]
+    private struct AniSkipKey: Hashable {
+        let malID: Int
+        let episode: Int
+        let durationBucket: Int
+    }
+    private var fastCache: [AniSkipKey: SkipSegments] = [:]
+
+    /// Return reliable, runtime-matched AniSkip markers immediately, without
+    /// waiting for TVDB/TMDB/IMDB mapping. The player uses this result first;
+    /// a longer secondary lookup may fill missing chapters afterwards.
+    func fetchFastSegments(
+        malID: Int, episode: Int, playbackDuration: Double,
+        refreshIncomplete: Bool = false
+    ) async -> SkipSegments? {
+        guard malID > 0, episode > 0, playbackDuration.isFinite,
+              playbackDuration >= 60, playbackDuration <= 14_400 else { return nil }
+        let key = AniSkipKey(malID: malID, episode: episode,
+                             durationBucket: Int((playbackDuration / 5).rounded()))
+        if let cached = fastCache[key],
+           !(refreshIncomplete && (cached.intro == nil || cached.credits == nil)) {
+            return cached
+        }
+        let result = await fetchAniSkip(
+            malID: malID, episode: episode, duration: playbackDuration)
+        if let result {
+            if fastCache.count >= 100 { fastCache.removeAll() }
+            fastCache[key] = result
+        }
+        return result
+    }
 
     private init() {}
 
-    func fetchSegments(aniListID: Int, episodeNumber: Int) async -> SkipSegments? {
-        let key = CacheKey(aniListID: aniListID, episodeNumber: episodeNumber)
-        if let cached = cache[key] { return cached }
+    func fetchSegments(
+        aniListID: Int, episodeNumber: Int, malID: Int? = nil,
+        playbackDuration: Double = 0, refreshIncomplete: Bool = false
+    ) async -> SkipSegments? {
+        // The video is often a different cut from the database submission:
+        // distinguish versions by runtime, not only the anime and episode ID.
+        let duration = playbackDuration.isFinite && playbackDuration > 0 &&
+            playbackDuration <= 14_400 ? playbackDuration : 0
+        let key = CacheKey(
+            aniListID: aniListID, episodeNumber: episodeNumber, malID: malID,
+            durationBucket: Int((duration / 5).rounded())
+        )
+        if let cached = cache[key],
+           !(refreshIncomplete && (cached.intro == nil || cached.credits == nil)) {
+            return cached
+        }
+
+        // Try the fast, episode-specific MAL source before expensive cross-ID
+        // mapping requests. An AniSkip result may have ONLY the opening or
+        // ending: keep it, but let slower providers fill the missing chapter.
+        let aniSkip: SkipSegments?
+        if let malID, malID > 0 {
+            aniSkip = await fetchFastSegments(
+                malID: malID, episode: episodeNumber, playbackDuration: duration,
+                refreshIncomplete: refreshIncomplete)
+        } else {
+            aniSkip = nil
+        }
+        if let aniSkip, aniSkip.intro != nil, aniSkip.credits != nil {
+            cache[key] = aniSkip
+            return aniSkip
+        }
 
         let tvdbSeason: Int
         let epoffset: Int
@@ -32,21 +93,39 @@ final class SkipTimestampsService {
         let aniListEpisode = isAbsolute ? episodeNumber - epoffset : episodeNumber
         let tvdbEpisode = isAbsolute ? episodeNumber : episodeNumber + epoffset
 
-        // 1. Try Anira per-episode endpoint first (has intro/outro in seconds)
+        // With sequel seasons, a module may send a global episode index,
+        // whereas AniSkip expects the episode number local to that season.
+        let preciseAniSkip: SkipSegments?
+        if aniListEpisode != episodeNumber, let malID {
+            preciseAniSkip = await fetchFastSegments(
+                malID: malID, episode: aniListEpisode, playbackDuration: duration,
+                refreshIncomplete: refreshIncomplete)
+        } else {
+            preciseAniSkip = nil
+        }
+        let verifiedAniSkip = preciseAniSkip ?? aniSkip
+        if let verifiedAniSkip,
+           verifiedAniSkip.intro != nil && verifiedAniSkip.credits != nil {
+            cache[key] = verifiedAniSkip
+            return verifiedAniSkip
+        }
+
+        // Anira/IntroDB are fallback timestamps. They are only manually skippable
+        // when the exact cut cannot be verified (no guessed automatic seeks).
+        // 1. Try Anira per-episode endpoint (has intro/outro in seconds)
         let aniraEp = await TVDBMappingService.shared.fetchAniraEpisode(id: aniListID, episodeNumber: aniListEpisode)
+        var aniraSegments = SkipSegments()
         if let skips = aniraEp?.skips, !skips.isEmpty {
-            var result = SkipSegments()
             for skip in skips {
                 let seg = SkipSegments.Segment(startMs: skip.start * 1000, endMs: skip.end * 1000)
                 switch skip.type {
-                case "op", "mixed-op": result.intro = seg
-                case "ed", "mixed-ed": result.credits = seg
-                case "recap": result.recap = seg
+                case "op", "mixed-op": aniraSegments.intro = seg
+                case "ed", "mixed-ed": aniraSegments.credits = seg
+                case "recap": aniraSegments.recap = seg
                 default: break
                 }
             }
-            cache[key] = result
-            return result
+            aniraSegments = validated(aniraSegments, duration: duration)
         }
 
         // 2. Fall back to introdb / theIntroDB
@@ -66,13 +145,111 @@ final class SkipTimestampsService {
         if theIntroDB == nil && tvdbEpisode != episodeNumber {
             theIntroDB = await fetchTheIntroDB(tmdbID: tmdb?.id, season: tvdbSeason, episode: episodeNumber, isMovie: isMovie)
         }
-        let segments = merge(introdb: introDB, theintrodb: theIntroDB)
+        var segments = validated(merge(introdb: introDB, theintrodb: theIntroDB), duration: duration)
+        // AniSkip markers that match this video's runtime take precedence.
+        // Otherwise show independently provided chapters as manual buttons.
+        segments.intro = verifiedAniSkip?.intro ?? segments.intro ?? aniraSegments.intro
+        segments.recap = verifiedAniSkip?.recap ?? segments.recap ?? aniraSegments.recap
+        segments.credits = verifiedAniSkip?.credits ?? segments.credits ?? aniraSegments.credits
+        segments.autoSkipIntro = verifiedAniSkip?.autoSkipIntro ?? false
+        segments.autoSkipRecap = verifiedAniSkip?.autoSkipRecap ?? false
+        segments.autoNextCredits = verifiedAniSkip?.autoNextCredits ?? false
+
+        // A source without runtime metadata cannot authorize automatic jumps
+        // alone. However, two independent providers marking essentially the
+        // same scene within the actual runtime is a strong second signal.
+        // This is intentionally strict to avoid skipping dialogue.
+        let anira = aniraSegments
+        let database = validated(merge(introdb: introDB, theintrodb: theIntroDB), duration: duration)
+        let introAgrees = Self.agrees(anira.intro, database.intro)
+        let endingAgrees = Self.agrees(anira.credits, database.credits)
+        let recapAgrees = Self.agrees(anira.recap, database.recap)
+        if duration >= 60 {
+            segments.autoSkipIntro = segments.autoSkipIntro || introAgrees
+            segments.autoSkipRecap = segments.autoSkipRecap || recapAgrees
+            segments.autoNextCredits = segments.autoNextCredits || endingAgrees
+        }
+        segments.isDurationVerified = segments.autoSkipIntro ||
+            segments.autoSkipRecap || segments.autoNextCredits
         cache[key] = segments
         return segments
     }
 
     func clearCache() {
         cache.removeAll()
+        fastCache.removeAll()
+    }
+
+    // MARK: - Exact-cut timestamps
+
+    private func fetchAniSkip(malID: Int, episode: Int, duration: Double) async -> SkipSegments? {
+        guard malID > 0, episode > 0, duration >= 60, duration <= 14_400 else { return nil }
+        var url = URLComponents(string: "https://api.aniskip.com/v2/skip-times/\(malID)/\(episode)")
+        url?.queryItems = [
+            URLQueryItem(name: "episodeLength", value: String(format: "%.3f", duration))
+        ] + ["op", "ed", "recap", "mixed-op", "mixed-ed"].map {
+            URLQueryItem(name: "types", value: $0)
+        }
+        guard let endpoint = url?.url else { return nil }
+        var request = URLRequest(url: endpoint)
+        request.timeoutInterval = 6
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let payload = try? JSONDecoder().decode(AniSkipResponse.self, from: data),
+              payload.found else { return nil }
+        var result = SkipSegments()
+        for entry in payload.results {
+            guard let cutLength = entry.episodeLength, cutLength > 0,
+                  abs(cutLength - duration) <= max(4, duration * 0.005),
+                  let segment = validSegment(
+                    .init(startMs: entry.interval.startTime * 1000,
+                          endMs: entry.interval.endTime * 1000),
+                    duration: duration
+                  ) else { continue }
+            switch entry.skipType {
+            case "op", "mixed-op":
+                if result.intro == nil { result.intro = segment }
+            case "ed", "mixed-ed":
+                if result.credits == nil { result.credits = segment }
+            case "recap":
+                if result.recap == nil { result.recap = segment }
+            default: break
+            }
+        }
+        guard result.intro != nil || result.credits != nil || result.recap != nil else { return nil }
+        result.autoSkipIntro = result.intro != nil
+        result.autoSkipRecap = result.recap != nil
+        result.autoNextCredits = result.credits != nil
+        result.isDurationVerified = true
+        return result
+    }
+
+    private static func agrees(
+        _ lhs: SkipSegments.Segment?, _ rhs: SkipSegments.Segment?
+    ) -> Bool {
+        guard let lhs, let rhs, let lStart = lhs.startMs, let rStart = rhs.startMs,
+              lStart.isFinite, rStart.isFinite, lhs.endMs.isFinite, rhs.endMs.isFinite else { return false }
+        return abs(lStart - rStart) <= 3_000 && abs(lhs.endMs - rhs.endMs) <= 3_000
+    }
+
+    private func validSegment(_ segment: SkipSegments.Segment?, duration: Double) -> SkipSegments.Segment? {
+        guard let segment, segment.endMs.isFinite else { return nil }
+        let start = segment.startMs ?? 0
+        guard start.isFinite, start >= 0, segment.endMs > start + 3_000 else { return nil }
+        if duration > 0 && segment.endMs > duration * 1_000 + 1_500 { return nil }
+        return segment
+    }
+
+    private func validated(_ segments: SkipSegments, duration: Double) -> SkipSegments {
+        var result = segments
+        result.intro = validSegment(segments.intro, duration: duration)
+        result.recap = validSegment(segments.recap, duration: duration)
+        result.credits = validSegment(segments.credits, duration: duration)
+        result.preview = validSegment(segments.preview, duration: duration)
+        // Lack of verified source-duration matching means show the manual
+        // Skip button but NEVER seek automatically.
+        result.isDurationVerified = false
+        return result
     }
 
     // MARK: - Private fetches
@@ -148,4 +325,18 @@ private struct TheIntroDBResponse: Decodable {
     let recap: [Segment]?
     let credits: [Segment]?
     let preview: [Segment]?
+}
+
+private struct AniSkipResponse: Decodable {
+    struct Interval: Decodable {
+        let startTime: Double
+        let endTime: Double
+    }
+    struct Item: Decodable {
+        let interval: Interval
+        let skipType: String
+        let episodeLength: Double?
+    }
+    let found: Bool
+    let results: [Item]
 }

@@ -174,3 +174,79 @@ final class AniListOutageClassificationTests: XCTestCase {
         XCTAssertFalse(AniListService.isAnnouncedOutage("This account has been disabled."))
     }
 }
+
+
+// Live-action metadata is intentionally independent of AniList/MAL accounts and
+// streaming modules. Search suffixes must resolve to the correct show's season.
+@MainActor
+final class LiveActionCatalogQueryTests: XCTestCase {
+    func testDexterResurrectedSeasonTwoUsesActualSeriesTitle() {
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("Dexter: Resurrected Season 2"),
+                       "Dexter: resurrection")
+        XCTAssertEqual(LiveActionCatalog.requestedSeason(in: "Dexter: Resurrected Season 2"), 2)
+    }
+
+    func testGermanSeasonSyntaxAlsoWorks() {
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("Dexter Resurrection Staffel 2"),
+                       "Dexter Resurrection")
+        XCTAssertEqual(LiveActionCatalog.requestedSeason(in: "Dexter Resurrection Staffel 2"), 2)
+    }
+
+    func testRegularSeriesAndFilmQueriesDoNotInventSeasons() {
+        XCTAssertNil(LiveActionCatalog.requestedSeason(in: "Interstellar"))
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("Dexter"), "Dexter")
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("The Dark Knight"), "The Dark Knight")
+    }
+
+    func testCompactSeasonSyntax() {
+        XCTAssertEqual(LiveActionCatalog.requestedSeason(in: "Dexter Resurrection S2"), 2)
+        XCTAssertEqual(LiveActionCatalog.seriesQuery("Dexter Resurrection S2"), "Dexter Resurrection")
+    }
+}
+
+
+/// TVmaze air dates are catalog metadata, not a promise of streaming access.
+/// Regression for Dexter: Resurrection season 2 on 2026-11-02.
+final class LiveActionEpisodeReleaseTests: XCTestCase {
+    private func utcCalendar() -> Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(secondsFromGMT: 0)!
+        return c
+    }
+
+    func testDexterSeasonTwoEpisodeOneAlreadyAired() {
+        let c = utcCalendar()
+        let now = c.date(from: DateComponents(year: 2026, month: 11, day: 2))!
+        let episode = LiveActionEpisode(
+            id: 1, number: 1, name: "Risky Business", airdate: "2026-10-30"
+        )
+        XCTAssertEqual(episode.releaseStatus(asOf: now, calendar: c), .aired)
+    }
+
+    func testDexterSeasonTwoEpisodeTwoStillUpcoming() {
+        let c = utcCalendar()
+        let now = c.date(from: DateComponents(year: 2026, month: 11, day: 2))!
+        let episode = LiveActionEpisode(
+            id: 2, number: 2, name: "Young Blood", airdate: "2026-11-06"
+        )
+        XCTAssertEqual(episode.releaseStatus(asOf: now, calendar: c), .upcoming)
+    }
+
+    func testEpisodeReleaseOnAirDateIsAired() {
+        let c = utcCalendar()
+        let date = c.date(from: DateComponents(year: 2026, month: 10, day: 30))!
+        let episode = LiveActionEpisode(
+            id: 3, number: 1, name: "Risky Business", airdate: "2026-10-30"
+        )
+        XCTAssertEqual(episode.releaseStatus(asOf: date, calendar: c), .aired)
+    }
+
+    func testMissingOrInvalidAirDatesRemainUnknown() {
+        let c = utcCalendar()
+        let now = c.date(from: DateComponents(year: 2026, month: 11, day: 2))!
+        for raw in [nil, "", "2026-02-31", "invalid"] as [String?] {
+            let episode = LiveActionEpisode(id: 4, number: nil, name: "Special", airdate: raw)
+            XCTAssertEqual(episode.releaseStatus(asOf: now, calendar: c), .unknown)
+        }
+    }
+}

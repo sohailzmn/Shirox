@@ -1,0 +1,40 @@
+name: Publish Instant Player IPA
+on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/publish-instant-player-ipa.yml"
+permissions:
+  contents: write
+  actions: read
+jobs:
+  release-ipa:
+    name: Release validated instant player IPA
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download completed iOS build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p downloaded
+          gh run download 39880998338 --repo sohailzmn/Shirox --name Shirox-SmartPlay-IPA --dir downloaded
+      - name: Check real IPA payload
+        run: |
+          test -s downloaded/Shirox.ipa
+          unzip -tq downloaded/Shirox.ipa
+          unzip -Z1 downloaded/Shirox.ipa | grep '^Payload/Shirox.app/' >/dev/null
+          ls -lh downloaded/Shirox.ipa
+      - name: Publish unsigned IPA
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create instant-player-20261023 \
+            --repo sohailzmn/Shirox \
+            --target 7918d458dd8f9484809185b019561fe7287d4b5b \
+            --title "Shirox Instant Player · 23 October 2026" \
+            --notes "iOS unsigned IPA built successfully from the Smart Playback feature branch. Episodes open directly to a fullscreen skeleton player while source resolution happens invisibly; seamless transition to normal playback, optional Retry/Choose Source and 5-minute episode catalog cache. Other Smart Play/Continue Watching/Auto Next features remain. GitHub Actions verification: https://github.com/sohailzmn/Shirox/actions/runs/39880998338. Device performance and hoster reliability must be tested. Sign before installing." \
+            --prerelease
+          gh release upload instant-player-20261023 downloaded/Shirox.ipa \
+            --repo sohailzmn/Shirox --clobber

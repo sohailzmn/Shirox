@@ -54,4 +54,24 @@ final class CloudflareBypassClearanceTests: XCTestCase {
         // "Verify Cloudflare" affordance — a poster load is not a stream load.
         XCTAssertNil(manager.pendingVerificationURL)
     }
+
+    func testHTTP200BrowserChallengeIsDetectedWithoutCloudflareBranding() {
+        let page = "<html><head><title>Just a moment...</title></head><body>Checking your browser</body></html>"
+        XCTAssertTrue(JSEngine.isTurnstileResponse(status: 200, body: page))
+    }
+
+    func testNormalSeriesHTMLIsNotTreatedAsCloudflareChallenge() {
+        let page = "<html><h1>Dexter</h1><p>Our privacy policy mentions captcha support.</p></html>"
+        XCTAssertFalse(JSEngine.isTurnstileResponse(status: 200, body: page))
+    }
+
+    func testPlain403DoesNotCreateUnnecessaryVerificationPrompt() {
+        XCTAssertFalse(JSEngine.isTurnstileResponse(status: 403, body: "<html>Forbidden</html>"))
+    }
+
+    func testMitigatedChallengeOn503IsDetected() {
+        XCTAssertTrue(JSEngine.isTurnstileResponse(
+            status: 503, body: "<html><div class='cf-turnstile'></div></html>"))
+    }
+
 }

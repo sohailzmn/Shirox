@@ -149,13 +149,24 @@ struct ContinueWatchingSection: View {
             allSubtitles: item.allSubtitles
         )
 
+        // Stored Continue Watching entries can retain a MAL ID even when the
+        // AniList ID is absent. The old route threw that ID away, so AniSkip
+        // never received a usable identity after resume.
+        let playbackIdentity = item.resolvedPlaybackIdentity(
+            linkedAniListID: AniListMappingManager.shared.getMapping(title: item.mediaTitle)
+        )
+        Logger.shared.log(
+            "[ContinueWatching] Skip identity: AniList=\(playbackIdentity.aniListID.map(String.init) ?? "nil"), MAL=\(playbackIdentity.malID.map(String.init) ?? "nil")",
+            type: "Debug"
+        )
+
         let context = PlayerContext(
             mediaTitle: item.mediaTitle,
             episodeNumber: item.episodeNumber,
             episodeTitle: item.episodeTitle,
             imageUrl: item.imageUrl,
-            aniListID: item.aniListID,
-            malID: item.aniListID.flatMap { IDMappingService.shared.cachedMalId(forAnilistId: $0) },
+            aniListID: playbackIdentity.aniListID,
+            malID: playbackIdentity.malID,
             moduleId: item.moduleId,
             totalEpisodes: item.totalEpisodes,
             availableEpisodes: item.availableEpisodes,
@@ -277,7 +288,118 @@ struct ContinueWatchingSection: View {
             return
         }
 
-        PlayerPresenter.shared.presentPlayer(stream: stream, streams: storedStreams, context: context, onWatchNext: onWatchNext, onStreamExpired: onExpired)
+        // Saved remote URLs may already be expired. Resolving a fresh video
+        // before mounting the AVPlayer avoids a black frame / 0:00 player.
+        // The user sees the same fullscreen skeleton as a regular episode tap.
+        if !isLocal, item.detailHref != nil, let onExpired {
+            PlaybackPerformance.shared.begin(title: item.mediaTitle, episode: item.episodeNumber)
+            PlayerPresenter.shared.presentResolvingEpisode(
+                title: item.mediaTitle,
+                episode: item.episodeNumber,
+                artwork: item.imageUrl,
+                onResolve: {
+                    let fresh = try await onExpired(item.episodeNumber, item.episodeHref)
+                    try Task.checkCancellation()
+                    guard !fresh.isEmpty else {
+                        throw NSError(
+                            domain: "Shirox.Resume", code: 2,
+                            userInfo: [NSLocalizedDescriptionKey:
+                                "The saved stream expired and no replacement is available."]
+                        )
+                    }
+                    let chosen = fresh.first(where: { $0.title == item.streamTitle })
+                        ?? fresh[0]
+                    PlayerPresenter.shared.presentPlayer(
+                        stream: chosen, streams: fresh, context: context,
+                        onWatchNext: onWatchNext, onStreamExpired: onExpired)
+                },
+                onChooseSource: {
+                    if item.moduleId != nil, item.detailHref != nil {
+                        navTarget = .detail(item)
+                    } else if item.aniListID != nil {
+                        navTarget = .anilist(item)
+                    }
+                }
+            )
+            return
+        }
+        if !isLocal {
+            // Legacy Continue Watching entries may lack a detail href entirely. They still
+            // must NOT mount an expired, persisted CDN URL (the black 0:00 / short clip bug).
+            // Use the existing headless Smart Play search to rediscover the exact episode.
+            PlaybackPerformance.shared.begin(title: item.mediaTitle, episode: item.episodeNumber)
+            PlayerPresenter.shared.presentResolvingPlayer(
+                mediaId: playbackIdentity.aniListID, title: item.mediaTitle,
+                episode: item.episodeNumber, artwork: item.imageUrl,
+                onStreamsLoaded: { fresh, preferred, resolvedHref, resolvedCount, resolvedEpisodeHref in
+                    guard let selected = preferred ?? fresh.first else { return }
+                    let resolvedModule = ModuleManager.shared.activeModule
+                    let refreshedContext = PlayerContext(
+                        mediaTitle: context.mediaTitle,
+                        episodeNumber: context.episodeNumber,
+                        episodeTitle: context.episodeTitle,
+                        imageUrl: context.imageUrl,
+                        aniListID: context.aniListID,
+                        malID: context.malID,
+                        moduleId: resolvedModule?.id ?? context.moduleId,
+                        totalEpisodes: resolvedCount ?? context.totalEpisodes,
+                        availableEpisodes: resolvedCount ?? context.availableEpisodes,
+                        isAiring: context.isAiring,
+                        resumeFrom: context.resumeFrom,
+                        detailHref: resolvedHref,
+                        episodeHref: resolvedEpisodeHref,
+                        streamTitle: selected.title,
+                        workingDetailHref: resolvedHref,
+                        thumbnailUrl: context.thumbnailUrl
+                    )
+                    let refreshedExpired: StreamRefetchLoader? = {
+                        guard let href = resolvedHref, let module = resolvedModule else { return nil }
+                        return { episodeNumber, episodeHref in
+                            let runner = ModuleJSRunner()
+                            try await runner.load(module: module)
+                            let episodes = try await runner.fetchEpisodes(url: href)
+                            guard let target = EpisodeNavigator.resolve(
+                                href: episodeHref, orNumber: episodeNumber, in: episodes
+                            ) else { return [] }
+                            return try await runner.fetchStreams(episodeUrl: target.href)
+                        }
+                    }()
+                    let refreshedNext: WatchNextLoader? = {
+                        guard let href = resolvedHref, let module = resolvedModule else { return nil }
+                        var currentHref = resolvedEpisodeHref
+                        return { currentNumber in
+                            let runner = ModuleJSRunner()
+                            try await runner.load(module: module)
+                            let episodes = try await runner.fetchEpisodes(url: href)
+                            guard let next = EpisodeNavigator.next(
+                                afterHref: currentHref, orNumber: currentNumber, in: episodes
+                            ) else { return nil }
+                            let streams = try await runner.fetchStreams(episodeUrl: next.href)
+                            guard !streams.isEmpty else { return nil }
+                            currentHref = next.href
+                            return (streams: streams, episodeNumber: Int(next.number),
+                                    episodeHref: next.href)
+                        }
+                    }()
+                    PlayerPresenter.shared.presentPlayer(
+                        stream: selected, streams: fresh, context: refreshedContext,
+                        onWatchNext: refreshedNext, onStreamExpired: refreshedExpired)
+                },
+                onChooseSource: {
+                    if item.aniListID != nil {
+                        navTarget = .anilist(item)
+                    } else {
+                        ToastManager.shared.show(
+                            message: "Search for this series to choose a different source.",
+                            type: .error)
+                    }
+                }
+            )
+            return
+        }
+        PlayerPresenter.shared.presentPlayer(
+            stream: stream, streams: storedStreams, context: context,
+            onWatchNext: onWatchNext, onStreamExpired: onExpired)
         #endif
     }
 
@@ -315,8 +437,9 @@ struct ContinueWatchingCardDisplay: View {
     @State private var episodeThumbnail: String?
 
     private var progress: Double {
-        guard item.totalSeconds > 0 else { return 0 }
-        return min(item.watchedSeconds / item.totalSeconds, 1.0)
+        guard item.totalSeconds.isFinite, item.watchedSeconds.isFinite,
+              item.totalSeconds > 0 else { return 0 }
+        return min(max(item.watchedSeconds / item.totalSeconds, 0), 1.0)
     }
 
     /// Builds the episode label, e.g.:
@@ -349,6 +472,33 @@ struct ContinueWatchingCardDisplay: View {
             return "\(prefix) • \(epPart)"
         }
         return epPart
+    }
+
+    /// A familiar streaming-app summary without assuming every episode lasts
+    /// 24 minutes or incorrectly treating an Up Next placeholder as in-progress.
+    private var watchMetadata: String {
+        var fragments: [String] = []
+        if let href = item.episodeHref,
+           let range = href.range(of: #"/staffel-\d+"#, options: .regularExpression) {
+            let season = href[range].replacingOccurrences(of: "/staffel-", with: "")
+            // Saved episodeNumber can be an absolute index across seasons.
+            // The URL contains the true per-season episode number.
+            let episode = href.range(
+                of: #"/episode-\d+"#, options: .regularExpression
+            ).flatMap { Int(href[$0].replacingOccurrences(of: "/episode-", with: "")) }
+                ?? item.episodeNumber
+            fragments.append("S\(season) · E\(episode)")
+        } else {
+            fragments.append("Episode \(item.episodeNumber)")
+        }
+        if !item.streamUrl.isEmpty, item.totalSeconds.isFinite,
+           item.watchedSeconds.isFinite, item.totalSeconds > 0 {
+            let remaining = max(0, Int(ceil((item.totalSeconds - item.watchedSeconds) / 60)))
+            fragments.append(remaining == 0 ? "Almost finished" : "\(remaining) min left")
+        } else if item.streamUrl.isEmpty {
+            fragments.append("Up next")
+        }
+        return fragments.joined(separator: "  •  ")
     }
 
     private var isWatched: Bool {
@@ -437,6 +587,13 @@ struct ContinueWatchingCardDisplay: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+            HStack(spacing: 6) {
+                Image(systemName: item.streamUrl.isEmpty ? "forward.end.fill" : "play.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(watchMetadata).lineLimit(1)
+            }
+            .font(.caption2)
+            .foregroundStyle(.secondary)
         }
         .task(id: item.id) {
             // Resolve the episode-specific thumbnail via the same robust waterfall the

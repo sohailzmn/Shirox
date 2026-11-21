@@ -1,0 +1,88 @@
+name: Validate Smart Play UX (no IPA)
+on:
+  push:
+    branches:
+      - feature/smart-playback-recovery-20261021
+    paths:
+      - ".github/workflows/validate-playback-ux.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile-and-test:
+    runs-on: macos-26
+    timeout-minutes: 65
+    steps:
+      - name: Checkout improved Shirox branch
+        uses: actions/checkout@v4
+      - name: Show build tool versions
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Apply existing iOS compatibility patches
+        run: |
+          python3 patch_serienstream_interactive.py
+          python3 patch_serienstream_interactive_v3.py
+          python3 patch_serienstream_session_v5.py
+          python3 patch_serienstream_exact_episode_v6.py
+          sed -i '' '/\.fontWeight(.semibold)/d' Shirox/Views/Shared/CloudflareBypassSheetView.swift
+      - name: Resolve Swift dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies -project Shirox.xcodeproj -scheme Shirox_iOS
+      - name: Compile for iOS Simulator without signing or IPA packaging
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Shirox.xcodeproj -scheme Shirox_iOS \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/ShiroxValidation" \
+            -destination 'generic/platform=iOS Simulator' \
+            -skipPackagePluginValidation \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
+            build > "$RUNNER_TEMP/ux-build.log" 2>&1 || {
+              grep -E '(error:|BUILD FAILED|fatal error)' "$RUNNER_TEMP/ux-build.log" | tail -80 || true
+              tail -120 "$RUNNER_TEMP/ux-build.log"
+              exit 1
+            }
+          echo "iOS Simulator build passed (no IPA produced)"
+      - name: Run focused Swift/XCTest cases
+        run: |
+          set -o pipefail
+          SIMULATOR=$(xcrun simctl list devices available -j | python3 -c '
+          import sys,json
+          catalog=json.load(sys.stdin)["devices"]
+          for runtime,devices in catalog.items():
+              if "iOS" not in runtime: continue
+              for device in devices:
+                  if device.get("isAvailable"):
+                      print(device["udid"])
+                      sys.exit(0)
+          ')
+          if [ -z "$SIMULATOR" ]; then
+            echo "No iOS simulator available for XCTest"
+            exit 1
+          fi
+          xcodebuild \
+            -project Shirox.xcodeproj -scheme Shirox_iOS \
+            -configuration Debug \
+            -derivedDataPath "$RUNNER_TEMP/ShiroxValidation" \
+            -destination "platform=iOS Simulator,id=$SIMULATOR" \
+            -only-testing:ShiroxTests/InstantPlayUXTests \
+            -only-testing:ShiroxTests/PlayerNextEpisodePrefetchTests \
+            -skipPackagePluginValidation \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
+            test > "$RUNNER_TEMP/ux-tests.log" 2>&1 || {
+              grep -E '(error:|failed|TEST FAILED)' "$RUNNER_TEMP/ux-tests.log" | tail -80 || true
+              tail -160 "$RUNNER_TEMP/ux-tests.log"
+              exit 1
+            }
+          grep -E '(Executed|TEST SUCCEEDED|Test Case)' "$RUNNER_TEMP/ux-tests.log" | tail -40 || true
+      - name: Confirm no IPA generated
+        run: |
+          if find . -type f -name '*.ipa' -print -quit | grep -q .; then
+            echo "Unexpected IPA, validation must not package an app"
+            exit 1
+          fi
+          echo "No IPA generated."
