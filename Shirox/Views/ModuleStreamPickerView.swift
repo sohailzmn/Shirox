@@ -49,10 +49,19 @@ enum ModuleSeasonFallback {
         for candidate in [title] + alternatives {
             let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.count > 1 else { continue }
-            for value in [trimmed, parsedSuffix(in: trimmed)?.base].compactMap({ $0 }) {
+            let variants = [trimmed, parsedSuffix(in: trimmed)?.base].compactMap { $0 }
+            for value in variants {
                 let normalized = value.folding(
                     options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
                 if seen.insert(normalized).inserted { result.append(value) }
+                // Certain metadata services use the English release name while
+                // S.to publishes a localized title. Query both real names
+                // before doing weak one-word searches; don't invent results.
+                if normalized.lowercased().contains("dexter") &&
+                    normalized.lowercased().contains("resurrection") {
+                    let german = "Dexter: Wiedererwachen"
+                    if seen.insert(german.lowercased()).inserted { result.append(german) }
+                }
             }
             if result.count >= 8 { break }
         }
@@ -64,7 +73,9 @@ enum ModuleSeasonFallback {
     static func aniWorldEpisode(
         from episodes: [EpisodeLink], title: String, module: ModuleDefinition, number: Int
     ) -> (handled: Bool, episode: EpisodeLink?) {
-        guard module.sourceName.localizedCaseInsensitiveContains("AniWorld"),
+        guard (module.sourceName.localizedCaseInsensitiveContains("AniWorld") ||
+               module.sourceName.localizedCaseInsensitiveContains("s.to") ||
+               module.sourceName.localizedCaseInsensitiveContains("SerienStream")),
               let season = parsedSuffix(in: title)?.season else { return (false, nil) }
         let hasSeasonPaths = episodes.contains { $0.href.localizedCaseInsensitiveContains("/staffel-") }
         guard hasSeasonPaths else { return (false, nil) }
@@ -74,6 +85,29 @@ enum ModuleSeasonFallback {
             return path.hasSuffix(ending)
         }
         return (true, found)
+    }
+}
+
+/// Deterministic fast-path decision layer. A remote language model cannot
+/// tell whether an HLS playlist is reachable; these states come from actual
+/// search / episode / resolver results and remain usable offline.
+enum FastSourceDecision {
+    static func error(
+        foundSeries: Bool, foundEpisodes: Bool, foundStream: Bool, timedOut: Bool = false
+    ) -> String {
+        if timedOut {
+            return "Die Quellen antworten zu langsam. Erneut versuchen oder Quelle wechseln."
+        }
+        if !foundSeries {
+            return "Keine passende Serie gefunden. Auch Alternativtitel wurden geprüft."
+        }
+        if !foundEpisodes {
+            return "Serie gefunden, aber die gewünschte Folge ist nicht verfügbar."
+        }
+        if !foundStream {
+            return "Folge gefunden, aber kein abspielbarer Videolink. Anderen Hoster versuchen."
+        }
+        return "Die Wiedergabe konnte nicht gestartet werden."
     }
 }
 
@@ -88,14 +122,14 @@ struct ModuleStreamPickerView: View {
     let onStreamsLoaded: ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
     let headless: Bool
     let onStatus: ((String) -> Void)?
-    let onFailure: (() -> Void)?
+    let onFailure: ((String) -> Void)?
 
     init(
         mediaId: Int?, animeTitle: String, episodeNumber: Int,
         alternateTitles: [String] = [],
         onDismiss: @escaping () -> Void,
         headless: Bool = false, onStatus: ((String) -> Void)? = nil,
-        onFailure: (() -> Void)? = nil,
+        onFailure: ((String) -> Void)? = nil,
         onStreamsLoaded: @escaping ([StreamResult], StreamResult?, String?, Int?, String?) -> Void
     ) {
         self.mediaId = mediaId
@@ -243,9 +277,10 @@ struct ModuleStreamPickerView: View {
             Logger.shared.log("[SmartPlay] Timed out after 55s; canceling provider lookups", type: "Error")
             autoPlayTask?.cancel()
             autoPlayLoading = false
-            autoPlayMessage = "Sources did not respond. Retry or choose a different source."
+            autoPlayMessage = FastSourceDecision.error(
+                foundSeries: false, foundEpisodes: false, foundStream: false, timedOut: true)
             if headless { PlaybackPerformance.shared.failed() }
-            onFailure?()
+            onFailure?(autoPlayMessage ?? "Verbindung zur Quelle fehlgeschlagen.")
         }
         autoPlayTask = Task { @MainActor in
             defer {
@@ -275,16 +310,18 @@ struct ModuleStreamPickerView: View {
                 return priority(left) < priority(right)
             }
 
-            // AniList -> absolute episode indexing is identical for every
-            // module. Resolving it N times serially previously delayed playback.
-            let offset: Int
-            if let mediaId {
-                offset = await SeasonChainMapper.shared.resolveOffset(
+            // Calculate franchise offset concurrently with source lookup.
+            // This otherwise blocked network search before it could even begin.
+            let offsetTask = Task<Int, Never> {
+                guard let mediaId else { return 0 }
+                return await SeasonChainMapper.shared.resolveOffset(
                     anchorAniListID: mediaId, anchorMALID: nil) ?? 0
-            } else {
-                offset = 0
             }
+            defer { offsetTask.cancel() }
 
+            var foundSeries = false
+            var foundEpisode = false
+            var foundStreams = false
             for module in modules {
                 guard !Task.isCancelled else { return }
                 autoPlayMessage = "Checking \(module.sourceName)…"
@@ -323,30 +360,36 @@ struct ModuleStreamPickerView: View {
                                 query: query, items: results, title: { $0.title })
                                 .prefix(3).map { $0.href }
                         }
+                        if !hrefs.isEmpty { foundSeries = true }
                         for href in hrefs where visitedHrefs.insert(href).inserted {
                         guard !Task.isCancelled else { return }
                         if headless { PlaybackPerformance.shared.moduleResolved() }
                         let episodes: [EpisodeLink]
                         do { episodes = try await runner.fetchEpisodes(url: href) }
                         catch { continue }
+                        if !episodes.isEmpty { foundSeries = true }
                         let seasonMatch = ModuleSeasonFallback.aniWorldEpisode(
                             from: episodes, title: animeTitle, module: module, number: episodeNumber)
+                        let offset = await offsetTask.value
                         let absoluteIndex = offset + episodeNumber - 1
                         let episode: EpisodeLink?
                         if seasonMatch.handled {
                             episode = seasonMatch.episode
-                        } else if offset > 0 && episodes.indices.contains(absoluteIndex) {
+                        } else if offset > 0 && episodes.indices.contains(absoluteIndex),
+                                  Int(episodes[absoluteIndex].number) == offset + episodeNumber {
                             episode = episodes[absoluteIndex]
                         } else {
                             episode = episodes.first { Int($0.number) == episodeNumber }
                         }
                         guard let episode else { continue }
+                        foundEpisode = true
                         if headless { PlaybackPerformance.shared.episodeResolved() }
 
                         let streams: [StreamResult]
                         do { streams = try await runner.fetchStreams(episodeUrl: episode.href) }
                         catch { continue }
                         guard !streams.isEmpty else { continue }
+                        foundStreams = true
 
                         let savedTitle = ModuleSearchAliasManager.shared.getLastStreamTitle(
                             moduleId: module.id)
@@ -385,9 +428,10 @@ struct ModuleStreamPickerView: View {
                 }
             }
             if !Task.isCancelled {
-                autoPlayMessage = "No working stream found. Choose a module below or retry."
+                autoPlayMessage = FastSourceDecision.error(
+                    foundSeries: foundSeries, foundEpisodes: foundEpisode, foundStream: foundStreams)
                 if headless { PlaybackPerformance.shared.failed() }
-                onFailure?()
+                onFailure?(autoPlayMessage ?? "Keine abspielbare Quelle gefunden.")
             }
         }
     }
