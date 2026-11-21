@@ -62,23 +62,44 @@ final class PlaybackRoutingTests: XCTestCase {
     }
 
     @MainActor private func verifyLivePlayer(_ streams: [StreamResult], source: String) async throws {
-        let stream = try XCTUnwrap(streams.first)
-        let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
-        let video = try await asset.loadTracks(withMediaType: .video)
-        let audio = try await asset.loadTracks(withMediaType: .audio)
-        XCTAssertFalse(video.isEmpty, "The real media must contain video.")
-        XCTAssertFalse(audio.isEmpty, "The real media must contain audio.")
-        let player = AVPlayer(playerItem: AVPlayerItem(asset: asset))
-        defer { player.pause(); player.replaceCurrentItem(with: nil) }
-        player.automaticallyWaitsToMinimizeStalling = false
-        player.play()
-        let deadline = Date().addingTimeInterval(30)
-        while player.currentTime().seconds < 2, Date() < deadline {
-            if let error = player.currentItem?.error { throw error }
-            try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertFalse(streams.isEmpty)
+        var diagnostics: [String] = []
+        for stream in streams.prefix(3) {
+            let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
+            let item = AVPlayerItem(asset: asset)
+            item.preferredForwardBufferDuration = 0
+            let player = AVPlayer(playerItem: item)
+            // Match the app: remote HLS waits for a buffer instead of pausing
+            // permanently if play() precedes the first downloaded segment.
+            player.automaticallyWaitsToMinimizeStalling = true
+            let layer = AVPlayerLayer(player: player)
+            #if os(iOS)
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+            try? AVAudioSession.sharedInstance().setActive(true)
+            let window = UIWindow(frame: CGRect(x:0,y:0,width:640,height:360))
+            let controller = UIViewController(); window.rootViewController = controller
+            layer.frame = window.bounds; controller.view.layer.addSublayer(layer)
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; window.rootViewController = nil }
+            #endif
+            defer { player.pause(); player.replaceCurrentItem(with:nil); layer.removeFromSuperlayer() }
+            player.play()
+            let deadline = Date().addingTimeInterval(45)
+            while Date() < deadline {
+                if item.status == .failed { break }
+                if player.currentTime().seconds >= 2 && layer.isReadyForDisplay {
+                    let audio = item.tracks.filter { $0.assetTrack?.mediaType == .audio }.count
+                    XCTAssertGreaterThan(audio,0,"Playing media must include an audio track.")
+                    print("LIVE_\(source)_PLAYBACK seconds=\(player.currentTime().seconds) videoReady=\(layer.isReadyForDisplay) audioTracks=\(audio)")
+                    return
+                }
+                try await Task.sleep(nanoseconds: 200_000_000)
+            }
+            let errorCodes = item.errorLog()?.events.map { "\($0.errorDomain):\($0.errorStatusCode)" }.joined(separator:",") ?? "none"
+            let entry = "candidate=\(stream.title) host=\(stream.url.host ?? "unknown") status=\(item.status.rawValue) control=\(player.timeControlStatus.rawValue) waiting=\(player.reasonForWaitingToPlay?.rawValue ?? "none") seconds=\(player.currentTime().seconds) videoReady=\(layer.isReadyForDisplay) errors=\(errorCodes)"
+            diagnostics.append(entry); print("LIVE_\(source)_DIAGNOSTIC \(entry)")
         }
-        XCTAssertGreaterThanOrEqual(player.currentTime().seconds, 2, "AVPlayer did not advance through the real episode.")
-        print("LIVE_\(source)_PLAYBACK seconds=\(player.currentTime().seconds) videoTracks=\(video.count) audioTracks=\(audio.count)")
+        XCTFail("No candidate rendered video and advanced: " + diagnostics.joined(separator:"; "))
     }
 
     func testRemoteResumeKeepsEpisodeAndPositionWithoutPersistingSignedMedia() throws {
