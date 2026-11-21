@@ -97,7 +97,9 @@ enum ModuleSeasonFallback {
                module.sourceName.localizedCaseInsensitiveContains("SerienStream")),
               let season = mediaIntent(for: title).seasonNumber else { return (false, nil) }
         let hasSeasonPaths = episodes.contains { $0.href.localizedCaseInsensitiveContains("/staffel-") }
-        guard hasSeasonPaths else { return (false, nil) }
+        // Without explicit season URLs we cannot prove that episode 1 is S2E1.
+        // Never silently play the first-season episode from an ambiguous list.
+        guard hasSeasonPaths else { return (true, nil) }
         let ending = "/staffel-\(season)/episode-\(number)"
         let found = episodes.first { item in
             let path = URL(string: item.href)?.path.lowercased() ?? item.href.lowercased()
