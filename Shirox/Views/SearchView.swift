@@ -22,6 +22,9 @@ struct SearchView: View {
     @State private var pendingVideoURL: URL?
     @State private var pendingVideoTitle: String?
     @State private var moduleEpisodeHint: String?
+    @State private var requestedModuleSeason: Int?
+    @State private var requestedModuleEpisode: Int?
+    @State private var requestedModuleTitle: String?
 
     private var isLocalModule: Bool { moduleManager.activeModule?.isLocalPlayback == true }
     private var isJellyfinModule: Bool { moduleManager.activeModule?.isJellyfin == true }
@@ -64,10 +67,20 @@ struct SearchView: View {
                 }
                 .modifier(ConditionalSearchable(enabled: !isLocalModule && !isJellyfinModule, text: $vm.query))
                 .onSubmit(of: .search) {
+                    requestedModuleSeason = nil
+                    requestedModuleEpisode = nil
+                    requestedModuleTitle = nil
+                    moduleEpisodeHint = nil
                     history.add(vm.query)
                     vm.search(usingModule: usingModule)
                 }
                 .onChangeOf(vm.query) { new in
+                    if requestedModuleTitle != nil && requestedModuleTitle != new {
+                        requestedModuleSeason = nil
+                        requestedModuleEpisode = nil
+                        requestedModuleTitle = nil
+                        moduleEpisodeHint = nil
+                    }
                     if new.isEmpty {
                         vm.clearResults()
                     } else if (vm.hasResults || vm.hasSearched) && !vm.isLoading {
@@ -325,7 +338,10 @@ struct SearchView: View {
                                 if moduleManager.activeModule?.isManga == true {
                                     MangaDetailView(item: item)
                                 } else {
-                                    DetailView(item: item)
+                                    DetailView(item: item,
+                                               requestedSeason: requestedModuleSeason,
+                                               requestedEpisode: requestedModuleEpisode,
+                                               requestedMetadataTitle: requestedModuleTitle)
                                 }
                             } label: {
                                 AnimeCardView(item: item)
@@ -348,8 +364,11 @@ struct SearchView: View {
                         ForEach(vm.liveActionResults) { title in
                             NavigationLink {
                                 LiveActionDetailView(title: title, hasStreamingModule: usingModule) { name, season, episode in
+                                    requestedModuleSeason = season
+                                    requestedModuleEpisode = episode
+                                    requestedModuleTitle = name
                                     if let season, let episode {
-                                        moduleEpisodeHint = "Searching \(name) in the selected module. Choose Season \(season), Episode \(episode) from its results."
+                                        moduleEpisodeHint = "Ausgewählt: Staffel \(season), Folge \(episode). Nur diese Folge wird geöffnet."
                                     } else {
                                         moduleEpisodeHint = nil
                                     }
