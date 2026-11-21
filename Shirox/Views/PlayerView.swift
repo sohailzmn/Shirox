@@ -2456,14 +2456,18 @@ struct PlayerView: View {
             return
         }
         failedStreamURLs.insert(currentStream.url)
+        // A multi-hoster module already returned verified mirrors. Switch to a
+        // different known host immediately instead of making another slow
+        // website/Cloudflare request and potentially resolving the dead host again.
+        // recoverByRefetch() preserves the playback position and pause state.
+        if let mirror = preferredRecoveryStream(from: availableStreams) {
+            Logger.shared.log("[StreamRecovery] Switching to cached mirror: \(mirror.title)", type: "Player")
+            swapStream(mirror, episodeNumber: currentContext?.episodeNumber ?? 1,
+                       allStreams: availableStreams, episodeHref: currentContext?.episodeHref)
+            return
+        }
         guard let loader = onStreamExpired else {
-            // Modules that already returned several streams still have a recovery path.
-            if let alternative = preferredRecoveryStream(from: availableStreams) {
-                swapStream(alternative, episodeNumber: currentContext?.episodeNumber ?? 1,
-                           allStreams: availableStreams, episodeHref: currentContext?.episodeHref)
-            } else {
-                surfaceUnrecoverablePlayback()
-            }
+            surfaceUnrecoverablePlayback()
             return
         }
         isRefetchingStream = true
