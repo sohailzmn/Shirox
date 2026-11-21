@@ -1669,6 +1669,7 @@ struct DetailView: View {
                             mediaTitle: detail.title,
                             moduleId: effectiveModuleId,
                             itemImage: item.image,
+                            displayEpisodeNumber: ModuleSeasonRouting.episodeNumber(for: episode.href),
                             totalEpisodes: detail.episodes.isEmpty ? nil : detail.episodes.count,
                             detailHref: vm.detailHref,
                             aniListID: vm.aniListID ?? aniListID,
@@ -1713,6 +1714,7 @@ struct DetailView: View {
                             mediaTitle: detail.title,
                             moduleId: effectiveModuleId,
                             itemImage: item.image,
+                            displayEpisodeNumber: ModuleSeasonRouting.episodeNumber(for: episode.href),
                             totalEpisodes: detail.episodes.isEmpty ? nil : detail.episodes.count,
                             detailHref: vm.detailHref,
                             aniListID: vm.aniListID ?? aniListID,
@@ -1985,6 +1987,7 @@ private struct ModuleEpisodeRowContainer: View {
     /// module and the row showed no watch state.
     let moduleId: String?
     let itemImage: String
+    var displayEpisodeNumber: Int? = nil
     let totalEpisodes: Int?
     let detailHref: String?
     let aniListID: Int?
@@ -2158,6 +2161,7 @@ private struct ModuleEpisodeRowContainer: View {
             } else {
                 EpisodeRowView(
                     episode: episode,
+                    displayNumber: displayEpisodeNumber,
                     progress: progress,
                     onTap: onTap,
                     onMarkWatched: {
