@@ -1034,7 +1034,7 @@ private struct ShiroxInstantPlaybackScreen: View {
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.72))
                     if state.failed {
-                        Text("Video couldn't be loaded from the available sources.")
+                        Text("No playable stream was found. The source may be blocked or German audio may be unavailable.")
                             .foregroundStyle(.white.opacity(0.8))
                             .multilineTextAlignment(.center)
                             .font(.footnote)
