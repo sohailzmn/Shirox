@@ -199,7 +199,14 @@ struct CatalogDetailScreen: View {
         .task {
             do { seasons = try await UnifiedCatalog.shared.seasons(title); await loadEpisodes() }
             catch { self.error = error.localizedDescription }
-            if title.kind == .anime { sourceSynopsis = await UnifiedCatalog.shared.germanDescription(title) }
+            if let anime = title.anime {
+                let count = anime.nextAiringEpisode.map { max(0, $0.episode - 1) }
+                    ?? (["FINISHED", "finished_airing"].contains(anime.status ?? "") ? anime.episodes ?? 0 : 0)
+                if count > 0 {
+                    episodes = (1...min(count, 3000)).map { CatalogEpisode(number: $0, name: "Folge \($0)", airDate: nil, knownReleased: true) }
+                }
+                sourceSynopsis = await UnifiedCatalog.shared.germanDescription(title)
+            }
         }
         .onChange(of: season) { _ in Task { await loadEpisodes() } }
     }
@@ -237,10 +244,12 @@ struct CatalogDetailScreen: View {
     @MainActor private func launch(_ request: AutomaticPlaybackRequest) async throws {
         let result = try await AutomaticPlaybackCoordinator.shared.resolve(request)
         ModuleManager.shared.selectModule(result.module)
-        let context = PlayerContext(mediaTitle: title.name, episodeNumber: Int(result.episode.number), episodeTitle: nil,
+        let available = title.anime?.airedOrAnnouncedEpisodes ?? result.episodes.count
+        let total = title.anime?.episodes ?? seasons.first(where: { $0.number == season })?.episodeCount ?? result.episodes.count
+        let context = PlayerContext(mediaTitle: title.name, episodeNumber: title.anime != nil ? request.episode : Int(result.episode.number), episodeTitle: nil,
                                     imageUrl: title.poster ?? "", aniListID: title.anime?.provider == .anilist ? title.anime?.id : nil,
-                                    malID: title.anime?.idMal, moduleId: result.module.id, totalEpisodes: result.episodes.count,
-                                    availableEpisodes: result.episodes.count, isAiring: nil, resumeFrom: nil,
+                                    malID: title.anime?.idMal, moduleId: result.module.id, totalEpisodes: total,
+                                    availableEpisodes: available, isAiring: total > available, resumeFrom: nil,
                                     detailHref: result.detailHref, episodeHref: result.episode.href, streamTitle: result.selected.title,
                                     workingDetailHref: result.detailHref, thumbnailUrl: nil)
         let refresh: StreamRefetchLoader = { number, href in
@@ -249,12 +258,16 @@ struct CatalogDetailScreen: View {
             return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: exact.href, legacyModule: result.module)
         }
         var anchor = result.episode.href
+        let sourceOffset = (ModuleSeasonRouting.episodeNumber(for: anchor) ?? Int(result.episode.number)) - context.episodeNumber
+        let sourceSeason = ModuleSeasonRouting.seasonNumber(for: anchor)
         let next: WatchNextLoader = { number in
             guard let step = EpisodeNavigator.next(afterHref: anchor, orNumber: number, in: result.episodes) else { return nil }
+            if title.anime != nil, ModuleSeasonRouting.seasonNumber(for: step.href) != sourceSeason { return nil }
             let runner = ModuleJSRunner(); try await runner.load(module: result.module)
             let streams = try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: step.href, legacyModule: result.module)
             anchor = step.href
-            return (streams: streams, episodeNumber: Int(step.number), episodeHref: step.href)
+            let progressNumber = title.anime != nil ? (ModuleSeasonRouting.episodeNumber(for: step.href) ?? Int(step.number)) - sourceOffset : Int(step.number)
+            return (streams: streams, episodeNumber: progressNumber, episodeHref: step.href)
         }
         #if os(iOS)
         PlayerPresenter.shared.presentPlayer(stream: result.selected, streams: result.streams, context: context,

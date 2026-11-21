@@ -45,7 +45,9 @@ struct CatalogEpisode: Identifiable, Codable, Sendable {
     let number: Int
     let name: String
     let airDate: String?
+    var knownReleased: Bool? = nil
     var released: Bool {
+        if let knownReleased { return knownReleased }
         guard let airDate, airDate.count == 10 else { return false }
         let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = TimeZone(secondsFromGMT: 0); formatter.dateFormat = "yyyy-MM-dd"

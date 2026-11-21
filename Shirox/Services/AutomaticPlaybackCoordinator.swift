@@ -128,7 +128,8 @@ final class AutomaticPlaybackCoordinator {
                 guard let next = EpisodeNavigator.next(afterHref: playingHref, orNumber: number, in: episodes) else { return nil }
                 let streams = try await self.streams(runner: runner, episodeHref: next.href, legacyModule: result.module)
                 playingHref = next.href
-                let progressNumber = item.aniListID != nil ? Int(next.number) - relativeOffset : Int(next.number)
+                let sourceNumber = ModuleSeasonRouting.episodeNumber(for: next.href) ?? Int(next.number)
+                let progressNumber = sourceNumber - relativeOffset
                 guard progressNumber > 0 else { return nil }
                 return (streams: streams, episodeNumber: progressNumber, episodeHref: next.href)
             }
