@@ -368,18 +368,32 @@ struct ModuleStreamPickerView: View {
                         for: alias ?? animeTitle, alternatives: alternateTitles + [animeTitle])
                     // The unified module searches two sites per query. Limit its
                     // title retries and don't revisit identical series URLs.
-                    let queries = module.sourceName.contains("Unified GER")
+                    var queries = module.sourceName.contains("Unified GER")
                         ? Array(allQueries.prefix(4)) : allQueries
                     var visitedHrefs = Set<String>()
+                    var hasConsultedJev = false
                     for searchPass in 0...queries.count {
                         guard !Task.isCancelled else { return }
                         if searchPass == 0 && hrefs.isEmpty { continue }
                         if searchPass > 0 {
                             let query = queries[searchPass - 1]
                             let results = (try? await runner.search(keyword: query)) ?? []
-                            hrefs = SearchResultMatcher.ranked(
+                            let ranked = SearchResultMatcher.ranked(
                                 query: query, items: results, title: { $0.title })
-                                .prefix(3).map { $0.href }
+                            // Jev only reranks real results, never returns an unverified URL.
+                            let enhanced = await JevDecisionEngine.shared.rankCandidates(
+                                ranked, query: animeTitle,
+                                season: ModuleSeasonFallback.mediaIntent(for: animeTitle).seasonNumber)
+                            hrefs = Array(enhanced.prefix(3).map { $0.href })
+                            // No result? One optional Jev decision reprioritizes
+                            // the existing retries; the normal search still works offline.
+                            if hrefs.isEmpty && searchPass == 1 && !hasConsultedJev {
+                                hasConsultedJev = true
+                                let first = queries[0]
+                                let retry = await JevDecisionEngine.shared.prioritizeRetryQueries(
+                                    Array(queries.dropFirst()), originalTitle: animeTitle)
+                                queries = [first] + retry
+                            }
                         }
                         if !hrefs.isEmpty { foundSeries = true }
                         for href in hrefs where visitedHrefs.insert(href).inserted {
@@ -704,7 +718,10 @@ private final class ModuleStreamRowViewModel: ObservableObject {
             } else {
                 let ordered = SearchResultMatcher.ranked(
                     query: matchedQuery, items: results, title: { $0.title })
-                settle(.searchResults(ordered))
+                let enhanced = await JevDecisionEngine.shared.rankCandidates(
+                    ordered, query: originalAnimeTitle,
+                    season: ModuleSeasonFallback.mediaIntent(for: originalAnimeTitle).seasonNumber)
+                settle(.searchResults(enhanced))
             }
         } catch {
             if (error as? CancellationError) != nil { return }

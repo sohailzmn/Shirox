@@ -41,6 +41,8 @@ struct SettingsView: View {
     @ObservedObject private var malAuth = MALAuthManager.shared
     @ObservedObject private var providerManager = ProviderManager.shared
     @EnvironmentObject private var moduleManager: ModuleManager
+    @ObservedObject private var jev = JevDecisionEngine.shared
+    @State private var pendingJevAPIKey = ""
     @State private var showResetCWConfirmation = false
     @State private var showResetHistoryConfirmation = false
     #if os(iOS)
@@ -107,6 +109,46 @@ struct SettingsView: View {
                         .tint(.secondary)
                     Toggle("Auto-pick Last Stream", isOn: $autoPickLastStream)
                         .tint(.secondary)
+                }
+
+                Section("Intelligente Suche") {
+                    Toggle("Automatische Trefferverbesserung", isOn: $jev.enabled)
+                        .tint(.secondary)
+                        .disabled(!jev.hasKey)
+                    SecureField("APInex-API-Schlüssel", text: $pendingJevAPIKey)
+                        .textContentType(.password)
+                        .autocorrectionDisabled()
+                    Button("API-Schlüssel speichern") {
+                        if jev.saveKey(pendingJevAPIKey) {
+                            pendingJevAPIKey = ""
+                        }
+                    }
+                    .disabled(pendingJevAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if jev.hasKey {
+                        HStack(spacing: 12) {
+                            Button("Verbindung testen") {
+                                Task { await jev.testConnection() }
+                            }
+                            .disabled(jev.checking)
+                            if jev.checking { ProgressView() }
+                            Spacer()
+                            Button("Schlüssel entfernen", role: .destructive) {
+                                jev.removeKey()
+                                pendingJevAPIKey = ""
+                            }
+                        }
+                        Text("API-Schlüssel sicher in der Geräte-Keychain gespeichert.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if let message = jev.status {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Optional: Jev bewertet im Hintergrund mehrdeutige Serien-Suchtreffer. Nur Suchbegriffe, Staffelangabe und Kandidatentitel werden an APInex übertragen. Keine Streams, Passwörter oder Watch-History. Ohne API bleibt die lokale Suche aktiv.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
 
                 ProvidersSettingsSection()

@@ -110,4 +110,12 @@ final class AnimeModulePreferenceTests: XCTestCase {
         XCTAssertTrue(matched.handled)
         XCTAssertTrue(matched.episode?.href.hasSuffix("/staffel-2/episode-4") == true)
     }
+
+    func testJevCannotInventOrReplaceSeasonIntent() {
+        let intent = ModuleSeasonFallback.mediaIntent(for: "Dexter: Resurrection Season 2")
+        XCTAssertEqual(intent.seriesTitle, "Dexter: Resurrection")
+        XCTAssertEqual(intent.seasonNumber, 2)
+        XCTAssertEqual(JevDecisionEngine.modelID, "free/jev-1.13")
+    }
+
 }
