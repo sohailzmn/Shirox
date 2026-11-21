@@ -113,6 +113,7 @@ struct ModuleStreamPickerView: View {
     @AppStorage("useDefaultExtension") private var useDefaultExtension = false
     @StateObject private var vmStore = ModuleStreamVMStore()
     @State private var autoPlayTask: Task<Void, Never>?
+    @State private var autoPlayDeadlineTask: Task<Void, Never>?
     @State private var autoPlayLoading = false
     @State private var autoPlayMessage: String?
     @State private var didAutoStart = false
@@ -136,6 +137,7 @@ struct ModuleStreamPickerView: View {
                     Button {
                         if autoPlayLoading {
                             autoPlayTask?.cancel()
+                            autoPlayDeadlineTask?.cancel()
                             autoPlayLoading = false
                         } else {
                             startSmartPlay()
@@ -207,7 +209,10 @@ struct ModuleStreamPickerView: View {
                 startSmartPlay()
             }
         }
-        .onDisappear { autoPlayTask?.cancel() }
+        .onDisappear {
+            autoPlayTask?.cancel()
+            autoPlayDeadlineTask?.cancel()
+        }
         #if os(iOS)
         .adaptivePresentationDetents([.medium, .large])
 
@@ -227,8 +232,27 @@ struct ModuleStreamPickerView: View {
         // Avoid running the per-row searches in parallel with this targeted path.
         for row in vmStore.viewModels.values { row.cancelIfSearching() }
 
+        // Independent watchdog: the underlying JS promise bridge can wait 120s,
+        // and Smart Play may try multiple titles/providers. Never leave the user
+        // staring at "Connecting…" indefinitely when a provider is unresponsive.
+        autoPlayDeadlineTask?.cancel()
+        autoPlayDeadlineTask = Task { @MainActor in
+            do { try await Task.sleep(nanoseconds: 55_000_000_000) }
+            catch { return }
+            guard !Task.isCancelled, autoPlayLoading else { return }
+            Logger.shared.log("[SmartPlay] Timed out after 55s; canceling provider lookups", type: "Error")
+            autoPlayTask?.cancel()
+            autoPlayLoading = false
+            autoPlayMessage = "Sources did not respond. Retry or choose a different source."
+            if headless { PlaybackPerformance.shared.failed() }
+            onFailure?()
+        }
         autoPlayTask = Task { @MainActor in
-            defer { autoPlayLoading = false }
+            defer {
+                autoPlayLoading = false
+                autoPlayDeadlineTask?.cancel()
+                autoPlayDeadlineTask = nil
+            }
             // First-launch auto-install is asynchronous. If Watch is tapped
             // immediately, wait for it before taking the Smart Play snapshot.
             // An offline failure still leaves existing modules available.
@@ -282,8 +306,13 @@ struct ModuleStreamPickerView: View {
                     // retry a seasonless title (e.g. "Blue Lock" for "Blue Lock Season 2").
                     let alias = ModuleSearchAliasManager.shared.getAlias(
                         mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id)
-                    let queries = ModuleSeasonFallback.queries(
+                    let allQueries = ModuleSeasonFallback.queries(
                         for: alias ?? animeTitle, alternatives: alternateTitles + [animeTitle])
+                    // The unified module searches two sites per query. Limit its
+                    // title retries and don't revisit identical series URLs.
+                    let queries = module.sourceName.contains("Unified GER")
+                        ? Array(allQueries.prefix(4)) : allQueries
+                    var visitedHrefs = Set<String>()
                     for searchPass in 0...queries.count {
                         guard !Task.isCancelled else { return }
                         if searchPass == 0 && hrefs.isEmpty { continue }
@@ -294,8 +323,7 @@ struct ModuleStreamPickerView: View {
                                 query: query, items: results, title: { $0.title })
                                 .prefix(3).map { $0.href }
                         }
-                        var visited = Set<String>()
-                        for href in hrefs where visited.insert(href).inserted {
+                        for href in hrefs where visitedHrefs.insert(href).inserted {
                         guard !Task.isCancelled else { return }
                         if headless { PlaybackPerformance.shared.moduleResolved() }
                         let episodes: [EpisodeLink]

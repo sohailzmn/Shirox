@@ -28,4 +28,19 @@ final class AnimeModulePreferenceTests: XCTestCase {
         let active = mod("m", manga: true)
         XCTAssertNil(AnimeModulePreference.pick(active: active, modules: [active]))
     }
+    func testUnifiedGermanMatchesRequestedSeasonOnly() {
+        let combined = mod("Shirox Unified GER (AniWorld + S.to)", manga: false)
+        let episodes = [
+            EpisodeLink(number: 1, href: "https://aniworld.to/anime/stream/apothecary/staffel-1/episode-1"),
+            EpisodeLink(number: 25, href: "https://aniworld.to/anime/stream/apothecary/staffel-2/episode-1"),
+            EpisodeLink(number: 49, href: "https://aniworld.to/anime/stream/apothecary/staffel-3/episode-1")
+        ]
+        let result = ModuleSeasonFallback.aniWorldEpisode(
+            from: episodes, title: "The Apothecary Diaries Season 3",
+            module: combined, number: 1
+        )
+        XCTAssertTrue(result.handled)
+        XCTAssertTrue(result.episode?.href.contains("/staffel-3/episode-1") == true)
+    }
+
 }

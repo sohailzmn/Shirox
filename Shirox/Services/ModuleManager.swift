@@ -31,6 +31,7 @@ final class ModuleManager: ObservableObject {
         "https://raw.githubusercontent.com/sohailzmn/sora-modules/main/UnifiedGerman_v1.json"
     private let unifiedGermanInstalledKey = "shiroxUnifiedGermanBootstrappedV1"
     private var unifiedGermanBootstrapTask: Task<Void, Never>?
+    private var didCheckUnifiedGermanThisLaunch = false
 
     private init() {
         loadFromStorage()
@@ -48,9 +49,16 @@ final class ModuleManager: ObservableObject {
             await inFlight.value
             return
         }
-        guard !UserDefaults.standard.bool(forKey: unifiedGermanInstalledKey) else { return }
+        guard !didCheckUnifiedGermanThisLaunch else { return }
+        didCheckUnifiedGermanThisLaunch = true
 
         let task = Task { @MainActor in
+            // Already installed? Pick up a repaired manifest/script at launch.
+            // Respect explicit user removal: do not silently reinstall it.
+            if UserDefaults.standard.bool(forKey: unifiedGermanInstalledKey) {
+                await refreshUnifiedGermanSource()
+                return
+            }
             if modules.contains(where: { $0.jsonUrl == unifiedGermanURL }) {
                 UserDefaults.standard.set(true, forKey: unifiedGermanInstalledKey)
                 return
@@ -64,6 +72,38 @@ final class ModuleManager: ObservableObject {
         unifiedGermanBootstrapTask = task
         await task.value
         unifiedGermanBootstrapTask = nil
+    }
+
+    /// Refresh only the bundled unified source, not unrelated third-party
+    /// modules. A cached working script remains installed if GitHub is offline.
+    private func refreshUnifiedGermanSource() async {
+        guard modules.contains(where: { $0.jsonUrl == unifiedGermanURL }),
+              let jsonURL = URL(string: unifiedGermanURL) else { return }
+        do {
+            var request = URLRequest(url: jsonURL)
+            request.timeoutInterval = 8
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
+            var fresh = try JSONDecoder().decode(ModuleDefinition.self, from: data)
+            guard let old = modules.first(where: { $0.jsonUrl == unifiedGermanURL }),
+                  old.version != fresh.version,
+                  fresh.scriptUrl == old.scriptUrl else { return }
+
+            fresh.jsonUrl = unifiedGermanURL
+            await cacheAssets(for: &fresh)
+            // Never replace a cached module with a manifest whose JS failed
+            // to download, or re-add it after the user removed it mid-refresh.
+            guard let script = fresh.scriptContent, !script.isEmpty,
+                  let index = modules.firstIndex(where: { $0.jsonUrl == unifiedGermanURL }) else { return }
+            let wasActive = activeModule?.id == modules[index].id
+            modules[index] = fresh
+            saveToStorage()
+            if wasActive { selectModule(fresh) }
+            Logger.shared.log("[Modules] Unified German source updated to \(fresh.version)", type: "Debug")
+        } catch {
+            Logger.shared.log("[Modules] Unified German update skipped: \(error.localizedDescription)", type: "Debug")
+        }
     }
 
     // MARK: - Add Module
@@ -215,10 +255,14 @@ final class ModuleManager: ObservableObject {
 
     private func cacheAssets(for module: inout ModuleDefinition) async {
         // 1. Script
-        if let scriptURL = URL(string: module.scriptUrl),
-           let (data, _) = try? await URLSession.shared.data(from: scriptURL),
-           let script = String(data: data, encoding: .utf8) {
-            module.scriptContent = script
+        if let scriptURL = URL(string: module.scriptUrl) {
+            var request = URLRequest(url: scriptURL)
+            request.timeoutInterval = 12
+            if let (data, response) = try? await URLSession.shared.data(for: request),
+               (response as? HTTPURLResponse)?.statusCode == 200,
+               let script = String(data: data, encoding: .utf8), !script.isEmpty {
+                module.scriptContent = script
+            }
         }
         
         // 2. Icon
