@@ -118,4 +118,37 @@ final class AnimeModulePreferenceTests: XCTestCase {
         XCTAssertEqual(JevDecisionEngine.modelID, "free/jev-1.13")
     }
 
+    func testDirectCandidateForLocalizedSeasonTwoEpisode() {
+        let module = mod("Shirox Unified GER (AniWorld + S.to)", manga: false)
+        let candidates = ModuleSeasonFallback.directEpisodeCandidates(
+            for: "Dexter: Resurrection Season 2", alternatives: [],
+            episodeNumber: 4, module: module)
+        XCTAssertEqual(
+            candidates.first?.episodeHref,
+            "https://serienstream.to/serie/dexter-wiedererwachen/staffel-2/episode-4")
+        XCTAssertTrue(candidates.allSatisfy {
+            $0.episodeHref.contains("/staffel-2/episode-4")
+        })
+    }
+
+    func testDirectCandidatesNeverGuessAnUnspecifiedSeason() {
+        let module = mod("Shirox Unified GER (AniWorld + S.to)", manga: false)
+        XCTAssertTrue(ModuleSeasonFallback.directEpisodeCandidates(
+            for: "Dexter: Resurrection", alternatives: [],
+            episodeNumber: 4, module: module).isEmpty)
+    }
+
+    func testDirectCandidatesNeverUseUnknownHostersOrUnsafeTitlePaths() {
+        let unknown = mod("Some external module", manga: false)
+        XCTAssertTrue(ModuleSeasonFallback.directEpisodeCandidates(
+            for: "Dexter: Resurrection Season 2", alternatives: [],
+            episodeNumber: 4, module: unknown).isEmpty)
+        let unified = mod("Shirox Unified GER (AniWorld + S.to)", manga: false)
+        let candidates = ModuleSeasonFallback.directEpisodeCandidates(
+            for: "The Apothecary Diaries Season 3", alternatives: [],
+            episodeNumber: 1, module: unified)
+        XCTAssertTrue(candidates.first?.episodeHref.hasPrefix(
+            "https://aniworld.to/anime/stream/the-apothecary-diaries/staffel-3/episode-1") == true)
+    }
+
 }
