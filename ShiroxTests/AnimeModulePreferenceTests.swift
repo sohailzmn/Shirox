@@ -151,4 +151,44 @@ final class AnimeModulePreferenceTests: XCTestCase {
             "https://aniworld.to/anime/stream/the-apothecary-diaries/staffel-3/episode-1") == true)
     }
 
+    func testGlobalEpisodeNumbersStillGroupIntoRealSeasons() {
+        let episodes = [
+            EpisodeLink(number: 1, href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-1"),
+            EpisodeLink(number: 10, href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-10"),
+            EpisodeLink(number: 11, href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-2/episode-1"),
+            EpisodeLink(number: 13, href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-2/episode-3")
+        ]
+        let groups = ModuleSeasonRouting.groups(episodes)
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(groups.map { $0.count }, [2, 2])
+        XCTAssertEqual(ModuleSeasonRouting.seasonNumber(for: groups[1][0].href), 2)
+        XCTAssertEqual(ModuleSeasonRouting.episodeNumber(for: groups[1][1].href), 3)
+        XCTAssertEqual(ModuleSeasonRouting.exactEpisode(episodes, season: 2, episode: 3)?.number, 13)
+        XCTAssertNil(ModuleSeasonRouting.exactEpisode(episodes, season: 2, episode: 4))
+    }
+
+    func testRequestedSecondSeasonCannotBeReplacedByFirstSeason() {
+        let episodes = (1...16).map { n in
+            EpisodeLink(number: Double(n),
+                href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-\(n)")
+        }
+        XCTAssertNil(ModuleSeasonRouting.exactEpisode(episodes, season: 2, episode: 3))
+        XCTAssertEqual(ModuleSeasonRouting.groups(episodes).count, 1)
+    }
+
+    func testNoSeasonGroupingForUnqualifiedEpisodeLinks() {
+        let episodes = [
+            EpisodeLink(number: 1, href: "https://example.com/episode-1"),
+            EpisodeLink(number: 2, href: "https://example.com/episode-2")
+        ]
+        XCTAssertEqual(ModuleSeasonRouting.groups(episodes).count, 1)
+        XCTAssertNil(ModuleSeasonRouting.exactEpisode(episodes, season: 2, episode: 1))
+    }
+
+    func testGlobalSeasonSelectionKeepsEpisodeURLsUnique() {
+        let original = EpisodeLink(number: 13, href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-2/episode-3")
+        XCTAssertEqual(ModuleSeasonRouting.episodeNumber(for: original.href), 3)
+        XCTAssertEqual(original.number, 13)
+    }
+
 }
