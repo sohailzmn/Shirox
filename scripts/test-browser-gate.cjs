@@ -1,0 +1,15 @@
+const fs=require('fs'),vm=require('vm'),assert=require('node:assert/strict');
+const source=fs.readFileSync('Shirox/Services/NetworkFetch.swift','utf8');
+const a=source.indexOf('if (sourceDocument) setInterval(function() {'),b=source.indexOf('},500);',a)+7;
+let interval,submits=0,clicks=0;const messages=[];
+const response={value:''},empty={value:''};const button={disabled:false,offsetParent:{},click(){clicks++}};
+const form={target:'player-iframe',action:'https://serienstream.to/r',querySelectorAll:()=>[empty,response],querySelector:()=>button,requestSubmit(value){assert.equal(value,button);submits++}};
+const ctx={sourceDocument:true,document:{getElementById:id=>id==='player-prepare-form'?form:null},window:{__shiroxProviderActivated:true,webkit:{messageHandlers:{networkLogger:{postMessage:value=>messages.push(value)}}}},location:{origin:'https://serienstream.to',href:'https://serienstream.to/serie/dexter'},URL,Array,setInterval:fn=>interval=fn};
+vm.runInNewContext(source.slice(a,b),ctx);
+interval();assert.equal(submits,0);
+response.value='real-site-response-1';interval();assert.equal(submits,1);assert.equal(clicks,0);
+interval();assert.equal(submits,1,'single-use response must not be replayed');
+response.value='real-site-response-2';interval();assert.equal(submits,2,'fresh site-issued response can retry');
+form.action='https://other.example/r';response.value='real-site-response-3';interval();assert.equal(submits,2);
+assert.ok(!JSON.stringify(messages).includes('real-site-response'));
+console.log('PASS: form-scoped response, native submit without ad clicks, single-use tokens, fresh retry, same-origin restriction, no token logging');

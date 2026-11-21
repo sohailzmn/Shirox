@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Verify website gate submission
+        run: node scripts/test-browser-gate.cjs
       - name: Select available iOS simulator
         run: |
           xcodebuild -version

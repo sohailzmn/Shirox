@@ -970,21 +970,23 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                     }
                 }, true);
                 if (sourceDocument) setInterval(function() {
-                    const response = document.querySelector('input[name="cf-turnstile-response"]');
-                    const responsePresent = !!(response && response.value);
+                    const form = document.getElementById('player-prepare-form');
+                    const response = form && Array.from(form.querySelectorAll('input[name="cf-turnstile-response"]')).find(function(input) { return !!input.value; });
+                    const responsePresent = !!response;
                     let continued = false;
-                    // Continue only after the site's own widget has produced a
-                    // response. Never click or solve the verification widget.
-                    if (responsePresent && window.__shiroxProviderActivated) {
-                        document.querySelectorAll('button').forEach(function(button) {
-                            if (button.disabled || button.offsetParent === null || button.__shiroxContinued ||
-                                button.textContent.trim().toLowerCase() !== 'weiter') return;
-                            let parent = button.parentElement, inVideoGate = false;
-                            for (let depth=0; parent && depth<5 && parent.tagName!=='BODY'; depth++,parent=parent.parentElement) {
-                                if (/video\\s+wird\\s+vorbereitet/i.test(parent.textContent)) { inVideoGate=true; break; }
-                            }
-                            if (inVideoGate) { button.__shiroxContinued=true; button.click(); continued=true; }
-                        });
+                    // Keep the real site-issued response in its own form/session.
+                    // requestSubmit preserves validation/submit handlers without
+                    // sending the click through third-party advertising handlers.
+                    if (responsePresent && window.__shiroxProviderActivated && form.target === 'player-iframe') {
+                        const action = new URL(form.action, location.href);
+                        const button = form.querySelector('button[type="submit"]');
+                        if (action.origin === location.origin && action.pathname === '/r' && button &&
+                            !button.disabled && button.offsetParent !== null &&
+                            form.__shiroxSubmittedResponse !== response.value && typeof form.requestSubmit === 'function') {
+                            form.__shiroxSubmittedResponse = response.value;
+                            form.requestSubmit(button);
+                            continued = true;
+                        }
                     }
                     window.webkit.messageHandlers.networkLogger.postMessage({type:'verification-state',responsePresent:responsePresent,continued:continued});
                 },500);
