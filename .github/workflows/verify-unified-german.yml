@@ -2,6 +2,7 @@ name: Verify Shirox unified German integration
 on:
   pull_request:
     branches:
+      - main
       - feature/smart-playback-recovery-20261021
   workflow_dispatch:
 jobs:
