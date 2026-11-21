@@ -60,6 +60,7 @@ final class DetailViewModel: ObservableObject {
             aniListID = nil
             aniListMedia = nil
             isMatchingAniList = false
+            isLoadingAniListMedia = false
         }
         if !isSeriesSource, aniListID == nil {
             if let savedID = AniListMappingManager.shared.getMapping(title: item.title) {
