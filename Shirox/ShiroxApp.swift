@@ -258,7 +258,6 @@ private struct MacSidebarView: View {
 
 private struct RootTabView: View {
     @EnvironmentObject private var moduleManager: ModuleManager
-    @ObservedObject private var cfManager = CloudflareBypassManager.shared
     #if os(iOS)
     @ObservedObject private var playerPresenter = PlayerPresenter.shared
     @ObservedObject private var quickActions = QuickActionManager.shared
@@ -402,13 +401,6 @@ private struct RootTabView: View {
                 .allowsHitTesting(false)
         }
 
-        .onChange(of: cfManager.activeBypassWebView != nil) { presented in
-            if presented {
-                CloudflareBypassWindowController.shared.show()
-            } else {
-                CloudflareBypassWindowController.shared.hide()
-            }
-        }
         #endif
         #if targetEnvironment(macCatalyst)
         .onAppear {
