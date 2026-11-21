@@ -51,14 +51,49 @@ enum ModuleSeasonFallback {
     struct MediaIntent: Equatable {
         let seriesTitle: String
         let seasonNumber: Int?
+        let episodeNumber: Int?
+    }
+
+    /// Some catalogue titles include the currently selected episode, such as
+    /// "Dexter: Wiedererwachen S2 · E6". This is S2E6 even if the AniList
+    /// card's flat catalogue calls the same episode number 12.
+    static func parsedSeasonEpisodeSuffix(in title: String) -> (base: String, season: Int, episode: Int)? {
+        let patterns = [
+            #"(?i)\s+s\s*0?(\d{1,2})\s*[·•|/–—-]\s*e\s*0?(\d{1,3})\s*$"#,
+            #"(?i)\s+(?:season|staffel)\s*(\d{1,2})\s*[·•|/–—-]\s*(?:episode|folge)\s*(\d{1,3})\s*$"#,
+            #"(?i)\s+s\s*0?(\d{1,2})\s+e\s*0?(\d{1,3})\s*$"#
+        ]
+        let range = NSRange(title.startIndex..<title.endIndex, in: title)
+        for pattern in patterns {
+            guard let regex = try? NSRegularExpression(pattern: pattern),
+                  let match = regex.firstMatch(in: title, range: range),
+                  let full = Range(match.range, in: title),
+                  let seasonRange = Range(match.range(at: 1), in: title),
+                  let episodeRange = Range(match.range(at: 2), in: title),
+                  let season = Int(title[seasonRange]), (1...99).contains(season),
+                  let episode = Int(title[episodeRange]), (1...500).contains(episode) else { continue }
+            let base = String(title[..<full.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard base.count >= 3 else { continue }
+            return (base, season, episode)
+        }
+        return nil
     }
 
     static func mediaIntent(for title: String) -> MediaIntent {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let suffix = parsedSuffix(in: trimmed) else {
-            return MediaIntent(seriesTitle: trimmed, seasonNumber: nil)
+        if let explicit = parsedSeasonEpisodeSuffix(in: trimmed) {
+            return MediaIntent(seriesTitle: explicit.base, seasonNumber: explicit.season,
+                               episodeNumber: explicit.episode)
         }
-        return MediaIntent(seriesTitle: suffix.base, seasonNumber: suffix.season)
+        if let suffix = parsedSuffix(in: trimmed) {
+            return MediaIntent(seriesTitle: suffix.base, seasonNumber: suffix.season,
+                               episodeNumber: nil)
+        }
+        return MediaIntent(seriesTitle: trimmed, seasonNumber: nil, episodeNumber: nil)
+    }
+
+    static func sourceEpisodeNumber(for title: String, fallback: Int) -> Int {
+        mediaIntent(for: title).episodeNumber ?? fallback
     }
 
     static func queries(for title: String, alternatives: [String] = []) -> [String] {
@@ -183,10 +218,14 @@ enum ModuleSeasonFallback {
 /// search / episode / resolver results and remain usable offline.
 enum FastSourceDecision {
     static func error(
-        foundSeries: Bool, foundEpisodes: Bool, foundStream: Bool, timedOut: Bool = false
+        foundSeries: Bool, foundEpisodes: Bool, foundStream: Bool,
+        timedOut: Bool = false, websiteVerificationRequired: Bool = false
     ) -> String {
         if timedOut {
             return "Die Quellen antworten zu langsam. Erneut versuchen oder Quelle wechseln."
+        }
+        if websiteVerificationRequired && !foundStream {
+            return "Mindestens eine Quelle verlangt eine Website-Verifizierung. Diese lässt sich nicht überspringen. Bitte eine andere zugängliche Quelle wählen."
         }
         if !foundSeries {
             return "Keine passende Serie gefunden. Auch Alternativtitel wurden geprüft."
@@ -493,6 +532,9 @@ struct ModuleStreamPickerView: View {
             var foundSeries = false
             var foundEpisode = false
             var foundStreams = false
+            var verificationRequired = false
+            let sourceEpisode = ModuleSeasonFallback.sourceEpisodeNumber(
+                for: animeTitle, fallback: episodeNumber)
             for module in modules {
                 guard !Task.isCancelled else { return }
                 autoPlayMessage = "Checking \(module.sourceName)…"
@@ -518,7 +560,7 @@ struct ModuleStreamPickerView: View {
                     if hrefs.isEmpty {
                         let directCandidates = ModuleSeasonFallback.directEpisodeCandidates(
                             for: animeTitle, alternatives: alternateTitles,
-                            episodeNumber: episodeNumber, module: module)
+                            episodeNumber: sourceEpisode, module: module)
                         if let direct = await VerifiedDirectEpisode.firstVerified(directCandidates),
                            !Task.isCancelled {
                             foundSeries = true
@@ -527,8 +569,16 @@ struct ModuleStreamPickerView: View {
                                 PlaybackPerformance.shared.moduleResolved()
                                 PlaybackPerformance.shared.episodeResolved()
                             }
-                            let directStreams = (try? await runner.fetchStreams(
-                                episodeUrl: direct.episodeHref)) ?? []
+                            var directStreams: [StreamResult] = []
+                            do {
+                                directStreams = try await runner.fetchStreams(
+                                    episodeUrl: direct.episodeHref)
+                            } catch {
+                                if error is ModuleStreamResolutionError ||
+                                   runner.lastTurnstileURL != nil {
+                                    verificationRequired = true
+                                }
+                            }
                             if !directStreams.isEmpty && !Task.isCancelled {
                                 foundStreams = true
                                 let savedTitle = ModuleSearchAliasManager.shared.getLastStreamTitle(
@@ -601,20 +651,23 @@ struct ModuleStreamPickerView: View {
                         if headless { PlaybackPerformance.shared.moduleResolved() }
                         let episodes: [EpisodeLink]
                         do { episodes = try await runner.fetchEpisodes(url: href) }
-                        catch { continue }
+                        catch {
+                            if runner.lastTurnstileURL != nil { verificationRequired = true }
+                            continue
+                        }
                         if !episodes.isEmpty { foundSeries = true }
                         let seasonMatch = ModuleSeasonFallback.aniWorldEpisode(
-                            from: episodes, title: animeTitle, module: module, number: episodeNumber)
+                            from: episodes, title: animeTitle, module: module, number: sourceEpisode)
                         let offset = await offsetTask.value
-                        let absoluteIndex = offset + episodeNumber - 1
+                        let absoluteIndex = offset + sourceEpisode - 1
                         let episode: EpisodeLink?
                         if seasonMatch.handled {
                             episode = seasonMatch.episode
                         } else if offset > 0 && episodes.indices.contains(absoluteIndex),
-                                  Int(episodes[absoluteIndex].number) == offset + episodeNumber {
+                                  Int(episodes[absoluteIndex].number) == offset + sourceEpisode {
                             episode = episodes[absoluteIndex]
                         } else {
-                            episode = episodes.first { Int($0.number) == episodeNumber }
+                            episode = episodes.first { Int($0.number) == sourceEpisode }
                         }
                         guard let episode else { continue }
                         foundEpisode = true
@@ -622,7 +675,13 @@ struct ModuleStreamPickerView: View {
 
                         let streams: [StreamResult]
                         do { streams = try await runner.fetchStreams(episodeUrl: episode.href) }
-                        catch { continue }
+                        catch {
+                            if error is ModuleStreamResolutionError ||
+                               runner.lastTurnstileURL != nil {
+                                verificationRequired = true
+                            }
+                            continue
+                        }
                         guard !streams.isEmpty else { continue }
                         foundStreams = true
 
@@ -659,12 +718,18 @@ struct ModuleStreamPickerView: View {
                     }
                 } catch {
                     // A broken provider must not block playback from the next module.
+                    if error is ModuleStreamResolutionError ||
+                       runner.lastTurnstileURL != nil {
+                        verificationRequired = true
+                    }
                     Logger.shared.log("[SmartPlay] \(module.sourceName): \(error.localizedDescription)", type: "Error")
                 }
+                if runner.lastTurnstileURL != nil { verificationRequired = true }
             }
             if !Task.isCancelled {
                 autoPlayMessage = FastSourceDecision.error(
-                    foundSeries: foundSeries, foundEpisodes: foundEpisode, foundStream: foundStreams)
+                    foundSeries: foundSeries, foundEpisodes: foundEpisode,
+                    foundStream: foundStreams, websiteVerificationRequired: verificationRequired)
                 if headless { PlaybackPerformance.shared.failed() }
                 onFailure?(autoPlayMessage ?? "Keine abspielbare Quelle gefunden.")
             }
