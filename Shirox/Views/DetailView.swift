@@ -576,10 +576,17 @@ struct DetailView: View {
     @ViewBuilder
     private func watchButton(detail: MediaDetail) -> some View {
         let item = continueWatchingItem(for: detail)
-        let nextEp = item?.episodeNumber ?? 1
-        let label = item != nil && !item!.streamUrl.isEmpty ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)"
-        
+        let hasTarget = requestedSeason != nil && requestedEpisode != nil
+        let nextEp = hasTarget ? (requestedEpisode ?? 1) : (item?.episodeNumber ?? 1)
+        let label = hasTarget
+            ? "Watch S\(requestedSeason ?? 1) E\(nextEp)"
+            : (item != nil && !item!.streamUrl.isEmpty ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)")
+
         Button {
+            if let season = requestedSeason, let number = requestedEpisode {
+                playCatalogRequestedEpisode(detail: detail, season: season, number: number)
+                return
+            }
             // Prefer the local file when the target episode is already downloaded.
             let activeModule = effectiveModuleId
             let downloadedTarget = DownloadManager.shared.items.first {
@@ -613,7 +620,38 @@ struct DetailView: View {
             .foregroundStyle(.primary)
         }
         .buttonStyle(.plain)
-        .disabled(detail.episodes.isEmpty && item == nil)
+        .disabled(checkingRequestedEpisode || (!hasTarget && detail.episodes.isEmpty && item == nil))
+    }
+
+    /// TVmaze supplied a specific season/episode, but a module's catalogue may
+    /// only expose S1. Never substitute the first episode or a global index.
+    /// The canonical direct URL is only used after a real page/hoster check.
+    private func playCatalogRequestedEpisode(detail: MediaDetail, season: Int, number: Int) {
+        guard !checkingRequestedEpisode else { return }
+        requestedEpisodeError = nil
+        if let exact = ModuleSeasonRouting.exactEpisode(detail.episodes, season: season, episode: number) {
+            vm.loadStreams(for: exact)
+            return
+        }
+        guard let module = ModuleManager.shared.modules.first(where: { $0.id == effectiveModuleId })
+            ?? ModuleManager.shared.activeModule else {
+            requestedEpisodeError = "Keine Streamingquelle ausgewählt."
+            return
+        }
+        checkingRequestedEpisode = true
+        Task { @MainActor in
+            defer { checkingRequestedEpisode = false }
+            let title = requestedMetadataTitle ?? item.title
+            let namedSeason = "\(title) Season \(season)"
+            let candidates = ModuleSeasonFallback.directEpisodeCandidates(
+                for: namedSeason, alternatives: [detail.title, item.title],
+                episodeNumber: number, module: module)
+            guard let verified = await VerifiedDirectEpisode.firstVerified(candidates) else {
+                requestedEpisodeError = "Staffel \(season), Folge \(number) wurde in dieser Quelle nicht bestätigt. Versuche eine andere Quelle oder erneut."
+                return
+            }
+            vm.loadStreams(for: EpisodeLink(number: Double(number), href: verified.episodeHref))
+        }
     }
 
     @ViewBuilder
