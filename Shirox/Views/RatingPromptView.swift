@@ -49,7 +49,7 @@ struct RatingPromptView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button("Speichern") {
                         onSave(score)
                         dismiss()
                     }

@@ -96,18 +96,18 @@ struct SettingsView: View {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(moduleManager.activeModule?.sourceName ?? providerManager.primary?.providerType.displayName ?? "AniList")
                                     .font(.headline)
-                                Text("Manage your modules")
+                                Text("Streamingquellen verwalten")
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
                         }
                     }
-                    Toggle("Use Default Extension", isOn: $useDefaultExtension)
+                    Toggle("Bevorzugte Quelle verwenden", isOn: $useDefaultExtension)
                         .tint(.secondary)
                         .disabled(moduleManager.activeModule == nil)
-                    Toggle("Auto-pick Last Search Result", isOn: $autoPickLastSearchResult)
+                    Toggle("Bewährte Titelzuordnung bevorzugen", isOn: $autoPickLastSearchResult)
                         .tint(.secondary)
-                    Toggle("Auto-pick Last Stream", isOn: $autoPickLastStream)
+                    Toggle("Bewährten Hoster bevorzugen", isOn: $autoPickLastStream)
                         .tint(.secondary)
                 }
 
@@ -155,8 +155,8 @@ struct SettingsView: View {
 
                 ProvidersSettingsSection()
 
-                Section("Player") {
-                    Toggle("Force Landscape Mode", isOn: $forceLandscape)
+                Section("Wiedergabe") {
+                    Toggle("Querformat erzwingen", isOn: $forceLandscape)
                         .tint(.secondary)
                         #if os(iOS)
                         .onChangeOf(forceLandscape) {
@@ -164,14 +164,14 @@ struct SettingsView: View {
                         }
                         #endif
                     if #available(iOS 26.0, macOS 26.0, *) {
-                        Toggle("Liquid Glass Controls", isOn: $playerLiquidGlass)
+                        Toggle("Transparente Bedienelemente", isOn: $playerLiquidGlass)
                             .tint(.secondary)
                         Text("Frosted glass buttons in the video player. Turn off for solid controls.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Picker("Preferred Quality", selection: $preferredQuality) {
-                        Text("Auto").tag("auto")
+                        Text("Automatisch").tag("auto")
                         Text("Highest").tag("highest")
                         Text("1080p").tag("1080")
                         Text("720p").tag("720")
@@ -199,14 +199,14 @@ struct SettingsView: View {
                             Text("\(s)s").tag(s)
                         }
                     }
-                    Toggle("Auto Next Episode", isOn: $autoNextEpisode)
+                    Toggle("Nächste Folge automatisch starten", isOn: $autoNextEpisode)
                         .tint(.secondary)
-                    Toggle("Auto-Skip Segments", isOn: $autoSkipSegments)
+                    Toggle("Intro und Rückblick automatisch überspringen", isOn: $autoSkipSegments)
                         .tint(.secondary)
                     Text("Automatically skip intros, recaps, credits, and previews")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Toggle("Reverse Episode List by Default", isOn: EpisodeSortManager.shared.$defaultReverseSort)
+                    Toggle("Folgen standardmäßig umgekehrt anzeigen", isOn: EpisodeSortManager.shared.$defaultReverseSort)
                         .tint(.secondary)
                     VStack(alignment: .leading, spacing: 12) {
                         HStack {
@@ -224,8 +224,8 @@ struct SettingsView: View {
 
                 #if os(iOS)
                 if #available(iOS 26.0, *) {
-                    Section("Reader") {
-                        Toggle("Liquid Glass Controls", isOn: $readerLiquidGlass)
+                    Section("Lesemodus") {
+                        Toggle("Transparente Bedienelemente", isOn: $readerLiquidGlass)
                             .tint(.secondary)
                         Text("Frosted glass buttons in the manga reader. Turn off for solid controls.")
                             .font(.caption)
@@ -235,22 +235,22 @@ struct SettingsView: View {
                 #endif
 
                 if aniListAuth.isLoggedIn || malAuth.isLoggedIn {
-                    Section("Tracking") {
+                    Section("Fortschritt") {
                         if aniListAuth.isLoggedIn {
-                            Toggle("Track on AniList", isOn: $aniListTrackingEnabled)
+                            Toggle("Fortschritt mit AniList abgleichen", isOn: $aniListTrackingEnabled)
                                 .tint(.secondary)
                         }
                         if malAuth.isLoggedIn {
-                            Toggle("Track on MyAnimeList", isOn: $malTrackingEnabled)
+                            Toggle("Fortschritt mit MyAnimeList abgleichen", isOn: $malTrackingEnabled)
                                 .tint(.secondary)
                         }
                         if aniListAuth.isLoggedIn && malAuth.isLoggedIn {
-                            Toggle("Sync edits to both services", isOn: $dualSync)
+                            Toggle("Änderungen mit beiden Diensten abgleichen", isOn: $dualSync)
                                 .tint(.secondary)
                         }
-                        Toggle("Never reduce progress", isOn: $skipReWatchTracking)
+                        Toggle("Fortschritt nicht zurücksetzen", isOn: $skipReWatchTracking)
                             .tint(.secondary)
-                        Toggle("Prompt to rate after finishing", isOn: $rateOnFinish)
+                        Toggle("Nach Abschluss nach Bewertung fragen", isOn: $rateOnFinish)
                             .tint(.secondary)
                         Text("Automatically update your watch progress as you watch.")
                             .font(.caption)
@@ -259,7 +259,7 @@ struct SettingsView: View {
                 }
 
                 if aniListAuth.isLoggedIn && malAuth.isLoggedIn {
-                    Section("Sync Library") {
+                    Section("Mediathek synchronisieren") {
                         ForEach(LibrarySyncService.Direction.syncCases) { direction in
                             syncRow(direction)
                         }
@@ -268,7 +268,7 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Section("Replace Library") {
+                    Section("Mediathek ersetzen") {
                         ForEach(LibrarySyncService.Direction.replaceCases) { direction in
                             syncRow(direction)
                         }
@@ -277,7 +277,7 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    Section("Mirror Library") {
+                    Section("Mediathek spiegeln") {
                         ForEach(LibrarySyncService.Direction.mirrorCases) { direction in
                             syncRow(direction)
                         }
@@ -287,39 +287,39 @@ struct SettingsView: View {
                     }
                 }
                 
-                Section("Library") {
+                Section("Mediathek") {
                     NavigationLink {
                         LibrarySettingsView()
                     } label: {
-                        Label("List Order & Custom Lists", systemImage: "list.bullet.indent")
+                        Label("Listenreihenfolge und eigene Listen", systemImage: "list.bullet.indent")
                     }
                 }
 
                 Section {
-                    Toggle("Auto-track what you watch", isOn: $localAutoTrackEnabled)
+                    Toggle("Gesehene Inhalte automatisch vormerken", isOn: $localAutoTrackEnabled)
                         .tint(.secondary)
-                    Picker("Score Format", selection: $localScoreFormatRaw) {
-                        Text("100 Point").tag(ScoreFormat.point100.rawValue)
-                        Text("10 Point (Decimal)").tag(ScoreFormat.point10Decimal.rawValue)
-                        Text("10 Point").tag(ScoreFormat.point10.rawValue)
-                        Text("5 Star").tag(ScoreFormat.point5.rawValue)
-                        Text("3 Point").tag(ScoreFormat.point3.rawValue)
+                    Picker("Bewertungsformat", selection: $localScoreFormatRaw) {
+                        Text("100 Punkte").tag(ScoreFormat.point100.rawValue)
+                        Text("10 Punkte mit Dezimalstelle").tag(ScoreFormat.point10Decimal.rawValue)
+                        Text("10 Punkte").tag(ScoreFormat.point10.rawValue)
+                        Text("5 Sterne").tag(ScoreFormat.point5.rawValue)
+                        Text("3 Punkte").tag(ScoreFormat.point3.rawValue)
                     }
                     Button(role: .destructive) {
                         showClearLocalLibrary = true
                     } label: {
-                        Label("Clear Local Library", systemImage: "trash")
+                        Label("Lokale Mediathek leeren", systemImage: "trash")
                     }
                 } header: {
-                    Text("Local Library")
+                    Text("Lokale Mediathek")
                 } footer: {
-                    Text("Your on-device library works without signing in. Auto-track keeps its Watching list in sync with what you watch.")
+                    Text("Die lokale Mediathek funktioniert ohne Anmeldung und kann deinen Wiedergabefortschritt automatisch speichern.")
                 }
-                .alert("Clear Local Library", isPresented: $showClearLocalLibrary) {
-                    Button("Clear", role: .destructive) { LocalLibraryManager.shared.clearAll() }
-                    Button("Cancel", role: .cancel) {}
+                .alert("Lokale Mediathek leeren", isPresented: $showClearLocalLibrary) {
+                    Button("Leeren", role: .destructive) { LocalLibraryManager.shared.clearAll() }
+                    Button("Abbrechen", role: .cancel) {}
                 } message: {
-                    Text("This permanently removes all on-device entries and collections. AniList/MyAnimeList lists are not affected.")
+                    Text("Alle lokalen Einträge und Sammlungen werden dauerhaft entfernt. Deine AniList- und MyAnimeList-Listen bleiben erhalten.")
                 }
 
                 Section("Downloads") {
@@ -328,18 +328,18 @@ struct SettingsView: View {
                             Text("\(count)").tag(count)
                         }
                     }
-                    Toggle("Background Downloads", isOn: $backgroundDownloadsEnabled)
+                    Toggle("Downloads im Hintergrund", isOn: $backgroundDownloadsEnabled)
                         .tint(.secondary)
-                    Toggle("Auto-Resume Interrupted", isOn: $autoResumeDownloads)
+                    Toggle("Unterbrochene Downloads fortsetzen", isOn: $autoResumeDownloads)
                         .tint(.secondary)
-                    Toggle("Delete After Watching", isOn: $autoDeleteWatched)
+                    Toggle("Nach dem Ansehen löschen", isOn: $autoDeleteWatched)
                         .tint(.secondary)
                     Text("Delete After Watching removes a downloaded episode once you finish it and close the player. Retry downloads that were interrupted or failed when the app next opens — off by default so reopening the app never starts a large transfer on cellular without you asking.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Matching") {
+                Section("Titelzuordnung") {
                     ForEach(orderedLanguages, id: \.self) { lang in
                         HStack {
                             Image(systemName: "line.3.horizontal")
@@ -362,26 +362,26 @@ struct SettingsView: View {
                 #endif
 
                 #if os(iOS)
-                Section("Data") {
-                    Toggle("Data Saver", isOn: $dataSaverEnabled)
+                Section("Daten") {
+                    Toggle("Datensparmodus", isOn: $dataSaverEnabled)
                         .tint(.secondary)
                     Text("Loads smaller artwork and skips the large banner images on Home. Posters look softer; everything still works, and downloads and playback are unaffected.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Backup") {
+                Section("Sicherung") {
                     NavigationLink {
                         BackupSettingsView()
                     } label: {
-                        Label("Backup & Restore", systemImage: "arrow.up.arrow.down.circle")
+                        Label("Sichern und Wiederherstellen", systemImage: "arrow.up.arrow.down.circle")
                     }
                     Text("Save your progress, library, settings and modules to a file, or restore them from one.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Storage & Cache") {
+                Section("Speicher und Cache") {
                     #if os(iOS)
                     Button(role: .destructive) {
                         showDeleteDownloadsConfirmation = true
@@ -528,16 +528,16 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Section("Diagnostics") {
+                Section("Diagnose") {
                     NavigationLink {
                         SettingsViewLogger()
                     } label: {
-                        Label("App Logs", systemImage: "terminal")
+                        Label("App-Protokolle", systemImage: "terminal")
                     }
                     NavigationLink {
                         PlaybackPerformanceDashboard()
                     } label: {
-                        Label("Playback Performance", systemImage: "gauge.with.dots.needle.50percent")
+                        Label("Wiedergabe-Diagnose", systemImage: "gauge.with.dots.needle.50percent")
                     }
                 }
                 #endif
@@ -560,43 +560,43 @@ struct SettingsView: View {
                 }
             }
             .softScrollEdges()
-            .navigationTitle("Settings")
+            .navigationTitle("Einstellungen")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .alert("Reset Continue Watching?", isPresented: $showResetCWConfirmation) {
-                Button("Reset", role: .destructive) {
+                Button("Zurücksetzen", role: .destructive) {
                     CacheManager.shared.clearContinueWatching()
                     #if os(iOS)
                     updateCacheSizes()
                     #endif
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Abbrechen", role: .cancel) {}
             } message: {
                 Text("This will clear all in-progress playback cards from the Home screen.")
             }
             #if os(iOS)
             .alert("Delete All Downloads?", isPresented: $showDeleteDownloadsConfirmation) {
-                Button("Delete", role: .destructive) {
+                Button("Löschen", role: .destructive) {
                     // Through the managers rather than the filesystem, so the manifests don't
                     // keep listing episodes whose files are gone.
                     DownloadManager.shared.removeAll(DownloadManager.shared.items)
                     MangaDownloadManager.shared.removeAll(MangaDownloadManager.shared.items)
                     updateCacheSizes()
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Abbrechen", role: .cancel) {}
             } message: {
                 Text("Every downloaded episode and chapter will be removed from this device. You can download them again later.")
             }
             #endif
             .alert("Reset Watch History?", isPresented: $showResetHistoryConfirmation) {
-                Button("Reset", role: .destructive) {
+                Button("Zurücksetzen", role: .destructive) {
                     CacheManager.shared.clearWatchHistory()
                     #if os(iOS)
                     updateCacheSizes()
                     #endif
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Abbrechen", role: .cancel) {}
             } message: {
                 Text("This will clear all 'Watched' checkmarks from episode lists.")
             }
@@ -612,7 +612,7 @@ struct SettingsView: View {
                     pendingSyncDirection = nil
                     Task { await librarySync.sync(direction) }
                 }
-                Button("Cancel", role: .cancel) { pendingSyncDirection = nil }
+                Button("Abbrechen", role: .cancel) { pendingSyncDirection = nil }
             } message: { direction in
                 Text(direction.confirmationMessage)
             }
@@ -746,7 +746,7 @@ struct LibrarySettingsView: View {
             }
         }
         .softScrollEdges()
-        .navigationTitle("Library")
+        .navigationTitle("Mediathek")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .environment(\.editMode, .constant(.active))
@@ -881,7 +881,7 @@ struct SettingsViewLogger: View {
                         UIPasteboard.general.string = text
                         #endif
                     } label: {
-                        Label("Copy to Clipboard", systemImage: "doc.on.doc")
+                        Label("In Zwischenablage kopieren", systemImage: "doc.on.doc")
                     }
                     Button(role: .destructive) {
                         Task {
@@ -889,7 +889,7 @@ struct SettingsViewLogger: View {
                             await MainActor.run { entries = [] }
                         }
                     } label: {
-                        Label("Clear Logs", systemImage: "trash")
+                        Label("Protokolle leeren", systemImage: "trash")
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
@@ -918,7 +918,7 @@ struct SettingsViewLoggerFilter: View {
 
     var body: some View {
         List {
-            Section(header: Text("Log Types"), footer: Text("Choose which log categories to record. Debug and HTMLStrings can be very verbose.")) {
+            Section(header: Text("Protokollkategorien"), footer: Text("Choose which log categories to record. Debug and HTMLStrings can be very verbose.")) {
                 ForEach($viewModel.filters) { $filter in
                     Toggle(isOn: $filter.isEnabled) {
                         Label {
@@ -1221,7 +1221,7 @@ private struct ProvidersSettingsSection: View {
                                 .padding(.horizontal, 8).padding(.vertical, 3)
                                 .background(.primary.opacity(0.1), in: Capsule())
                         } else if isSignedIn(provider.providerType) {
-                            Button("Make Primary") {
+                            Button("Als Hauptdienst verwenden") {
                                 manager.selectProvider(provider.providerType)
                             }
                             .font(.caption.weight(.semibold))
@@ -1378,7 +1378,7 @@ private struct ReplacePreviewSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
+                    Button("Abbrechen", action: onCancel)
                 }
             }
         }
@@ -1437,7 +1437,7 @@ private struct PlaybackPerformanceDashboard: View {
                     ForEach(performance.samples) { sample in
                         VStack(alignment: .leading, spacing: 8) {
                             HStack {
-                                Text("\(sample.title) · Episode \(sample.episode)")
+                                Text("\(sample.title) · Folge \(sample.episode)")
                                     .font(.headline)
                                 Spacer()
                                 Text(sample.outcome)
@@ -1473,6 +1473,6 @@ private struct PlaybackPerformanceDashboard: View {
                 Button("Clear measurements", role: .destructive) { performance.clear() }
             }
         }
-        .navigationTitle("Playback Performance")
+        .navigationTitle("Wiedergabe-Diagnose")
     }
 }

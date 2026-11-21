@@ -5,6 +5,7 @@ struct CatalogAccessSettings: View {
     @State private var token = ""
     var body: some View {
         Section("Serien- und Filmkatalog") {
+            Image("TMDBLogo").resizable().scaledToFit().frame(width: 70, height: 50).accessibilityLabel("TMDB")
             SecureField("Kostenloser TMDB-Lesezugang", text: $token)
                 .autocorrectionDisabled()
             Button("Katalogzugang speichern") { config.save(token); token = "" }
@@ -29,6 +30,7 @@ struct UnifiedHomeSections: View {
     @ObservedObject private var availability = CatalogAvailabilityStore.shared
     @ObservedObject private var configuration = CatalogConfiguration.shared
     @ObservedObject private var history = ContinueWatchingManager.shared
+    @ObservedObject private var watchlist = CatalogWatchlist.shared
     @State private var filter = "Alle"
     private var rows: [CatalogRow] {
         var rows = catalog.rows
@@ -45,6 +47,8 @@ struct UnifiedHomeSections: View {
         seen = []
         let suggestions = all.filter { !genres.isEmpty && !Set($0.genres).isDisjoint(with: genres) && seen.insert($0.id).inserted }
         var result = visible
+        let saved = watchlist.titles.filter { filter == "Alle" || $0.kind.label == filter }
+        if !saved.isEmpty { result.insert(CatalogRow(id: "watchlist", name: "Meine Merkliste", titles: availability.rank(saved)), at: 0) }
         if !suggestions.isEmpty { result.insert(CatalogRow(id: "for-you", name: "Für dich", titles: availability.rank(suggestions)), at: 0) }
         if !confirmed.isEmpty { result.insert(CatalogRow(id: "confirmed", name: "Zuletzt erfolgreich abgespielt", titles: confirmed), at: 0) }
         return result
@@ -139,6 +143,7 @@ struct CatalogDetailScreen: View {
     @State private var error: String?
     @State private var playTask: Task<Void, Never>?
     @ObservedObject private var availability = CatalogAvailabilityStore.shared
+    @ObservedObject private var watchlist = CatalogWatchlist.shared
 
     var body: some View {
         ScrollView {
@@ -148,6 +153,10 @@ struct CatalogDetailScreen: View {
                     Text(title.name).font(.title.bold())
                     Text([title.kind.label, title.year].compactMap { $0 }.joined(separator: " · ")).foregroundStyle(.secondary)
                     Text(availability.state(title.id).label).font(.caption)
+                    Button { watchlist.toggle(title) } label: {
+                        Label(watchlist.contains(title) ? "Aus Merkliste entfernen" : "Zur Merkliste hinzufügen",
+                              systemImage: watchlist.contains(title) ? "checkmark" : "plus")
+                    }.buttonStyle(.bordered)
                     if let synopsis = title.synopsis, !synopsis.isEmpty { Text(synopsis) }
                     else { Text("Deutsche Beschreibung nicht verfügbar.").foregroundStyle(.secondary) }
                     if let media = title.anime {
@@ -252,5 +261,23 @@ struct CatalogDetailScreen: View {
         MacPlayerWindowManager.shared.open(stream: result.selected, streams: result.streams, context: context,
                                           onWatchNext: next, onStreamExpired: refresh)
         #endif
+    }
+}
+
+struct CatalogWatchlistScreen: View {
+    @ObservedObject private var watchlist = CatalogWatchlist.shared
+    var body: some View {
+        ScrollView {
+            if watchlist.titles.isEmpty {
+                Text("Deine Serien- und Filmmerkliste ist noch leer.").foregroundStyle(.secondary).padding(30)
+            } else {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 140))], spacing: 16) {
+                    ForEach(watchlist.titles) { title in
+                        NavigationLink { CatalogDetailScreen(title: title) } label: { CatalogPoster(title: title) }
+                            .buttonStyle(.plain)
+                    }
+                }.padding()
+            }
+        }.navigationTitle("Meine Merkliste")
     }
 }

@@ -166,7 +166,7 @@ struct LibraryEntryEditSheet: View {
                                 Button(role: .destructive) {
                                     editor.requestDelete(collection)
                                 } label: {
-                                    Label("Delete", systemImage: "trash")
+                                    Label("Löschen", systemImage: "trash")
                                 }
                                 .tint(.red)
                             }
@@ -188,7 +188,7 @@ struct LibraryEntryEditSheet: View {
                                 Button(role: .destructive) {
                                     editor.requestDelete(collection)
                                 } label: {
-                                    Label("Delete", systemImage: "trash")
+                                    Label("Löschen", systemImage: "trash")
                                 }
                             }
                         }
@@ -205,7 +205,7 @@ struct LibraryEntryEditSheet: View {
                         Button(role: .destructive) {
                             showDeleteConfirmation = true
                         } label: {
-                            Label("Remove from Library", systemImage: "trash")
+                            Label("Aus Mediathek entfernen", systemImage: "trash")
                         }
                     }
                 }
@@ -217,10 +217,10 @@ struct LibraryEntryEditSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Abbrechen") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    Button("Speichern") {
                         let finalProgress = status == .completed ? (media.episodes ?? progress) : progress
                         onSave(status, finalProgress, score)
                         // Sent separately from `onSave`, which is the shared write used by both
@@ -267,12 +267,12 @@ struct LibraryEntryEditSheet: View {
                     progress = total
                 }
             }
-            .alert("Remove from Library", isPresented: $showDeleteConfirmation) {
+            .alert("Aus Mediathek entfernen", isPresented: $showDeleteConfirmation) {
                 Button("Remove", role: .destructive) {
                     onDelete?()
                     dismiss()
                 }
-                Button("Cancel", role: .cancel) {}
+                Button("Abbrechen", role: .cancel) {}
             } message: {
                 Text("This will remove \(media.title.displayTitle) from your library.")
             }
@@ -286,7 +286,7 @@ struct LibraryEntryEditSheet: View {
                     local.setMembership(uniqueId: media.uniqueId, media: media,
                                         inCollection: collection.id, member: true)
                 }
-                Button("Cancel", role: .cancel) { newCollectionName = "" }
+                Button("Abbrechen", role: .cancel) { newCollectionName = "" }
             } message: {
                 Text("Group this title under a custom collection.")
             }

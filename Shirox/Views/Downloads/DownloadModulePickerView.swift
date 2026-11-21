@@ -54,11 +54,11 @@ struct DownloadModulePickerView: View {
             }
             .softScrollEdges()
             .listStyle(.insetGrouped)
-            .navigationTitle("Download Episode \(episodeNumber)")
+            .navigationTitle("Download Folge \(episodeNumber)")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onDismiss() }
+                    Button("Abbrechen") { onDismiss() }
                 }
             }
             .adaptiveSheet(item: $streamPickerItem, onDismiss: {
@@ -172,7 +172,7 @@ private struct DownloadModuleRow: View {
             }
             .buttonStyle(.plain)
         case .searchResults, .selectingEpisode, .notFound, .error:
-            Button("Retry") { rowVm.reset(); rowVm.startFind() }
+            Button("Erneut versuchen") { rowVm.reset(); rowVm.startFind() }
                 .buttonStyle(.bordered).controlSize(.small).foregroundStyle(Color.accentColor)
         }
     }
@@ -195,7 +195,7 @@ private struct DownloadModuleRow: View {
         case .loadingStreams:
             HStack(spacing: 6) {
                 ProgressView().scaleEffect(0.7)
-                Text("Fetching streams…").font(.caption).foregroundStyle(.secondary)
+                Text("Videos werden geprüft …").font(.caption).foregroundStyle(.secondary)
             }
         case .searchResults(let items):
             VStack(alignment: .leading, spacing: 8) {

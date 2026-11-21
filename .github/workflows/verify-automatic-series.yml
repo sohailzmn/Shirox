@@ -38,8 +38,14 @@ jobs:
               exit 1
             }
           grep -E '(Executed|TEST SUCCEEDED)' "$RUNNER_TEMP/series-tests.log" | tail -10
+      - name: Collect catalogue visual snapshot
+        run: |
+          APP_DATA=$(xcrun simctl get_app_container "$SIMULATOR_ID" com.shirox.app data)
+          cp "$APP_DATA/Library/Caches/catalog-detail-ipad.png" "$RUNNER_TEMP/catalog-detail-ipad.png"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: automatic-series-test-log
-          path: ${{ runner.temp }}/series-tests.log
+          path: |
+            ${{ runner.temp }}/series-tests.log
+            ${{ runner.temp }}/catalog-detail-ipad.png

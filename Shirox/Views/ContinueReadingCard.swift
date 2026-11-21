@@ -15,7 +15,7 @@ struct ContinueReadingSection: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Continue Reading")
+                    Text("Weiterlesen")
                         .font(.title2.weight(.heavy))
                         .tracking(0.3)
                     RoundedRectangle(cornerRadius: 2)

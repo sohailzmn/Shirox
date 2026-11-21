@@ -83,7 +83,7 @@ struct ActivityDetailView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { dismiss() }
+                Button("Fertig") { dismiss() }
             }
         }
         .task {
@@ -102,10 +102,10 @@ struct ActivityDetailView: View {
         .frame(minWidth: 480, minHeight: 360)
         #endif
         .alert("Delete Activity?", isPresented: $confirmDeleteActivity) {
-            Button("Delete", role: .destructive) {
+            Button("Löschen", role: .destructive) {
                 Task { await performDeleteActivity() }
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Abbrechen", role: .cancel) {}
         } message: {
             Text("This cannot be undone.")
         }
@@ -113,12 +113,12 @@ struct ActivityDetailView: View {
             get: { replyToDelete != nil },
             set: { if !$0 { replyToDelete = nil } }
         )) {
-            Button("Delete", role: .destructive) {
+            Button("Löschen", role: .destructive) {
                 if let reply = replyToDelete {
                     Task { await performDeleteReply(reply) }
                 }
             }
-            Button("Cancel", role: .cancel) { replyToDelete = nil }
+            Button("Abbrechen", role: .cancel) { replyToDelete = nil }
         } message: {
             Text("This cannot be undone.")
         }
@@ -214,7 +214,7 @@ struct ActivityDetailView: View {
                 Button(role: .destructive) {
                     confirmDeleteActivity = true
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label("Löschen", systemImage: "trash")
                 }
             }
         }

@@ -29,7 +29,7 @@ struct JellyfinLibraryView: View {
                         .frame(maxWidth: .infinity).padding(.top, 40)
                 } else {
                     if query.isEmpty && !combinedContinue.isEmpty {
-                        Text("Library")
+                        Text("Mediathek")
                             .font(.headline)
                             .padding(.top, 12)
                     }
@@ -67,7 +67,7 @@ struct JellyfinLibraryView: View {
 
     private var continueRow: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Continue Watching").font(.headline)
+            Text("Weiterschauen").font(.headline)
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 12) {
                     ForEach(combinedContinue) { item in

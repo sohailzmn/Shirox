@@ -1,4 +1,8 @@
 import XCTest
+#if os(iOS)
+import SwiftUI
+import UIKit
+#endif
 @testable import Shirox
 
 /// Tests for where a transport command actually goes, and what the system player controls
@@ -17,6 +21,71 @@ import XCTest
 ///    Now Playing had the same problem in reverse — it published the local player's rate and
 ///    clock, so Control Center showed "paused, 0:00" over a movie the TV was happily playing.
 final class PlaybackRoutingTests: XCTestCase {
+    func testHLSPreflightRequiresMediaAndReachableSubtitle() async throws {
+        let stream = StreamResult(title: "Fixture", url: URL(string: "https://media.example/master.m3u8")!, headers: [:],
+                                  subtitle: "https://media.example/de.vtt", audioLanguage: "ja", subtitleLanguage: "de")
+        let reader: StreamPreflight.Reader = { url, _ in
+            let content: Data
+            switch url.lastPathComponent {
+            case "master.m3u8": content = Data("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=900000\nmedia.m3u8\n".utf8)
+            case "media.m3u8": content = Data("#EXTM3U\n#EXTINF:10,\nsegment.ts\n".utf8)
+            case "de.vtt": content = Data("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHallo".utf8)
+            default: content = Data(repeating: 0x47, count: 188)
+            }
+            return (content, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let valid = try await StreamPreflight.check(stream, reader: reader)
+        XCTAssertTrue(valid)
+        let failedSubtitle: StreamPreflight.Reader = { url, headers in
+            if url.pathExtension == "vtt" {
+                return (Data("Forbidden".utf8), HTTPURLResponse(url: url, statusCode: 403, httpVersion: nil, headerFields: nil)!)
+            }
+            return try await reader(url, headers)
+        }
+        let invalid = try await StreamPreflight.check(stream, reader: failedSubtitle)
+        XCTAssertFalse(invalid)
+    }
+
+    func testCrossHostPlaylistDoesNotForwardCredentials() {
+        let original = URL(string: "https://a.example/master.m3u8")!
+        let other = URL(string: "https://b.example/video.ts")!
+        let headers = StreamPreflight.scopedHeaders(["Cookie":"private", "Authorization":"private", "Referer":"https://source.example/"], from: original, to: other)
+        XCTAssertNil(headers["Cookie"])
+        XCTAssertNil(headers["Authorization"])
+        XCTAssertEqual(headers["Referer"], "https://source.example/")
+    }
+
+    func testEnglishSubtitleCanReplaceAnUnreachableGermanTrack() {
+        let url = URL(string: "https://media.example/video.m3u8")!
+        let german = SubtitleTrack(title: "Deutsch", url: URL(string:"https://media.example/de.vtt")!, headers:[:], language:"de")
+        let english = SubtitleTrack(title: "English", url: URL(string:"https://media.example/en.vtt")!, headers:[:], language:"en")
+        let stream = StreamResult(title:"Fixture", url:url, headers:[:], allSubtitles:[german,english], audioLanguage:"ja")
+        let fallback = PlaybackLanguagePolicy.prepare(stream, preferredSubtitleLanguage:"en")
+        XCTAssertEqual(fallback.subtitleLanguage,"en")
+        XCTAssertEqual(PlaybackLanguagePolicy.prepare(fallback).subtitleLanguage,"en")
+    }
+
+    #if os(iOS)
+    @MainActor func testCatalogueDetailVisualSnapshot() async throws {
+        let title = CatalogTitle(id:"fixture-series", remoteID:1, kind:.series, name:"Serienvorschau", synopsis:"Deutsche Beschreibung für die visuelle Prüfung der neuen Detailseite.", year:"2026")
+        let controller = UIHostingController(rootView: NavigationStack { CatalogDetailScreen(title:title) }.preferredColorScheme(.dark))
+        let size = CGSize(width:1024,height:768)
+        let window = UIWindow(frame:CGRect(origin:.zero,size:size))
+        window.rootViewController=controller
+        window.isHidden=false
+        defer { window.isHidden=true; window.rootViewController=nil }
+        controller.view.frame=window.bounds
+        controller.view.layoutIfNeeded()
+        try await Task.sleep(nanoseconds:100_000_000)
+        let image = UIGraphicsImageRenderer(size:size).image { _ in
+            controller.view.drawHierarchy(in:controller.view.bounds,afterScreenUpdates:true)
+        }
+        let data = try XCTUnwrap(image.pngData())
+        let path = FileManager.default.urls(for:.cachesDirectory,in:.userDomainMask)[0].appendingPathComponent("catalog-detail-ipad.png")
+        try data.write(to:path)
+        let attachment=XCTAttachment(image:image); attachment.lifetime = .keepAlways; add(attachment)
+    }
+    #endif
     func testLanguageOrderAndUnknownAudio() {
         let url = URL(string: "https://media.example/video.m3u8")!
         let german = StreamResult(title: "Hoster", url: url, headers: [:], audioLanguage: "de")

@@ -9,7 +9,7 @@ struct StreamPickerView: View {
                 if vm.isLoadingStreams {
                     VStack(spacing: 14) {
                         ProgressView()
-                        Text("Fetching streams…")
+                        Text("Videos werden geprüft …")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -25,7 +25,7 @@ struct StreamPickerView: View {
                                 ?? "Could not find any playable streams for this episode.")
                         )
                         if let episode = vm.selectedEpisode {
-                            Button("Retry") { vm.loadStreams(for: episode) }
+                            Button("Erneut versuchen") { vm.loadStreams(for: episode) }
                                 .buttonStyle(.borderedProminent)
                         }
                     }
@@ -67,7 +67,7 @@ struct StreamPickerView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { vm.cancelStreamLoading() }
+                    Button("Abbrechen") { vm.cancelStreamLoading() }
                 }
             }
             .tint(.primary)
@@ -97,15 +97,15 @@ struct CloudflareVerifyView: View {
                 .font(.system(size: 44))
                 .foregroundStyle(.secondary)
             VStack(spacing: 4) {
-                Text("Verification Required")
+                Text("Website-Prüfung erforderlich")
                     .font(.headline)
-                Text("This source is protected by Cloudflare. Verify to load streams.")
+                Text("Diese Quelle verlangt eine Website-Prüfung. Nutze eine andere verfügbare Quelle.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
             }
             Button(action: onVerify) {
-                Label("Verify Cloudflare", systemImage: "checkmark.shield")
+                Label("Website prüfen", systemImage: "checkmark.shield")
                     .font(.headline)
             }
             .buttonStyle(.borderedProminent)
@@ -121,7 +121,7 @@ struct CloudflareVerifyInlineButton: View {
 
     var body: some View {
         Button(action: onVerify) {
-            Label("Verify Cloudflare", systemImage: "checkmark.shield")
+            Label("Website prüfen", systemImage: "checkmark.shield")
                 .font(.caption.weight(.semibold))
         }
         .buttonStyle(.bordered)

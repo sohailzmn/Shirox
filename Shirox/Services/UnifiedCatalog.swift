@@ -26,7 +26,7 @@ struct CatalogTitle: Identifiable, Codable, Hashable, Sendable {
     static func anime(_ media: Media) -> CatalogTitle {
         CatalogTitle(id: media.uniqueId, remoteID: media.id, kind: .anime, name: media.title.displayTitle,
                      originalName: media.title.romaji, poster: media.coverImage.large,
-                     backdrop: media.bannerImage, synopsis: media.plainDescription,
+                     backdrop: media.bannerImage, synopsis: nil,
                      year: media.seasonYear.map(String.init), score: media.averageScore.map { Double($0) / 10 },
                      genres: media.genres ?? [], anime: media)
     }
@@ -117,7 +117,7 @@ final class CatalogAvailabilityStore: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: key), let decoded = try? JSONDecoder().decode([String: Entry].self, from: data) { entries = decoded }
     }
     func state(_ id: String) -> CatalogAvailability {
-        guard let entry = entries[id], Date().timeIntervalSince(entry.date) < 86400 else { return .unknown }
+        guard let entry = entries[id], Date().timeIntervalSince(entry.date) < (entry.state == .unavailable ? 900 : 86400) else { return .unknown }
         return entry.state
     }
     func set(id: String, state: CatalogAvailability) {
@@ -128,18 +128,41 @@ final class CatalogAvailabilityStore: ObservableObject {
     func bind(id: String, sourceHref: String) { bindings[sourceHref] = id }
     func recordPlayback(context: PlayerContext?) {
         guard let context else { return }
-        if let href = context.episodeHref, let id = bindings[href] { set(id: id, state: .played) }
-        if let id = context.aniListID { set(id: "anilist-\(id)", state: .played) }
+        if let href = context.episodeHref, let id = bindings[href], state(id) != .played { set(id: id, state: .played) }
+        if let id = context.aniListID, state("anilist-\(id)") != .played { set(id: "anilist-\(id)", state: .played) }
     }
     func rank(_ titles: [CatalogTitle]) -> [CatalogTitle] {
         // Preserve the published chart's order within each availability group.
-        titles.enumerated().sorted {
-            func weight(_ title: CatalogTitle) -> Int {
-                switch state(title.id) { case .played: return 0; case .reachable: return 1; case .unknown: return 2; case .unavailable: return 3 }
+        var weights: [String: Int] = [:]
+        for title in titles {
+            switch state(title.id) {
+            case .played: weights[title.id] = 0
+            case .reachable: weights[title.id] = 1
+            case .unknown: weights[title.id] = 2
+            case .unavailable: weights[title.id] = 3
             }
-            let a = weight($0.element), b = weight($1.element)
+        }
+        return titles.enumerated().sorted {
+            let a = weights[$0.element.id] ?? 2, b = weights[$1.element.id] ?? 2
             return a == b ? $0.offset < $1.offset : a < b
         }.map { $0.element }
+    }
+}
+
+@MainActor
+final class CatalogWatchlist: ObservableObject {
+    static let shared = CatalogWatchlist()
+    @Published private(set) var titles: [CatalogTitle] = []
+    private let key = "catalogWatchlistV2"
+    private init() {
+        if let data = UserDefaults.standard.data(forKey: key),
+           let saved = try? JSONDecoder().decode([CatalogTitle].self, from: data) { titles = saved }
+    }
+    func contains(_ title: CatalogTitle) -> Bool { titles.contains { $0.id == title.id } }
+    func toggle(_ title: CatalogTitle) {
+        if contains(title) { titles.removeAll { $0.id == title.id } }
+        else { titles.insert(title, at: 0) }
+        if let data = try? JSONEncoder().encode(titles) { UserDefaults.standard.set(data, forKey: key) }
     }
 }
 
@@ -178,6 +201,7 @@ final class UnifiedCatalog: ObservableObject {
         let first_air_date: String?
         let release_date: String?
         let vote_average: Double?
+        let genre_ids: [Int]?
         func mapped(kind: CatalogKind) -> CatalogTitle {
             CatalogTitle(id: "tmdb-\(kind == .movie ? "movie" : "tv")-\(id)", remoteID: id, kind: kind,
                          name: name ?? title ?? original_name ?? original_title ?? "Unbekannter Titel",
@@ -190,6 +214,19 @@ final class UnifiedCatalog: ObservableObject {
     private struct TMDBDetail: Decodable {
         let seasons: [Season]?
         struct Season: Decodable { let season_number: Int; let name: String; let episode_count: Int }
+    }
+    private struct GenreList: Decodable {
+        let genres: [Genre]
+        struct Genre: Decodable { let id: Int; let name: String }
+    }
+    private func titles(_ page: TMDBPage, kind: CatalogKind) async -> [CatalogTitle] {
+        let genres = try? await read("genre/\(kind == .movie ? "movie" : "tv")/list", as: GenreList.self)
+        let names = Dictionary(uniqueKeysWithValues: (genres?.genres ?? []).map { ($0.id, $0.name) })
+        return page.results.map { item in
+            var title = item.mapped(kind: kind)
+            title.genres = (item.genre_ids ?? []).compactMap { names[$0] }
+            return title
+        }
     }
     private struct TMDBEpisodes: Decodable {
         let episodes: [Episode]
@@ -209,7 +246,13 @@ final class UnifiedCatalog: ObservableObject {
             components.queryItems?.append(URLQueryItem(name: "api_key", value: token))
             request.url = components.url
         }
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let data: Data
+        let response: URLResponse
+        do { (data, response) = try await URLSession.shared.data(for: request) }
+        catch {
+            if let saved = cache[key], let result = try? JSONDecoder().decode(type, from: saved.data) { return result }
+            throw CatalogError.response
+        }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
             if let saved = cache[key], let result = try? JSONDecoder().decode(type, from: saved.data) { return result }
             throw CatalogError.response
@@ -231,7 +274,7 @@ final class UnifiedCatalog: ObservableObject {
                                     ("movie/popular", "Beliebte Filme", .movie)] {
             do {
                 let page = try await read(path, as: TMDBPage.self)
-                output.append(CatalogRow(id: path, name: label, titles: page.results.map { $0.mapped(kind: kind) }))
+                output.append(CatalogRow(id: path, name: label, titles: await titles(page, kind: kind)))
             } catch { self.error = error.localizedDescription }
         }
         rows = output
@@ -244,7 +287,7 @@ final class UnifiedCatalog: ObservableObject {
             do {
                 let page = try await read("search/\(kind == .movie ? "movie" : "tv")",
                                           query: [URLQueryItem(name: "query", value: LiveActionCatalog.seriesQuery(query))], as: TMDBPage.self)
-                output += page.results.map { $0.mapped(kind: kind) }
+                output += await titles(page, kind: kind)
             } catch { lastError = error }
         }
         if output.isEmpty, let lastError { throw lastError }

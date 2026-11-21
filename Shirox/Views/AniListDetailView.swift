@@ -1033,7 +1033,7 @@ struct AniListDetailView: View {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
-                        Text("Episodes")
+                        Text("Folgen")
                             .font(.title3.weight(.bold))
                         #if os(iOS)
                         if !isSelectionMode {
@@ -1298,11 +1298,11 @@ struct AniListDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, 32)
         .alert("Reset Progress", isPresented: $showResetConfirmation) {
-            Button("Reset", role: .destructive) {
+            Button("Zurücksetzen", role: .destructive) {
                 ContinueWatchingManager.shared.resetProgress(
                     aniListID: media.id, moduleId: nil, mediaTitle: "")
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Abbrechen", role: .cancel) {}
         } message: {
             Text("This will clear all watched history and progress for \(media.title.displayTitle).")
         }
@@ -1312,7 +1312,7 @@ struct AniListDetailView: View {
     @ViewBuilder
     private var tabSelector: some View {
         Picker("Section", selection: $selectedTab) {
-            Text("Episodes").tag(0)
+            Text("Folgen").tag(0)
             Text("Relations").tag(1)
         }
         .pickerStyle(.segmented)
@@ -1372,7 +1372,7 @@ struct SynopsisSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Text("Synopsis")
+                Text("Beschreibung")
                     .font(.title3.weight(.bold))
             }
             .padding(.horizontal, 16)
@@ -1502,7 +1502,7 @@ private struct AniListEpisodeRowContainer: View {
                 Task { await d.confirm(); pendingDowngrade = nil }
             }
             Button("This device only") { d.localOnly(); pendingDowngrade = nil }
-            Button("Cancel", role: .cancel) { pendingDowngrade = nil }
+            Button("Abbrechen", role: .cancel) { pendingDowngrade = nil }
         } message: { d in
             let parts = [
                 d.anilistFrom.map { "AniList: \($0) → \(d.newProgress)" },
@@ -1564,13 +1564,13 @@ struct AniListStreamResultSheet: View {
                     .softScrollEdges()
                 }
             }
-            .navigationTitle("Episode \(episodeNumber)")
+            .navigationTitle("Folge \(episodeNumber)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onDismiss() }
+                    Button("Abbrechen") { onDismiss() }
                 }
             }
             .tint(.primary)
@@ -1769,7 +1769,7 @@ struct AniListMatchingSearchView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+                Button("Abbrechen") { dismiss() }
             }
         }
         #if os(iOS)

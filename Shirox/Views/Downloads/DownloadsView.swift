@@ -172,7 +172,7 @@ struct DownloadsView: View {
                                     DownloadProgressRow(item: item)
                                         .swipeActions(edge: .trailing) {
                                             Button(role: .destructive) { dm.remove(item) } label: {
-                                                Label("Cancel", systemImage: "xmark")
+                                                Label("Abbrechen", systemImage: "xmark")
                                             }
                                             .tint(.red)
                                         }
@@ -247,7 +247,7 @@ struct DownloadsView: View {
                                                 delete: { dm.removeAll(mediaGroup.items) }
                                             )
                                         } label: {
-                                            Label("Delete", systemImage: "trash")
+                                            Label("Löschen", systemImage: "trash")
                                         }
                                         .tint(.red)
                                     }
@@ -268,7 +268,7 @@ struct DownloadsView: View {
                                     DownloadProgressRow(item: item)
                                         .swipeActions(edge: .trailing) {
                                             Button(role: .destructive) { dm.remove(item) } label: {
-                                                Label("Delete", systemImage: "trash")
+                                                Label("Löschen", systemImage: "trash")
                                             }
                                             .tint(.red)
                                         }
@@ -288,7 +288,7 @@ struct DownloadsView: View {
                                     MangaDownloadProgressRow(item: item)
                                         .swipeActions(edge: .trailing) {
                                             Button(role: .destructive) { mdm.remove(item) } label: {
-                                                Label("Cancel", systemImage: "xmark")
+                                                Label("Abbrechen", systemImage: "xmark")
                                             }.tint(.red)
                                         }
                                 }
@@ -321,7 +321,7 @@ struct DownloadsView: View {
                                                 delete: { mdm.removeAll(g.items) }
                                             )
                                         } label: {
-                                            Label("Delete", systemImage: "trash")
+                                            Label("Löschen", systemImage: "trash")
                                         }
                                         .tint(.red)
                                     }
@@ -338,7 +338,7 @@ struct DownloadsView: View {
                                     MangaDownloadProgressRow(item: item)
                                         .swipeActions(edge: .trailing) {
                                             Button(role: .destructive) { mdm.remove(item) } label: {
-                                                Label("Delete", systemImage: "trash")
+                                                Label("Löschen", systemImage: "trash")
                                             }.tint(.red)
                                         }
                                 }
@@ -365,11 +365,11 @@ struct DownloadsView: View {
                 ),
                 presenting: pendingGroupDelete
             ) { pending in
-                Button("Delete", role: .destructive) {
+                Button("Löschen", role: .destructive) {
                     pending.delete()
                     pendingGroupDelete = nil
                 }
-                Button("Cancel", role: .cancel) { pendingGroupDelete = nil }
+                Button("Abbrechen", role: .cancel) { pendingGroupDelete = nil }
             } message: { pending in
                 Text("Removes \(pending.count) downloaded \(pending.unit)\(pending.count == 1 ? "" : "s") from this device.")
             }
@@ -485,7 +485,7 @@ private struct DownloadProgressRow: View {
                         Button {
                             DownloadManager.shared.retry(item)
                         } label: {
-                            Label("Retry", systemImage: "arrow.clockwise")
+                            Label("Erneut versuchen", systemImage: "arrow.clockwise")
                                 .font(.caption2.bold())
                                 .foregroundStyle(.blue)
                                 .padding(.horizontal, 8)
@@ -555,7 +555,7 @@ private struct MangaDownloadProgressRow: View {
                             .copyErrorContextMenu(item.error)
                         Spacer()
                         Button { MangaDownloadManager.shared.retry(item) } label: {
-                            Label("Retry", systemImage: "arrow.clockwise")
+                            Label("Erneut versuchen", systemImage: "arrow.clockwise")
                                 .font(.caption2.bold()).foregroundStyle(.blue)
                                 .padding(.horizontal, 8).padding(.vertical, 4)
                                 .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 4))

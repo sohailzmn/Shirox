@@ -132,7 +132,7 @@ struct SearchBrowseView: View {
                 Text("Recent")
                     .font(.title3.weight(.bold))
                 Spacer()
-                Button("Clear", action: onClearRecents)
+                Button("Leeren", action: onClearRecents)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
             }

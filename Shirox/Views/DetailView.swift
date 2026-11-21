@@ -1182,7 +1182,7 @@ struct DetailView: View {
     @ViewBuilder
     private var tabSelector: some View {
         Picker("Section", selection: $selectedTab) {
-            Text("Episodes").tag(0)
+            Text("Folgen").tag(0)
             Text("Relations").tag(1)
         }
         .pickerStyle(.segmented)
@@ -1278,7 +1278,7 @@ struct DetailView: View {
             Text(error)
                 .font(.headline)
                 .multilineTextAlignment(.center)
-            Button("Retry") {
+            Button("Erneut versuchen") {
                 vm.load(item: item)
             }
             .buttonStyle(.bordered)
@@ -1318,7 +1318,7 @@ struct DetailView: View {
     private func synopsisSection(detail: MediaDetail) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Text("Synopsis")
+                Text("Beschreibung")
                     .font(.title3.weight(.bold))
             }
             .padding(.horizontal, 16)
@@ -1382,7 +1382,7 @@ struct DetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
                 HStack(spacing: 8) {
-                    Text("Episodes")
+                    Text("Folgen")
                         .font(.title3.weight(.bold))
                     #if os(iOS)
                     if !isSelectionMode {
@@ -1733,12 +1733,12 @@ struct DetailView: View {
             }
         }
         .alert("Reset Progress", isPresented: $showResetConfirmation) {
-            Button("Reset", role: .destructive) {
+            Button("Zurücksetzen", role: .destructive) {
                 let moduleId = effectiveModuleId
                 ContinueWatchingManager.shared.resetProgress(
                     aniListID: nil, moduleId: moduleId, mediaTitle: detail.title)
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Abbrechen", role: .cancel) {}
         } message: {
             Text("This will clear all watched history and progress for \(detail.title).")
         }
@@ -2201,7 +2201,7 @@ private struct ModuleEpisodeRowContainer: View {
                 Task { await d.confirm(); pendingDowngrade = nil }
             }
             Button("This device only") { d.localOnly(); pendingDowngrade = nil }
-            Button("Cancel", role: .cancel) { pendingDowngrade = nil }
+            Button("Abbrechen", role: .cancel) { pendingDowngrade = nil }
         } message: { d in
             let parts = [
                 d.anilistFrom.map { "AniList: \($0) → \(d.newProgress)" },

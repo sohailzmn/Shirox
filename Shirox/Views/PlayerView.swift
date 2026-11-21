@@ -265,7 +265,6 @@ struct PlayerView: View {
                                    firstFrameWatchdog?.cancel()
                                    firstFrameWatchdog = nil
                                    PlaybackPerformance.shared.firstFrameReady()
-                                   CatalogAvailabilityStore.shared.recordPlayback(context: currentContext)
                                })
                     .ignoresSafeArea()
                     .overlay { videoLoadingOverlay }
@@ -764,7 +763,7 @@ struct PlayerView: View {
                     .font(.title3.weight(.semibold)).foregroundStyle(.white)
                     .multilineTextAlignment(.center).lineLimit(2)
                 if let ep = currentContext?.sourceEpisodeNumber {
-                    Text("Episode \(ep)").font(.subheadline).foregroundStyle(.white.opacity(0.65))
+                    Text("Folge \(ep)").font(.subheadline).foregroundStyle(.white.opacity(0.65))
                 }
 
                 VStack(spacing: 8) {
@@ -1026,7 +1025,8 @@ struct PlayerView: View {
                 #endif
             },
             topPadding: topPad,
-            isLandscape: isLandscape
+            isLandscape: isLandscape,
+            languageLabel: isLocalPlayback ? nil : PlaybackLanguagePolicy.label(currentStream)
         )
         .buttonStyle(CircularButtonStyle())
     }
@@ -1192,7 +1192,7 @@ struct PlayerView: View {
                     .font(.subheadline).foregroundStyle(.white.opacity(0.65))
                     .multilineTextAlignment(.center)
                 Button(action: manualStallRetry) {
-                    Text("Retry")
+                    Text("Erneut versuchen")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 28).padding(.vertical, 10)
@@ -1211,7 +1211,7 @@ struct PlayerView: View {
                             }
                         }
                     } label: {
-                        Text("Choose Source")
+                        Text("Andere Quelle")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                     }
@@ -2026,6 +2026,9 @@ struct PlayerView: View {
                 bufferProgress = min(maxLoaded / duration, 1)
             }
             saveProgressIfDue()
+            if videoReady, isPlaying, currentTime >= 2, audioGroup?.options.isEmpty == false {
+                CatalogAvailabilityStore.shared.recordPlayback(context: currentContext)
+            }
             if duration > 0 {
                 let progress = currentTime / duration
                 if progress >= watchedPercentage / 100.0 && !didTrackEpisode {
@@ -2166,6 +2169,9 @@ struct PlayerView: View {
     }
 
     private func loadSubtitles() {
+        if currentStream.subtitleLanguage != nil, !currentStream.isHardsub {
+            subtitleSettings.enabled = true
+        }
         if let track = selectedSubtitleTrack {
             Task {
                 do {
@@ -3263,6 +3269,10 @@ struct PlayerView: View {
     private func applyRememberedAudio(
         to item: AVPlayerItem, group: AVMediaSelectionGroup, subtitle: Bool
     ) {
+        if let code = PlaybackLanguagePolicy.code(currentStream.audioLanguage) {
+            let options = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: code))
+            if let option = options.first { item.select(option, in: group); return }
+        }
         let language = preferredAudioLanguage
         if language != "auto" {
             let preferred = AVMediaSelectionGroup.mediaSelectionOptions(

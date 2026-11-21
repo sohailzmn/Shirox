@@ -68,7 +68,7 @@ struct HomeView: View {
                 // one it has always had, untouched.
                 ToolbarItem(placement: Self.leadingPlacement) {
                     Button { showUpcoming = true } label: {
-                        Label("Upcoming", systemImage: "calendar")
+                        Label("Demnächst", systemImage: "calendar")
                     }
                 }
                 ToolbarItem(placement: .primaryAction) {
@@ -254,7 +254,7 @@ private struct FeaturedCarousel: View {
                             } label: {
                                 HStack(spacing: 6) {
                                     Image(systemName: "play.fill").font(.footnote.weight(.semibold))
-                                    Text("Watch").fontWeight(.semibold)
+                                    Text("Abspielen").fontWeight(.semibold)
                                 }
                                 .foregroundStyle(platformBackground)
                                 .frame(width: 130, height: 42)
@@ -376,7 +376,7 @@ private struct MacFeaturedCarousel: View {
                                 } label: {
                                     HStack(spacing: 6) {
                                         Image(systemName: "play.fill").font(.footnote.weight(.semibold))
-                                        Text("Watch").fontWeight(.semibold)
+                                        Text("Abspielen").fontWeight(.semibold)
                                     }
                                     .foregroundStyle(platformBackground)
                                     .frame(width: 110, height: 36)
@@ -628,7 +628,7 @@ private struct AnimeSection: View {
                     BrowseView(category: category)
                 } label: {
                     HStack(spacing: 3) {
-                        Text("See all")
+                        Text("Alle anzeigen")
                             .font(.subheadline.weight(.semibold))
                         Image(systemName: "chevron.right")
                             .font(.caption.weight(.semibold))

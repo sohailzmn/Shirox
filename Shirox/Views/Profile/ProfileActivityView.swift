@@ -94,12 +94,12 @@ struct ProfileActivityView: View {
             get: { activityToDelete != nil },
             set: { if !$0 { activityToDelete = nil } }
         )) {
-            Button("Delete", role: .destructive) {
+            Button("Löschen", role: .destructive) {
                 if let item = activityToDelete {
                     Task { await performDelete(item) }
                 }
             }
-            Button("Cancel", role: .cancel) { activityToDelete = nil }
+            Button("Abbrechen", role: .cancel) { activityToDelete = nil }
         } message: {
             Text("This cannot be undone.")
         }
@@ -318,7 +318,7 @@ struct ProfileActivityView: View {
                 Button(role: .destructive) {
                     activityToDelete = item
                 } label: {
-                    Label("Delete", systemImage: "trash")
+                    Label("Löschen", systemImage: "trash")
                 }
             }
             

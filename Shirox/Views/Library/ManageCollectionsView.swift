@@ -56,8 +56,8 @@ private struct CollectionEditorAlerts: ViewModifier {
                 set: { if !$0 { editor.renaming = nil } }
             ), presenting: editor.renaming) { _ in
                 TextField("Name", text: $editor.draftName)
-                Button("Save") { editor.commitRename() }
-                Button("Cancel", role: .cancel) {}
+                Button("Speichern") { editor.commitRename() }
+                Button("Abbrechen", role: .cancel) {}
             } message: { _ in
                 Text("Choose a new name for this collection.")
             }
@@ -65,8 +65,8 @@ private struct CollectionEditorAlerts: ViewModifier {
                 get: { editor.deleting != nil },
                 set: { if !$0 { editor.deleting = nil } }
             ), presenting: editor.deleting) { _ in
-                Button("Delete", role: .destructive) { editor.commitDelete() }
-                Button("Cancel", role: .cancel) {}
+                Button("Löschen", role: .destructive) { editor.commitDelete() }
+                Button("Abbrechen", role: .cancel) {}
             } message: { collection in
                 let n = collection.mediaUniqueIds.count
                 Text("This won't remove the \(n) title\(n == 1 ? "" : "s") from your library.")
@@ -107,7 +107,7 @@ struct ManageCollectionsView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Fertig") { dismiss() }
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -127,7 +127,7 @@ struct ManageCollectionsView: View {
                     guard !trimmed.isEmpty else { return }
                     library.createCollection(name: trimmed)
                 }
-                Button("Cancel", role: .cancel) { newCollectionName = "" }
+                Button("Abbrechen", role: .cancel) { newCollectionName = "" }
             } message: {
                 Text("Name your new collection.")
             }
@@ -155,7 +155,7 @@ struct ManageCollectionsView: View {
             Button(role: .destructive) {
                 editor.requestDelete(collection)
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label("Löschen", systemImage: "trash")
             }
             .tint(.red)
         }
@@ -177,7 +177,7 @@ struct ManageCollectionsView: View {
             Button(role: .destructive) {
                 editor.requestDelete(collection)
             } label: {
-                Label("Delete", systemImage: "trash")
+                Label("Löschen", systemImage: "trash")
             }
         }
     }

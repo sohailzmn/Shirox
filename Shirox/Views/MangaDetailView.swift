@@ -85,7 +85,7 @@ struct MangaDetailView: View {
                 )
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
-                        Button("Retry") { Task { await vm.load(item: item) } }
+                        Button("Erneut versuchen") { Task { await vm.load(item: item) } }
                     }
                 }
             } else {
@@ -409,7 +409,7 @@ struct MangaDetailView: View {
 
     private func synopsisSection(text: String) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Synopsis")
+            Text("Beschreibung")
                 .font(.title3.weight(.bold))
                 .padding(.horizontal, 16)
 

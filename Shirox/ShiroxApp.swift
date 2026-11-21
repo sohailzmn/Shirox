@@ -166,7 +166,7 @@ struct ShiroxApp: App {
         #if targetEnvironment(macCatalyst) || os(macOS)
         .commands {
             CommandGroup(replacing: .appSettings) {
-                Button("Settings") {
+                Button("Einstellungen") {
                     NotificationCenter.default.post(name: .openSettingsTab, object: nil)
                 }
                 .keyboardShortcut(",", modifiers: .command)
@@ -332,10 +332,10 @@ private struct RootTabView: View {
             } else {
                 TabView(selection: $selectedTab) {
                     HomeView()
-                        .tabItem { Label("Home", systemImage: "house.fill") }
+                        .tabItem { Label("Startseite", systemImage: "house.fill") }
                         .tag(0)
                     LibraryView()
-                        .tabItem { Label("Library", systemImage: "books.vertical.fill") }
+                        .tabItem { Label("Mediathek", systemImage: "books.vertical.fill") }
                         .tag(1)
                     #if os(iOS)
                     DownloadsView()
@@ -343,10 +343,10 @@ private struct RootTabView: View {
                         .tag(2)
                     #endif
                     SettingsView()
-                        .tabItem { Label("Settings", systemImage: "gearshape.fill") }
+                        .tabItem { Label("Einstellungen", systemImage: "gearshape.fill") }
                         .tag(3)
                     SearchView()
-                        .tabItem { Label("Search", systemImage: "magnifyingglass") }
+                        .tabItem { Label("Suche", systemImage: "magnifyingglass") }
                         .tag(4)
                 }
                 .tint(.primary)

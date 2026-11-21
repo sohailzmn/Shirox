@@ -12,7 +12,7 @@ enum PlaybackLanguagePolicy {
 
     /// Unknown audio is never silently advertised as German. Legacy explicit
     /// GER DUB labels are supported; a generic module name is insufficient.
-    static func prepare(_ input: StreamResult) -> StreamResult {
+    static func prepare(_ input: StreamResult, preferredSubtitleLanguage: String? = nil) -> StreamResult {
         var stream = input
         if stream.audioLanguage == nil,
            stream.title.range(of: #"(?i)\b(?:GER\s*DUB|German\s*Dub|Deutsch)\b"#,
@@ -20,8 +20,10 @@ enum PlaybackLanguagePolicy {
            !stream.title.lowercased().contains("sub"),
            !stream.title.lowercased().contains("untertitel") { stream.audioLanguage = "de" }
         let tracks = stream.allSubtitles ?? []
-        let selected = tracks.first { code($0.language ?? $0.title) == "de" }
-            ?? tracks.first { code($0.language ?? $0.title) == "en" }
+        if preferredSubtitleLanguage == nil, stream.subtitleURL != nil, code(stream.subtitleLanguage) != nil { return stream }
+        let preferred = preferredSubtitleLanguage ?? "de"
+        let selected = tracks.first { code($0.language ?? $0.title) == preferred }
+            ?? (preferredSubtitleLanguage == nil ? tracks.first { code($0.language ?? $0.title) == "en" } : nil)
         if code(stream.audioLanguage) != "de", let selected {
             return StreamResult(title: stream.title, url: stream.url, headers: stream.headers,
                                 subtitle: selected.url.absoluteString, subtitleHeaders: selected.headers,
@@ -98,8 +100,19 @@ final class AutomaticPlaybackCoordinator {
 
     func resolve(_ request: AutomaticPlaybackRequest,
                  status: ((String) -> Void)? = nil) async throws -> AutomaticPlaybackResult {
-        try await PlaybackDeadline.run(seconds: 30) {
-            try await self.resolveWithinDeadline(request, status: status)
+        do {
+            return try await PlaybackDeadline.run(seconds: 30) {
+                try await self.resolveWithinDeadline(request, status: status)
+            }
+        } catch {
+            if let id = request.catalogID, let failure = error as? AutomaticPlaybackError {
+                switch failure {
+                case .noMatch, .noEpisode, .noLanguage, .noStream, .websiteBlocked:
+                    CatalogAvailabilityStore.shared.set(id: id, state: .unavailable)
+                default: break
+                }
+            }
+            throw error
         }
     }
 
@@ -214,7 +227,8 @@ final class AutomaticPlaybackCoordinator {
                 do {
                     return try await PlaybackDeadline.run(seconds: 10) {
                         let raw = try await runner.fetchStreams(episodeUrl: episodeHref, languagePriority: language, preflight: false)
-                        let candidates = raw.map(PlaybackLanguagePolicy.prepare).filter { PlaybackLanguagePolicy.priority($0) == language }
+                        let candidates = raw.map { PlaybackLanguagePolicy.prepare($0, preferredSubtitleLanguage: language == 0 ? nil : language == 1 ? "de" : "en") }
+                            .filter { PlaybackLanguagePolicy.priority($0) == language }
                         return try await self.verified(candidates, legacyModule: legacyModule)
                     }
                 } catch is CancellationError { throw CancellationError() }
@@ -230,7 +244,7 @@ final class AutomaticPlaybackCoordinator {
     func verified(_ raw: [StreamResult], legacyModule: ModuleDefinition? = nil) async throws -> [StreamResult] {
         if legacyModule?.isLocalPlayback == true || legacyModule?.isJellyfin == true { return raw }
         var seen = Set<URL>()
-        let prepared = raw.map(PlaybackLanguagePolicy.prepare).filter {
+        let prepared = raw.map { PlaybackLanguagePolicy.prepare($0) }.filter {
             ($0.expiresAt.map { $0 > Date().addingTimeInterval(5) } ?? true) && seen.insert($0.url).inserted
         }
         let candidates = prepared.filter { PlaybackLanguagePolicy.priority($0) != nil }
@@ -294,6 +308,19 @@ enum PlaybackDeadline {
 }
 
 enum StreamPreflight {
+    typealias Reader = (URL, [String: String]) async throws -> (Data, HTTPURLResponse)
+    private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+            guard let url = request.url, validRemoteURL(url) else { completionHandler(nil); return }
+            var next = request
+            if response.url?.host != url.host {
+                next.setValue(nil, forHTTPHeaderField: "Cookie")
+                next.setValue(nil, forHTTPHeaderField: "Authorization")
+            }
+            completionHandler(next)
+        }
+    }
     static func validRemoteURL(_ url: URL) -> Bool {
         guard url.scheme == "https", url.user == nil, url.password == nil,
               let host = url.host?.lowercased(), host.contains("."), !host.contains(":"),
@@ -311,7 +338,7 @@ enum StreamPreflight {
     /// Streaming the response bounds memory/network use even if a CDN ignores Range.
     private static func read(_ url: URL, headers: [String: String]) async throws -> (Data, HTTPURLResponse) {
         guard validRemoteURL(url) else { throw URLError(.badURL) }
-        let session = URLSession(configuration: .ephemeral)
+        let session = URLSession(configuration: .ephemeral, delegate: RedirectGuard(), delegateQueue: nil)
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: url, timeoutInterval: 3)
         headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
@@ -338,44 +365,63 @@ enum StreamPreflight {
         return !prefix.hasPrefix("<") && !prefix.hasPrefix("{") && !prefix.hasPrefix("#extm3u")
     }
 
-    static func check(_ stream: StreamResult) async throws -> Bool {
-        let (data, response) = try await read(stream.url, headers: stream.headers)
+    static func check(_ stream: StreamResult, reader: Reader? = nil) async throws -> Bool {
+        let fetch = reader ?? { try await read($0, headers: $1) }
+        let (data, response) = try await fetch(stream.url, stream.headers)
+        guard (200..<300).contains(response.statusCode) else { return false }
         if isPlaylist(data) {
-            guard try await checkPlaylist(data, url: stream.url, headers: stream.headers, depth: 0) else { return false }
-            return try await checkSubtitle(stream)
+            guard try await checkPlaylist(data, url: response.url ?? stream.url, headers: stream.headers, depth: 0, fetch: fetch) else { return false }
+            return try await checkSubtitle(stream, fetch: fetch)
         }
         guard response.mimeType?.hasPrefix("video/") == true, mediaBytes(data) else { return false }
-        return try await checkSubtitle(stream)
+        return try await checkSubtitle(stream, fetch: fetch)
     }
 
-    private static func checkSubtitle(_ stream: StreamResult) async throws -> Bool {
+    private static func checkSubtitle(_ stream: StreamResult, fetch: Reader) async throws -> Bool {
         guard PlaybackLanguagePolicy.code(stream.audioLanguage) != "de", !stream.isHardsub,
               let url = stream.subtitleURL else { return true }
-        let (data, _) = try await read(url, headers: stream.subtitleHeaders)
+        let (data, response) = try await fetch(url, stream.subtitleHeaders)
+        guard (200..<300).contains(response.statusCode) else { return false }
         let text = String(decoding: data, as: UTF8.self)
         return text.contains("-->") && !text.lowercased().contains("<html")
     }
 
-    private static func checkPlaylist(_ data: Data, url: URL, headers: [String: String], depth: Int) async throws -> Bool {
+    private static func checkPlaylist(_ data: Data, url: URL, headers: [String: String], depth: Int, fetch: Reader) async throws -> Bool {
         guard depth < 3, isPlaylist(data) else { return false }
         let text = String(decoding: data, as: UTF8.self)
         let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         if text.contains("METHOD=SAMPLE-AES") { return false }
         guard let path = lines.first(where: { !$0.isEmpty && !$0.hasPrefix("#") }),
               let next = URL(string: path, relativeTo: url)?.absoluteURL else { return false }
-        let (content, _) = try await read(next, headers: headers)
+        let childHeaders = scopedHeaders(headers, from: url, to: next)
+        let (content, childResponse) = try await fetch(next, childHeaders)
+        guard (200..<300).contains(childResponse.statusCode) else { return false }
         if text.contains("#EXT-X-STREAM-INF") {
-            guard try await checkPlaylist(content, url: next, headers: headers, depth: depth + 1) else { return false }
+            guard try await checkPlaylist(content, url: childResponse.url ?? next, headers: childHeaders, depth: depth + 1, fetch: fetch) else { return false }
             // A separate audio rendition must be reachable too.
             if let audio = lines.first(where: { $0.hasPrefix("#EXT-X-MEDIA:") && $0.contains("TYPE=AUDIO") && $0.contains("URI=") }),
                let range = audio.range(of: #"URI="([^"]+)""#, options: .regularExpression) {
                 let value = String(audio[range]).dropFirst(5).dropLast()
                 guard let audioURL = URL(string: String(value), relativeTo: url)?.absoluteURL else { return false }
-                let (audioData, _) = try await read(audioURL, headers: headers)
-                return try await checkPlaylist(audioData, url: audioURL, headers: headers, depth: depth + 1)
+                let audioHeaders = scopedHeaders(headers, from: url, to: audioURL)
+                let (audioData, audioResponse) = try await fetch(audioURL, audioHeaders)
+                guard (200..<300).contains(audioResponse.statusCode) else { return false }
+                return try await checkPlaylist(audioData, url: audioResponse.url ?? audioURL, headers: audioHeaders, depth: depth + 1, fetch: fetch)
             }
             return true
         }
+        if let key = lines.first(where: { $0.hasPrefix("#EXT-X-KEY:") && $0.contains("METHOD=AES-128") }),
+           let range = key.range(of: #"URI="([^"]+)""#, options: .regularExpression) {
+            let value = String(key[range]).dropFirst(5).dropLast()
+            guard let keyURL = URL(string: String(value), relativeTo: url)?.absoluteURL else { return false }
+            let (keyData, keyResponse) = try await fetch(keyURL, scopedHeaders(headers, from: url, to: keyURL))
+            guard (200..<300).contains(keyResponse.statusCode), keyData.count == 16 else { return false }
+        }
         return text.contains("#EXTINF:") && mediaBytes(content)
+    }
+
+    static func scopedHeaders(_ headers: [String: String], from: URL, to: URL) -> [String: String] {
+        guard from.host != to.host else { return headers }
+        return headers.filter { !["cookie", "authorization"].contains($0.key.lowercased()) }
     }
 }

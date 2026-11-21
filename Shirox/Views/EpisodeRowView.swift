@@ -67,7 +67,7 @@ struct EpisodeRowView: View {
                                 radius: 4, y: 2)
                     }
 
-                    Text("Episode \(displayNumber.map(String.init) ?? episode.displayNumber)")
+                    Text("Folge \(displayNumber.map(String.init) ?? episode.displayNumber)")
                         .font(.callout.weight(.medium))
                         .foregroundStyle(.primary)
 

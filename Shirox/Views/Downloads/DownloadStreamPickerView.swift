@@ -24,7 +24,7 @@ struct DownloadStreamPickerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Abbrechen") { dismiss() }
                 }
             }
             .tint(.primary)
@@ -57,11 +57,11 @@ private struct DownloadStreamRow: View {
                     Text(stream.title)
                         .font(.subheadline).fontWeight(.semibold)
                     if stream.subtitle != nil {
-                        Text("Soft subtitles available")
+                        Text("Untertitel verfügbar")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     } else {
-                        Text("No soft subtitles")
+                        Text("Keine separaten Untertitel")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }

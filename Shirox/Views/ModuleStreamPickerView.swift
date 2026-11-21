@@ -432,13 +432,13 @@ struct ModuleStreamPickerView: View {
             .listStyle(.inset)
             #endif
 
-            .navigationTitle("Watch Episode \(episodeNumber)")
+            .navigationTitle("Watch Folge \(episodeNumber)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onDismiss() }
+                    Button("Abbrechen") { onDismiss() }
                 }
             }
                     .tint(.primary)
@@ -1018,7 +1018,7 @@ private struct ModuleStreamRow: View {
             .buttonStyle(.plain)
 
         case .searchResults, .selectingEpisode, .notFound, .error:
-            Button("Retry") { rowVm.reset(); rowVm.startFind() }
+            Button("Erneut versuchen") { rowVm.reset(); rowVm.startFind() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .foregroundStyle(.primary)
@@ -1050,7 +1050,7 @@ private struct ModuleStreamRow: View {
         case .loadingStreams:
             HStack(spacing: 6) {
                 ProgressView().scaleEffect(0.7)
-                Text("Fetching streams…")
+                Text("Videos werden geprüft …")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -1263,7 +1263,7 @@ private struct ModuleStreamSelectionView: View {
                     ContentUnavailableView(
                         "No Streams Found",
                         systemImage: "antenna.radiowaves.left.and.right.slash",
-                        description: Text("Could not find any playable streams for this episode.")
+                        description: Text("Für diese Folge wurde kein abspielbares Video gefunden.")
                     )
                 } else {
                     List(streams, id: \.url) { stream in
@@ -1297,13 +1297,13 @@ private struct ModuleStreamSelectionView: View {
                     #endif
                 }
             }
-            .navigationTitle("Select Stream")
+            .navigationTitle("Video auswählen")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onDismiss)
+                    Button("Abbrechen", action: onDismiss)
                 }
             }
         }

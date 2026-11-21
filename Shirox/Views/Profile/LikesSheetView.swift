@@ -75,7 +75,7 @@ struct LikesSheetView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
-                Button("Done") { dismiss() }
+                Button("Fertig") { dismiss() }
             }
         }
         .task { await load() }

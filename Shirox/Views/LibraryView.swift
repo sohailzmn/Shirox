@@ -163,6 +163,13 @@ struct LibraryView: View {
         // there's always something to show; sign-in lives in the toolbar + Settings.
         NavigationStack {
             libraryContent
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        NavigationLink { CatalogWatchlistScreen() } label: {
+                            Label("Serien und Filme", systemImage: "bookmark")
+                        }
+                    }
+                }
         }
     }
 
@@ -170,7 +177,7 @@ struct LibraryView: View {
 
     private var sortMenu: some View {
         Menu {
-            Section("Sort by") {
+            Section("Sortieren nach") {
                 ForEach(LibrarySortOrder.allCases) { order in
                     Button {
                         if sortOrder == order { sortAscending.toggle() }
@@ -286,7 +293,7 @@ struct LibraryView: View {
                 signInMenuItems
             } label: {
                 HStack(spacing: 6) {
-                    Text("Sign In")
+                    Text("Anmelden")
                     Image(systemName: "chevron.down").font(.subheadline)
                 }
                 .font(.headline)
@@ -304,7 +311,7 @@ struct LibraryView: View {
             .buttonStyle(.plain)
             Spacer()
         }
-        .navigationTitle("Library")
+        .navigationTitle("Mediathek")
         #if os(iOS)
         .onAppear {
             presentationWindow = UIApplication.shared.connectedScenes
@@ -572,7 +579,7 @@ struct LibraryView: View {
                 Menu {
                     signInMenuItems
                 } label: {
-                    Text("Sign In")
+                    Text("Anmelden")
                         .font(.subheadline.weight(.semibold))
                 }
             }
@@ -767,11 +774,11 @@ struct LibraryView: View {
                 Spacer()
             } else if let error = vm.error {
                 ContentUnavailableView {
-                    Label("Couldn't Load", systemImage: "wifi.slash")
+                    Label("Laden fehlgeschlagen", systemImage: "wifi.slash")
                 } description: {
                     Text(error)
                 } actions: {
-                    Button("Retry") { Task { await vm.refresh() } }
+                    Button("Erneut versuchen") { Task { await vm.refresh() } }
                 }
             } else if displayedEntries.isEmpty {
                 ContentUnavailableView(
@@ -808,11 +815,11 @@ struct LibraryView: View {
             Task { await vm.refresh() }
         }
         #if os(iOS)
-        .navigationTitle("Library")
+        .navigationTitle("Mediathek")
         .navigationBarTitleDisplayMode(.large)
         .searchable(text: $searchText, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search library")
         #else
-        .navigationTitle("Library")
+        .navigationTitle("Mediathek")
         .searchable(text: $searchText, prompt: "Search library")
         #endif
     }
@@ -910,7 +917,7 @@ struct LibraryView: View {
                     }
                 }
             }
-            Button("Cancel", role: .cancel) { pendingEntry = nil }
+            Button("Abbrechen", role: .cancel) { pendingEntry = nil }
         }
         .adaptiveSheet(isPresented: $showOtherSheet) {
             if let media = otherMedia {

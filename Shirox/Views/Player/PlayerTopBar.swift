@@ -10,6 +10,7 @@ struct PlayerTopBar: View {
     var topPadding: CGFloat = 24
     var isLandscape: Bool = true
     var showDismiss: Bool = true
+    var languageLabel: String? = nil
     @AppStorage("playerLiquidGlass") private var playerLiquidGlass = true
 
     private var isPad: Bool {
@@ -23,7 +24,10 @@ struct PlayerTopBar: View {
     var body: some View {
         ZStack(alignment: .top) {
             // Title pinned to top to stay level with buttons
-            Text(title)
+            VStack(spacing: 3) {
+                Text(title)
+                if let languageLabel { Text(languageLabel).font(.caption2).foregroundStyle(.white.opacity(0.75)) }
+            }
                 .font(isPad ? .title3.weight(.semibold) : .subheadline.weight(.semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)
@@ -92,7 +96,7 @@ struct PlayerTopBar: View {
                     .frame(width: frameSize, height: frameSize)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Mini Player")
+            .accessibilityLabel("Kleiner Player")
         }
         if onPiP != nil {
             Button { onPiP?() } label: {

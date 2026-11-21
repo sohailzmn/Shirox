@@ -53,7 +53,7 @@ struct ContinueWatchingSection: View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("Continue Watching")
+                    Text("Weiterschauen")
                         .font(.title2.weight(.heavy))
                         .tracking(0.3)
                     RoundedRectangle(cornerRadius: 2)

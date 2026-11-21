@@ -43,7 +43,7 @@ struct BatchDownloadModulePickerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { onDismiss() }
+                    Button("Fertig") { onDismiss() }
                 }
             }
             .adaptiveSheet(item: $streamPickerItem, onDismiss: {
@@ -301,7 +301,7 @@ private struct BatchDownloadModuleRow: View {
             }
             .buttonStyle(.plain)
         case .searchResults:
-            Button("Retry") { rowVm.reset(); rowVm.startFind() }
+            Button("Erneut versuchen") { rowVm.reset(); rowVm.startFind() }
                 .buttonStyle(.bordered).controlSize(.small).foregroundStyle(Color.accentColor)
         case .done:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).font(.title3)
