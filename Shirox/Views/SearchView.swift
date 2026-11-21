@@ -185,9 +185,9 @@ struct SearchView: View {
             }
         } else if vm.hasResults {
             resultsView
-        } else if vm.isLoading || vm.liveActionLoading {
+        } else if vm.isLoading {
             loadingView
-        } else if let err = vm.errorMessage ?? vm.liveActionError {
+        } else if let err = vm.errorMessage {
             emptyStateView(
                 icon: "exclamationmark.triangle",
                 title: "Something went wrong",
@@ -379,47 +379,14 @@ struct SearchView: View {
                     }
                     .padding(.horizontal, 16)
                 }
-                if !vm.liveActionResults.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("TV Series & Movies")
-                            .font(.title3.weight(.bold))
-                        Text("Catalog metadata · TVmaze & Apple · Not guaranteed in streaming modules")
+                if vm.isLoading {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text(usingModule ? "Searching streaming module…" : "Searching anime…")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
                     }
+                    .foregroundStyle(.secondary)
                     .padding(.horizontal, 16)
-                    LazyVGrid(columns: columns, spacing: 12) {
-                        ForEach(vm.liveActionResults) { title in
-                            NavigationLink {
-                                LiveActionDetailView(title: title, hasStreamingModule: usingModule) { name, season, episode in
-                                    requestedModuleSeason = season
-                                    requestedModuleEpisode = episode
-                                    requestedModuleTitle = name
-                                    if let season, let episode {
-                                        moduleEpisodeHint = "Ausgewählt: Staffel \(season), Folge \(episode). Nur diese Folge wird geöffnet."
-                                    } else {
-                                        moduleEpisodeHint = nil
-                                    }
-                                    vm.query = name
-                                    vm.search(usingModule: true)
-                                }
-                            } label: {
-                                LiveActionPosterCard(title: title)
-                            }
-                            .buttonStyle(CardPressStyle())
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                }
-                if vm.isLoading || vm.liveActionLoading {
-                    HStack { ProgressView(); Text("Searching other sources…").font(.caption) }
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 16)
-                }
-                if let err = vm.errorMessage, !vm.liveActionResults.isEmpty {
-                    Label("Selected provider: \(err)", systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .padding(.horizontal, 16)
                 }
             }
             .padding(.top, 8)
