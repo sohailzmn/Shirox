@@ -498,6 +498,19 @@ final class DetailViewModel: ObservableObject {
         // selected episode's unique href and track a forward-only index — otherwise
         // "next after S2 E1" resolves to S1 E2 (the first occurrence of number 2).
         let episodes = detail?.episodes ?? []
+        let streamRefetch: StreamRefetchLoader? = {
+            guard let module = ModuleManager.shared.activeModule else { return nil }
+            return { number, href in
+                guard let episode = EpisodeNavigator.resolve(href: href, orNumber: number, in: episodes) else {
+                    return []
+                }
+                // A new resolution obtains fresh signed URLs for the exact playing
+                // episode. Never fall back to another season's episode number.
+                let runner = ModuleJSRunner()
+                try await runner.load(module: module)
+                return try await runner.fetchStreams(episodeUrl: episode.href)
+            }
+        }()
         let watchNextLoader: WatchNextLoader? = {
             guard !episodes.isEmpty else { return nil }
 
@@ -538,9 +551,9 @@ final class DetailViewModel: ObservableObject {
         }()
 
         #if os(iOS)
-        PlayerPresenter.shared.presentPlayer(stream: stream, streams: streamOptions, context: context, onWatchNext: watchNextLoader, onSequelNeeded: onSequelNeeded, onSequelAdvanced: onSequelAdvanced, onFinished: onFinished)
+        PlayerPresenter.shared.presentPlayer(stream: stream, streams: streamOptions, context: context, onWatchNext: watchNextLoader, onStreamExpired: streamRefetch, onSequelNeeded: onSequelNeeded, onSequelAdvanced: onSequelAdvanced, onFinished: onFinished)
         #elseif os(macOS)
-        MacPlayerWindowManager.shared.open(stream: stream, streams: streamOptions, context: context, onWatchNext: watchNextLoader, onSequelNeeded: onSequelNeeded, onSequelAdvanced: onSequelAdvanced, onFinished: onFinished)
+        MacPlayerWindowManager.shared.open(stream: stream, streams: streamOptions, context: context, onWatchNext: watchNextLoader, onStreamExpired: streamRefetch, onSequelNeeded: onSequelNeeded, onSequelAdvanced: onSequelAdvanced, onFinished: onFinished)
         #endif
     }
 }
