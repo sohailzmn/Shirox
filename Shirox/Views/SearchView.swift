@@ -2,6 +2,31 @@ import SwiftUI
 import Combine
 import UniformTypeIdentifiers
 
+/// A TV catalogue's S2E3 selection belongs to the matching *series* only.
+/// "Dexter" is a different series from "Dexter: Resurrection" even when
+/// both appear in the same search results. Jev may rank real matches, but
+/// it must never bind a requested episode to an unrelated card.
+enum CatalogModuleTitleMatch {
+    static func normalize(_ title: String) -> String {
+        let canonical = ModuleSeasonFallback.mediaIntent(for: title).seriesTitle
+            .replacingOccurrences(of: #"\s*\((?:19|20)\d{2}\)\s*$"#,
+                                  with: "", options: .regularExpression)
+            .folding(options: [.caseInsensitive, .diacriticInsensitive],
+                     locale: Locale(identifier: "en_US_POSIX"))
+        return canonical.lowercased()
+            .replacingOccurrences(of: "[^a-z0-9]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func matches(candidateTitle: String, requestedTitle: String?) -> Bool {
+        guard let requestedTitle, !requestedTitle.isEmpty else { return false }
+        let found = normalize(candidateTitle)
+        guard !found.isEmpty else { return false }
+        return ModuleSeasonFallback.queries(for: requestedTitle)
+            .contains { normalize($0) == found }
+    }
+}
+
 struct SearchView: View {
     @StateObject private var vm = SearchViewModel()
     @StateObject private var history = SearchHistoryManager()
@@ -338,10 +363,13 @@ struct SearchView: View {
                                 if moduleManager.activeModule?.isManga == true {
                                     MangaDetailView(item: item)
                                 } else {
+                                    let matchesCatalog = CatalogModuleTitleMatch.matches(
+                                        candidateTitle: item.title,
+                                        requestedTitle: requestedModuleTitle)
                                     DetailView(item: item,
-                                               requestedSeason: requestedModuleSeason,
-                                               requestedEpisode: requestedModuleEpisode,
-                                               requestedMetadataTitle: requestedModuleTitle)
+                                               requestedSeason: matchesCatalog ? requestedModuleSeason : nil,
+                                               requestedEpisode: matchesCatalog ? requestedModuleEpisode : nil,
+                                               requestedMetadataTitle: matchesCatalog ? requestedModuleTitle : nil)
                                 }
                             } label: {
                                 AnimeCardView(item: item)
