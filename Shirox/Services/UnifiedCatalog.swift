@@ -42,13 +42,14 @@ final class SourceCatalog: ObservableObject {
     @Published var errors: [String] = []
     @Published var loading = false
     private var loadedAt: Date?
+    private var failures: [CatalogKind: String] = [:]
     func load() async {
         guard !loading else { return }
         if let loadedAt, Date().timeIntervalSince(loadedAt) < 300 { return }
         guard let module = BundledUnifiedSource.module else { return }
         loading = true
         defer { loading = false }
-        errors = []
+        errors = []; failures = [:]
         async let anime = fetchTitles(kind: .anime, module: module)
         async let series = fetchTitles(kind: .series, module: module)
         let animeTitles = await anime
@@ -56,7 +57,7 @@ final class SourceCatalog: ObservableObject {
         let seriesTitles = await series
         publish(seriesTitles, kind: .series)
         rows.sort { $0.id < $1.id }
-        loadedAt = Date()
+        loadedAt = errors.isEmpty ? Date() : nil
     }
     private func fetchTitles(kind: CatalogKind, module: ModuleDefinition) async -> [CatalogTitle] {
         do {
@@ -70,13 +71,17 @@ final class SourceCatalog: ObservableObject {
                 CatalogTitle(id: "source-" + item.href, remoteID: 0, kind: kind, name: item.title,
                              poster: item.image, sourceHref: item.href, moduleID: module.id)
             }
-        } catch { return [] }
+        } catch {
+            let name = kind == .anime ? "AniWorld" : "SerienStream"
+            failures[kind] = name + ": " + error.localizedDescription
+            return []
+        }
     }
     private func publish(_ titles: [CatalogTitle], kind: CatalogKind) {
         let rowID = "source-" + kind.rawValue
         rows.removeAll { $0.id == rowID }
         if titles.isEmpty {
-            errors.append(kind == .anime ? "AniWorld ist derzeit nicht erreichbar oder liefert keine Titel." : "SerienStream ist derzeit nicht erreichbar oder liefert keine Titel.")
+            errors.append(failures[kind] ?? (kind == .anime ? "AniWorld liefert derzeit keine Titel." : "SerienStream liefert derzeit keine Titel."))
         } else {
             rows.append(CatalogRow(id: rowID, name: kind == .anime ? "Auf AniWorld" : "Auf SerienStream", titles: titles))
         }

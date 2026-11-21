@@ -17,9 +17,14 @@ enum ModuleStreamResolutionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .websiteVerificationRequired:
-            return "This source requires website verification. Choose another available source."
+            return "Diese Quelle wird durch eine Website-Bestätigung blockiert. Es wurde kein Video freigegeben."
         }
     }
+}
+
+enum SourceRequestError: LocalizedError {
+    case unavailable
+    var errorDescription: String? { "Die Quelle ist derzeit nicht erreichbar oder liefert keine verwertbaren Daten." }
 }
 
 /// A short-lived, standalone JS runner for a single module.
@@ -101,10 +106,7 @@ final class ModuleJSRunner {
     func search(keyword: String, kind: CatalogKind? = nil) async throws -> [SearchItem] {
         let args: [Any] = kind.map { [keyword, ["kind": $0.rawValue]] } ?? [keyword]
         let json = try await callAsyncJS("searchResults", args: args)
-        guard let data = json.data(using: .utf8),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            throw JSEngineError.parseError("Could not parse search results")
-        }
+        let array = try Self.decodeSourceRows(json)
         return array.compactMap { item in
             guard let title = item["title"] as? String,
                   let image = item["image"] as? String,
@@ -117,12 +119,27 @@ final class ModuleJSRunner {
 
     func sourceCatalog(kind: CatalogKind) async throws -> [SearchItem] {
         let json = try await callAsyncJS("extractCatalog", args: [["kind": kind.rawValue]])
-        guard let data = json.data(using: .utf8),
-              let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
+        let array = try Self.decodeSourceRows(json)
         return array.compactMap {
             guard let title = $0["title"] as? String, let href = $0["href"] as? String else { return nil }
             return SearchItem(title: title, image: $0["image"] as? String ?? "", href: href)
         }
+    }
+
+    static func decodeSourceRows(_ json: String) throws -> [[String: Any]] {
+        guard let data = json.data(using: .utf8) else {
+            throw JSEngineError.parseError("Ungültige Quelldaten")
+        }
+        let value = try JSONSerialization.jsonObject(with: data)
+        if let rows = value as? [[String: Any]] { return rows }
+        if let result = value as? [String: Any] {
+            if result["blockedReason"] as? String == "website_verification_required" {
+                throw ModuleStreamResolutionError.websiteVerificationRequired
+            }
+            if result["errorCode"] != nil { throw SourceRequestError.unavailable }
+            if let rows = result["items"] as? [[String: Any]] { return rows }
+        }
+        throw JSEngineError.parseError("Ungültige Quelldaten")
     }
 
     func sourceDescription(url: String) async throws -> String? {

@@ -22,6 +22,15 @@ import UIKit
 ///    Now Playing had the same problem in reverse — it published the local player's rate and
 ///    clock, so Control Center showed "paused, 0:00" over a movie the TV was happily playing.
 final class PlaybackRoutingTests: XCTestCase {
+    @MainActor func testSourceLookupPreservesVerificationAndNetworkErrors() throws {
+        XCTAssertThrowsError(try ModuleJSRunner.decodeSourceRows("{\"items\":[],\"blockedReason\":\"website_verification_required\"}")) { error in
+            XCTAssertTrue(error is ModuleStreamResolutionError)
+        }
+        XCTAssertThrowsError(try ModuleJSRunner.decodeSourceRows("{\"items\":[],\"errorCode\":\"source_unavailable\"}")) { error in
+            XCTAssertTrue(error is SourceRequestError)
+        }
+        XCTAssertTrue(try ModuleJSRunner.decodeSourceRows("[]").isEmpty)
+    }
     func testRemoteDemoClipsCannotStandInForAnEpisode() {
         XCTAssertTrue(StreamPreflight.isPreviewURL(URL(string:"https://test-videos.co.uk/bigbuckbunny/mp4-h264.mp4")!))
         XCTAssertFalse(StreamPreflight.isEpisodeLength(10))
@@ -48,6 +57,7 @@ final class PlaybackRoutingTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else {
             throw XCTSkip("Live provider probe is opt-in; fixture tests are not evidence of live playback.")
         }
+        let started = Date()
         let module = try XCTUnwrap(BundledUnifiedSource.module)
         let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
         let streams = try await PlaybackDeadline.run(seconds: 90) {
@@ -56,6 +66,7 @@ final class PlaybackRoutingTests: XCTestCase {
         XCTAssertFalse(streams.isEmpty, "The real source did not return a preflight-verified stream.")
         print("LIVE_ANIWORLD_PREFLIGHT streams=\(streams.count) german=\(streams.contains { PlaybackLanguagePolicy.priority($0) == 0 })")
         try await verifyLivePlayer(streams, source: "ANIWORLD")
+        print("LIVE_ANIWORLD_TOTAL_SECONDS=\(Date().timeIntervalSince(started))")
     }
     @MainActor func testLiveSerienStreamPlaybackProbe() async throws {
         guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else {
@@ -63,6 +74,11 @@ final class PlaybackRoutingTests: XCTestCase {
         }
         let module = try XCTUnwrap(BundledUnifiedSource.module)
         let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
+        do {
+            let rows = try await PlaybackDeadline.run(seconds: 15) { try await runner.sourceCatalog(kind: .series) }
+            print("LIVE_SERIENSTREAM_HOME titles=\(rows.count)")
+        } catch { print("LIVE_SERIENSTREAM_HOME error=\(error.localizedDescription)") }
+
         let streams: [StreamResult] = try await PlaybackDeadline.run(seconds: 100) {
             let matches = try await runner.search(keyword: "Dexter: Resurrection", kind: .series)
             let match = try XCTUnwrap(matches.first { CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: "Dexter: Resurrection") || CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: "Dexter: Wiedererwachen") })
@@ -276,7 +292,7 @@ final class PlaybackRoutingTests: XCTestCase {
 
     func testBundledResolverMatchesAppLanguageContract() throws {
         let bundled = try XCTUnwrap(BundledUnifiedSource.module)
-        XCTAssertEqual(bundled.version, "2.0.2")
+        XCTAssertEqual(bundled.version, "2.0.3")
         XCTAssertTrue(bundled.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true)
     }
     func testWebsiteChallengeIsNotAnEmptyVideoResult() {
