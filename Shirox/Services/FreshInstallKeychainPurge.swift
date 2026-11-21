@@ -31,7 +31,8 @@ enum FreshInstallKeychainPurge {
         "mal_access_token",
         "mal_refresh_token",
         "jellyfin_access_token",
-        "jellyfin_user_id"
+        "jellyfin_user_id",
+        "apinex_jev_api_key"
     ]
 
     private static var hasRun = false
