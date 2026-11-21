@@ -747,7 +747,7 @@ struct AniListDetailView: View {
 
     private func tapEpisode(_ ep: Int, media: Media) {
         let cwItem = continueWatching.items.first {
-            $0.aniListID == media.id && $0.episodeNumber == ep && !$0.streamUrl.isEmpty
+            $0.aniListID == media.id && $0.episodeNumber == ep && !$0.isPlaceholder
         }
         if let item = cwItem {
             resumeWatching(item: item)
@@ -762,7 +762,7 @@ struct AniListDetailView: View {
         let total = media.airedOrAnnouncedEpisodes ?? 0
         let rawNext = item?.episodeNumber ?? (existingEntry?.progress ?? 0) + 1
         let nextEp = rawNext > total && total > 0 ? 1 : rawNext
-        let label = item != nil && !item!.streamUrl.isEmpty ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)"
+        let label = item != nil && !item!.isPlaceholder ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)"
 
         Button {
             if let item {
@@ -791,7 +791,8 @@ struct AniListDetailView: View {
     }
 
     private func resumeWatching(item: ContinueWatchingItem) {
-        if item.streamUrl.isEmpty {
+        if item.sourceReferenceOnly == true { AutomaticPlaybackCoordinator.shared.resume(item); return }
+        if item.isPlaceholder {
             vm.watchEpisode(item.episodeNumber)
             return
         }

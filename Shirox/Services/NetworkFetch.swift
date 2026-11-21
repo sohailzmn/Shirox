@@ -702,21 +702,51 @@ class NetworkFetchManager: NSObject, ObservableObject {
     static let shared = NetworkFetchManager()
 
     private var activeMonitors: [String: NetworkFetchMonitor] = [:]
+    private struct PendingCapture {
+        let url: String
+        let options: NetworkFetchOptions
+        let resolve: JSValue
+        let reject: JSValue
+        let expires: Date
+    }
+    private var pending: [PendingCapture] = []
 
     private override init() {
         super.init()
     }
 
     func performNetworkFetch(urlString: String, options: NetworkFetchOptions, resolve: JSValue, reject: JSValue) {
+        guard pending.count < 12 else {
+            reject.call(withArguments: ["Die Quellenprüfung ist ausgelastet."])
+            return
+        }
+        pending.append(PendingCapture(url: urlString, options: options, resolve: resolve, reject: reject,
+                                      expires: Date().addingTimeInterval(Double(max(1, options.timeoutSeconds)))))
+        startPendingCaptures()
+    }
+
+    private func startPendingCaptures() {
+        while activeMonitors.count < 3, !pending.isEmpty {
+            let next = pending.removeFirst()
+            guard next.expires > Date() else {
+                next.reject.call(withArguments: ["Die Quellenprüfung ist abgelaufen."])
+                continue
+            }
+            startCapture(next)
+        }
+    }
+
+    private func startCapture(_ next: PendingCapture) {
         let monitorId = UUID().uuidString
         let monitor = NetworkFetchMonitor()
         activeMonitors[monitorId] = monitor
 
-        monitor.startMonitoring(urlString: urlString, options: options) { [weak self] result in
+        monitor.startMonitoring(urlString: next.url, options: next.options) { [weak self] result in
             self?.activeMonitors.removeValue(forKey: monitorId)
-            if !resolve.isUndefined {
-                resolve.call(withArguments: [result])
+            if !next.resolve.isUndefined {
+                next.resolve.call(withArguments: [result])
             }
+            self?.startPendingCaptures()
         }
     }
 

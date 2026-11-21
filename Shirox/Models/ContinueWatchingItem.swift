@@ -51,6 +51,10 @@ struct ContinueWatchingItem: Identifiable, Codable, Hashable {
     var localImportName: String?
     /// Filename of an up-front subtitle copied alongside the video, so resume reloads it.
     var localSubtitleImportName: String?
+    var sourceReferenceOnly: Bool? = nil
+    var sourceSeason: Int? = nil
+    var sourceEpisode: Int? = nil
+    var isPlaceholder: Bool { streamUrl.isEmpty && (sourceReferenceOnly != true || totalSeconds == 0) }
 }
 
 extension ContinueWatchingItem {

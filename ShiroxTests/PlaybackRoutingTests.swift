@@ -21,6 +21,24 @@ import UIKit
 ///    Now Playing had the same problem in reverse — it published the local player's rate and
 ///    clock, so Control Center showed "paused, 0:00" over a movie the TV was happily playing.
 final class PlaybackRoutingTests: XCTestCase {
+    func testRemoteResumeKeepsEpisodeAndPositionWithoutPersistingSignedMedia() throws {
+        var item = ContinueWatchingItem(id:UUID(), mediaTitle:"Dexter", episodeNumber:6,
+            episodeTitle:nil, imageUrl:"", streamUrl:"", headers:nil, subtitle:nil,
+            streamTitle:nil, aniListID:nil, malID:nil, moduleId:"fixture-module",
+            detailHref:"https://serienstream.to/serie/dexter", episodeHref:"https://serienstream.to/serie/dexter/staffel-2/episode-6",
+            watchedSeconds:45, totalSeconds:1200, totalEpisodes:10, availableEpisodes:6, isAiring:true,
+            lastWatchedAt:Date(), thumbnailUrl:nil)
+        item.sourceReferenceOnly=true; item.sourceSeason=2; item.sourceEpisode=6
+        let data=try JSONEncoder().encode(item)
+        let restored=try JSONDecoder().decode(ContinueWatchingItem.self,from:data)
+        XCTAssertFalse(restored.isPlaceholder)
+        XCTAssertEqual(restored.watchedSeconds,45)
+        XCTAssertEqual(restored.sourceSeason,2)
+        XCTAssertEqual(restored.sourceEpisode,6)
+        XCTAssertEqual(restored.streamUrl,"")
+        XCTAssertNil(restored.headers)
+        XCTAssertFalse(String(decoding:data,as:UTF8.self).contains(".m3u8"))
+    }
     func testHLSPreflightRequiresMediaAndReachableSubtitle() async throws {
         let stream = StreamResult(title: "Fixture", url: URL(string: "https://media.example/master.m3u8")!, headers: [:],
                                   subtitle: "https://media.example/de.vtt", audioLanguage: "ja", subtitleLanguage: "de")

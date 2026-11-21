@@ -80,7 +80,11 @@ struct ContinueWatchingSection: View {
 
     @ViewBuilder
     private func itemView(for item: ContinueWatchingItem) -> some View {
-        if item.streamUrl.isEmpty, let aniListID = item.aniListID {
+        if item.sourceReferenceOnly == true {
+            Button { AutomaticPlaybackCoordinator.shared.resume(item) } label: { ContinueWatchingCardDisplay(item: item) }
+                .buttonStyle(.plain)
+                .contextMenu { contextMenuItems(for: item) }
+        } else if item.isPlaceholder, let aniListID = item.aniListID {
             // AniList Up Next — navigate to detail to pick episode
             NavigationLink {
                 AniListDetailView(mediaId: aniListID, preloadedMedia: nil, resumeEpisodeNumber: item.episodeNumber, resumeWatchedSeconds: item.watchedSeconds)
@@ -89,7 +93,7 @@ struct ContinueWatchingSection: View {
             }
             .buttonStyle(.plain)
             .contextMenu { contextMenuItems(for: item) }
-        } else if item.streamUrl.isEmpty, let href = item.detailHref, let mid = item.moduleId {
+        } else if item.isPlaceholder, let href = item.detailHref, let mid = item.moduleId {
             // Module Up Next — navigate to detail, activating the correct module first
             NavigationLink {
                 DetailView(item: SearchItem(title: item.mediaTitle, image: item.imageUrl, href: href), resumeEpisodeNumber: item.episodeNumber, resumeWatchedSeconds: item.watchedSeconds, moduleId: mid, aniListID: item.aniListID)
@@ -132,7 +136,7 @@ struct ContinueWatchingSection: View {
             return
         }
         #endif
-        guard !item.streamUrl.isEmpty, let url = URL(string: item.streamUrl) else { return }
+        guard !item.isPlaceholder, let url = URL(string: item.streamUrl) else { return }
         Logger.shared.log("[Subtitles] CW resume: item.subtitle=\(item.subtitle ?? "nil") item.subtitleHeaders=\(item.subtitleHeaders?.count ?? -1) item.allSubtitles=\(item.allSubtitles?.count ?? -1) item.detailHref=\(item.detailHref ?? "nil") item.moduleId=\(item.moduleId ?? "nil")", type: "Debug")
 
         // Ensure the correct module is active
@@ -491,11 +495,11 @@ struct ContinueWatchingCardDisplay: View {
         } else {
             fragments.append("Episode \(item.episodeNumber)")
         }
-        if !item.streamUrl.isEmpty, item.totalSeconds.isFinite,
+        if !item.isPlaceholder, item.totalSeconds.isFinite,
            item.watchedSeconds.isFinite, item.totalSeconds > 0 {
             let remaining = max(0, Int(ceil((item.totalSeconds - item.watchedSeconds) / 60)))
             fragments.append(remaining == 0 ? "Almost finished" : "\(remaining) min left")
-        } else if item.streamUrl.isEmpty {
+        } else if item.isPlaceholder {
             fragments.append("Up next")
         }
         return fragments.joined(separator: "  •  ")
@@ -513,7 +517,7 @@ struct ContinueWatchingCardDisplay: View {
     /// A placeholder whose target episode is one past the currently-aired count on an
     /// ongoing show — i.e. the user has watched everything available and is waiting for more.
     private var isCaughtUp: Bool {
-        guard item.streamUrl.isEmpty, let avail = item.availableEpisodes else { return false }
+        guard item.isPlaceholder, let avail = item.availableEpisodes else { return false }
         let ongoing = item.isAiring ?? (item.totalEpisodes == nil || avail < (item.totalEpisodes ?? 0))
         return ongoing && item.episodeNumber > avail
     }
@@ -544,7 +548,7 @@ struct ContinueWatchingCardDisplay: View {
                 )
                 .overlay(alignment: .bottomLeading) {
                     HStack(spacing: 4) {
-                        if !item.streamUrl.isEmpty && !isWatched {
+                        if !item.isPlaceholder && !isWatched {
                             Image(systemName: "play.fill")
                                 .font(.system(size: 8, weight: .bold))
                             Text(episodeLabelText(item: item, prefix: nil))
@@ -566,7 +570,7 @@ struct ContinueWatchingCardDisplay: View {
                     .padding(.bottom, 8)
                 }
                 .overlay(alignment: .bottom) {
-                    if !item.streamUrl.isEmpty && !isWatched {
+                    if !item.isPlaceholder && !isWatched {
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 Color.white.opacity(0.2)
@@ -588,7 +592,7 @@ struct ContinueWatchingCardDisplay: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             HStack(spacing: 6) {
-                Image(systemName: item.streamUrl.isEmpty ? "forward.end.fill" : "play.fill")
+                Image(systemName: item.isPlaceholder ? "forward.end.fill" : "play.fill")
                     .font(.system(size: 9, weight: .semibold))
                 Text(watchMetadata).lineLimit(1)
             }

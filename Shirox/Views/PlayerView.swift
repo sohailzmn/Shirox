@@ -1365,9 +1365,10 @@ struct PlayerView: View {
             return
         }
         let urlString = currentStream.url.absoluteString
+        let referenceOnly = !isLocalPlayback && context.episodeHref != nil && context.detailHref != nil && context.moduleId != nil
         let episodeNumber = context.episodeNumber
         let existingId = ContinueWatchingManager.shared.items
-            .first { $0.streamUrl == urlString && $0.episodeNumber == episodeNumber }?.id
+            .first { ($0.streamUrl == urlString || (context.episodeHref != nil && $0.episodeHref == context.episodeHref)) && $0.episodeNumber == episodeNumber }?.id
         // If user selected a specific track from allSubtitles, persist it so it reloads on resume
         let effectiveSubtitle: String?
         let effectiveSubtitleHeaders: [String: String]?
@@ -1384,13 +1385,13 @@ struct PlayerView: View {
             episodeNumber: context.episodeNumber,
             episodeTitle: context.episodeTitle,
             imageUrl: context.imageUrl,
-            streamUrl: currentStream.url.absoluteString,
-            headers: currentStream.headers.isEmpty ? nil : currentStream.headers,
-            subtitle: effectiveSubtitle,
-            subtitleHeaders: effectiveSubtitleHeaders,
-            allSubtitles: { Logger.shared.log("[Subtitles] saveProgress: saving subtitleTracks=\(subtitleTracks?.count ?? -1) effectiveSubtitle=\(effectiveSubtitle ?? "nil")", type: "Debug"); return subtitleTracks }(),
+            streamUrl: referenceOnly ? "" : currentStream.url.absoluteString,
+            headers: referenceOnly ? nil : currentStream.headers.isEmpty ? nil : currentStream.headers,
+            subtitle: referenceOnly ? nil : effectiveSubtitle,
+            subtitleHeaders: referenceOnly ? nil : effectiveSubtitleHeaders,
+            allSubtitles: referenceOnly ? nil : subtitleTracks,
             streamTitle: context.streamTitle,
-            allStreams: availableStreams.count > 1 ? availableStreams.map {
+            allStreams: !referenceOnly && availableStreams.count > 1 ? availableStreams.map {
                 StoredStream(title: $0.title, url: $0.url.absoluteString, headers: $0.headers,
                              subtitle: $0.subtitle, subtitleHeaders: $0.subtitleHeaders.isEmpty ? nil : $0.subtitleHeaders)
             } : nil,
@@ -1407,6 +1408,11 @@ struct PlayerView: View {
             lastWatchedAt: .now,
             thumbnailUrl: context.thumbnailUrl
         )
+        if referenceOnly {
+            item.sourceReferenceOnly = true
+            item.sourceSeason = context.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) }
+            item.sourceEpisode = context.episodeHref.flatMap { ModuleSeasonRouting.episodeNumber(for: $0) }
+        }
         if context.isLocalPlayback {
             // Resume from our own persistent copy, not the transient picker URL.
             item.localImportName = LocalPlaybackCoordinator.shared.importName(for: currentStream.url)

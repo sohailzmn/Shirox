@@ -32,6 +32,8 @@ jobs:
             -only-testing:ShiroxTests/CloudflareBypassClearanceTests \
             -only-testing:ShiroxTests/EpisodeNavigatorTests \
             -only-testing:ShiroxTests/PlayerForegroundRecoveryTests \
+            -only-testing:ShiroxTests/ContinueWatchingSeasonMatchTests \
+            -only-testing:ShiroxTests/BackupProgressSectionTests \
             CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
             > "$RUNNER_TEMP/series-tests.log" 2>&1 || {
               tail -150 "$RUNNER_TEMP/series-tests.log"

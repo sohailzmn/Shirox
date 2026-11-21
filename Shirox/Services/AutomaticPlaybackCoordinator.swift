@@ -98,6 +98,59 @@ struct AutomaticPlaybackResult {
 final class AutomaticPlaybackCoordinator {
     static let shared = AutomaticPlaybackCoordinator()
 
+    func resume(_ item: ContinueWatchingItem) {
+        let operation: @MainActor () async throws -> Void = {
+            let sourceSeason = item.sourceSeason ?? item.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? 1
+            let sourceEpisode = item.sourceEpisode ?? item.episodeHref.flatMap { ModuleSeasonRouting.episodeNumber(for: $0) } ?? item.episodeNumber
+            let request = AutomaticPlaybackRequest(title: item.mediaTitle,
+                kind: DetailViewModel.isSeriesSource(item.episodeHref ?? item.detailHref ?? "") ? .series : .anime,
+                animeID: item.aniListID, seasonIsExplicit: true, season: sourceSeason, episode: sourceEpisode,
+                detailHref: item.detailHref, episodeHref: item.episodeHref, moduleID: item.moduleId)
+            let result = try await self.resolve(request)
+            let context = PlayerContext(mediaTitle: item.mediaTitle, episodeNumber: item.episodeNumber,
+                episodeTitle: item.episodeTitle, imageUrl: item.imageUrl, aniListID: item.aniListID,
+                malID: item.malID, moduleId: result.module.id, totalEpisodes: item.totalEpisodes,
+                availableEpisodes: item.availableEpisodes, isAiring: item.isAiring, resumeFrom: item.watchedSeconds,
+                detailHref: result.detailHref, episodeHref: result.episode.href, streamTitle: result.selected.title,
+                workingDetailHref: result.detailHref, thumbnailUrl: item.thumbnailUrl)
+            let refresh: StreamRefetchLoader = { _, href in
+                guard let href else { return [] }
+                let runner = ModuleJSRunner(); try await runner.load(module: result.module)
+                return try await self.streams(runner: runner, episodeHref: href, legacyModule: result.module)
+            }
+            var playingHref = result.episode.href
+            let relativeOffset = sourceEpisode - item.episodeNumber
+            let next: WatchNextLoader = { number in
+                let runner = ModuleJSRunner(); try await runner.load(module: result.module)
+                let episodes = try await PlaybackDeadline.run(seconds: 8) {
+                    try await runner.fetchEpisodes(url: result.detailHref, season: sourceSeason)
+                }
+                guard let next = EpisodeNavigator.next(afterHref: playingHref, orNumber: number, in: episodes) else { return nil }
+                let streams = try await self.streams(runner: runner, episodeHref: next.href, legacyModule: result.module)
+                playingHref = next.href
+                let progressNumber = item.aniListID != nil ? Int(next.number) - relativeOffset : Int(next.number)
+                guard progressNumber > 0 else { return nil }
+                return (streams: streams, episodeNumber: progressNumber, episodeHref: next.href)
+            }
+            #if os(iOS)
+            PlayerPresenter.shared.presentPlayer(stream: result.selected, streams: result.streams, context: context,
+                                                 onWatchNext: next, onStreamExpired: refresh)
+            #elseif os(macOS)
+            MacPlayerWindowManager.shared.open(stream: result.selected, streams: result.streams, context: context,
+                                               onWatchNext: next, onStreamExpired: refresh)
+            #endif
+        }
+        #if os(iOS)
+        PlayerPresenter.shared.presentResolvingEpisode(title: item.mediaTitle,
+            episode: item.sourceEpisode ?? item.episodeNumber, artwork: item.imageUrl,
+            onResolve: operation, onChooseSource: {
+                ToastManager.shared.show(message: "Keine passende Quelle bestätigt. Bitte später erneut versuchen.", type: .error)
+            })
+        #else
+        Task { do { try await operation() } catch { Logger.shared.log("[AutoPlay] resume failed", type: "Player") } }
+        #endif
+    }
+
     func resolve(_ request: AutomaticPlaybackRequest,
                  status: ((String) -> Void)? = nil) async throws -> AutomaticPlaybackResult {
         do {

@@ -580,7 +580,7 @@ struct DetailView: View {
         let nextEp = hasTarget ? (requestedEpisode ?? 1) : (item?.episodeNumber ?? 1)
         let label = hasTarget
             ? "Watch S\(requestedSeason ?? 1) E\(nextEp)"
-            : (item != nil && !item!.streamUrl.isEmpty ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)")
+            : (item != nil && !item!.isPlaceholder ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)")
 
         Button {
             if let season = requestedSeason, let number = requestedEpisode {
@@ -722,7 +722,7 @@ struct DetailView: View {
                 : cw.moduleId == moduleId && cw.mediaTitle == currentTitle
             // Anchor on the episode's unique href so tapping S2 E5 doesn't resume S1 E5's
             // stream when their numbers collide on a flat multi-season list.
-            return showMatches && cw.matchesEpisode(number: epNum, href: episode.href) && !cw.streamUrl.isEmpty
+            return showMatches && cw.matchesEpisode(number: epNum, href: episode.href) && !cw.isPlaceholder
         }
         if let item = cwItem {
             resumeWatching(item: item)
@@ -732,7 +732,8 @@ struct DetailView: View {
     }
 
     private func resumeWatching(item: ContinueWatchingItem) {
-        if item.streamUrl.isEmpty {
+        if item.sourceReferenceOnly == true { AutomaticPlaybackCoordinator.shared.resume(item); return }
+        if item.isPlaceholder {
             if let episode = vm.detail?.episodes.first(where: { Int($0.number) == item.episodeNumber }) {
                 vm.loadStreams(for: episode)
             }

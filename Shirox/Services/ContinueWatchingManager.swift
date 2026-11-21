@@ -43,7 +43,7 @@ import Combine
     /// At ≥ 90%: marks episode watched and queues the next one as a placeholder.
     /// Enforces the one-item-per-show invariant via removeAllShowItems.
     func save(_ item: ContinueWatchingItem) {
-        Logger.shared.log("[CW] save called: ep=\(item.episodeNumber) streamUrl=\(item.streamUrl.isEmpty ? "placeholder" : "inprog") watched=\(item.watchedSeconds)/\(item.totalSeconds) title=\(item.mediaTitle)", type: "Debug")
+        Logger.shared.log("[CW] save called: ep=\(item.episodeNumber) streamUrl=\(item.isPlaceholder ? "placeholder" : "inprog") watched=\(item.watchedSeconds)/\(item.totalSeconds) title=\(item.mediaTitle)", type: "Debug")
         var newItems = items
         removeAllShowItems(for: item, in: &newItems)
 
@@ -82,7 +82,7 @@ import Combine
             }
             items = newItems
             persist()
-            Logger.shared.log("[CW] save done: items=\(items.map { "\($0.episodeNumber)\($0.streamUrl.isEmpty ? "P" : "I")" }.joined(separator: ",")) title=\(item.mediaTitle)", type: "Debug")
+            Logger.shared.log("[CW] save done: items=\(items.map { "\($0.episodeNumber)\($0.isPlaceholder ? "P" : "I")" }.joined(separator: ",")) title=\(item.mediaTitle)", type: "Debug")
             return
         }
 
@@ -91,7 +91,7 @@ import Combine
         if newItems.count > maxItems { newItems = Array(newItems.prefix(maxItems)) }
         items = newItems
         persist()
-        Logger.shared.log("[CW] save done: items=\(items.map { "\($0.episodeNumber)\($0.streamUrl.isEmpty ? "P" : "I")" }.joined(separator: ",")) title=\(item.mediaTitle)", type: "Debug")
+        Logger.shared.log("[CW] save done: items=\(items.map { "\($0.episodeNumber)\($0.isPlaceholder ? "P" : "I")" }.joined(separator: ",")) title=\(item.mediaTitle)", type: "Debug")
     }
 
     /// Removes an item by its id.
@@ -222,7 +222,7 @@ import Combine
                 let existing = newItems.first { matchesShow($0, aniListID: media.id, moduleId: nil, mediaTitle: "") }
 
                 // Update existing entry if AniList shows the user has watched further (e.g. on another device)
-                if let existing, existing.streamUrl.isEmpty, nextEp > existing.episodeNumber {
+                if let existing, existing.isPlaceholder, nextEp > existing.episodeNumber {
                     newItems.removeAll { matchesShow($0, aniListID: media.id, moduleId: nil, mediaTitle: "") }
                     if let placeholder = makePlaceholder(
                         episodeNumber: nextEp,
@@ -319,7 +319,7 @@ import Combine
                 let nextEp = progress + 1
 
                 // Leave real in-progress items alone; only advance a placeholder that's behind MAL.
-                guard existing.streamUrl.isEmpty, nextEp > existing.episodeNumber else {
+                guard existing.isPlaceholder, nextEp > existing.episodeNumber else {
                     newItems[idx].isAiring = isAiring
                     if let total { newItems[idx].totalEpisodes = max(total, existing.totalEpisodes ?? 0) }
                     if let availForCard { newItems[idx].availableEpisodes = availForCard }
@@ -404,7 +404,7 @@ import Combine
         // When the in-progress item IS this episode, proceed and replace it with the next placeholder.
         if let current {
             if current.episodeNumber > episodeNumber { persist(); return }
-            if !current.streamUrl.isEmpty && current.episodeNumber != episodeNumber { persist(); return }
+            if !current.isPlaceholder && current.episodeNumber != episodeNumber { persist(); return }
         }
 
         removeAllShowItems(aniListID: aniListID, moduleId: moduleId, mediaTitle: mediaTitle, in: &arr)
@@ -446,7 +446,7 @@ import Combine
         // Only update CW when it points to exactly ep N+1 (the placeholder created by marking ep N).
         // Leave CW alone for real in-progress items, higher-ep placeholders, lower-ep placeholders,
         // and absent items — unmarking shouldn't create unexpected CW entries.
-        guard let current, current.streamUrl.isEmpty, current.episodeNumber == episodeNumber + 1 else {
+        guard let current, current.isPlaceholder, current.episodeNumber == episodeNumber + 1 else {
             persist(); return
         }
 
@@ -731,7 +731,7 @@ import Combine
             }
         }
 
-        return ContinueWatchingItem(
+        var placeholder = ContinueWatchingItem(
             id: id, mediaTitle: srcMediaTitle, episodeNumber: episodeNumber,
             episodeTitle: nil, imageUrl: srcImageUrl, streamUrl: "",
             headers: nil, subtitle: nil, streamTitle: nil, aniListID: srcAniListID,
@@ -744,6 +744,12 @@ import Combine
             thumbnailUrl: nil,
             aniListUpdatedAt: aniListUpdatedAt ?? source?.aniListUpdatedAt
         )
+        if source?.sourceReferenceOnly == true {
+            placeholder.sourceReferenceOnly = true
+            placeholder.sourceSeason = source?.sourceSeason
+            placeholder.sourceEpisode = source?.sourceEpisode.map { $0 + (episodeNumber - (source?.episodeNumber ?? episodeNumber)) }
+        }
+        return placeholder
     }
 
     // MARK: - New Episode Notification
@@ -768,7 +774,7 @@ import Combine
             // Case 1 & 2: Self-heal existing placeholders and real items so they always reflect the latest accurate availability
             arr.removeAll { matchesShow($0, aniListID: aniListID, moduleId: moduleId, mediaTitle: mediaTitle) }
             
-            if existing.streamUrl.isEmpty {
+            if existing.isPlaceholder {
                 // If the updated cap reveals that the user is actually caught up, makePlaceholder will return nil
                 // and the stale "Up Next" placeholder will be automatically deleted.
                 Logger.shared.log("[CW] notifyNew: re-evaluating placeholder ep=\(existing.episodeNumber) avail=\(availableEpisodes) totalEps=\(String(describing: totalEpisodes ?? existing.totalEpisodes)) isAiring=\(String(describing: isAiring ?? existing.isAiring)) title=\(mediaTitle)", type: "Debug")
