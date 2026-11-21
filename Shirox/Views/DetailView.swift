@@ -1,7 +1,56 @@
 import SwiftUI
 
+/// S.to returns globally numbered episodes but URLs identify their actual
+/// season and per-season episode. Use URLs for grouping, selection and display.
+enum ModuleSeasonRouting {
+    private static func pathNumber(_ href: String, prefix: String) -> Int? {
+        guard let url = URL(string: href), ["http", "https"].contains(url.scheme ?? "") else { return nil }
+        for component in url.pathComponents {
+            guard component.lowercased().hasPrefix(prefix),
+                  let n = Int(component.dropFirst(prefix.count)), n > 0 else { continue }
+            return n
+        }
+        return nil
+    }
+    static func seasonNumber(for href: String) -> Int? { pathNumber(href, prefix: "staffel-") }
+    static func episodeNumber(for href: String) -> Int? { pathNumber(href, prefix: "episode-") }
+
+    static func groups(_ episodes: [EpisodeLink]) -> [[EpisodeLink]] {
+        guard let first = episodes.first else { return [] }
+        let tagged = episodes.compactMap { ep -> (Int, EpisodeLink)? in
+            guard let s = seasonNumber(for: ep.href) else { return nil }
+            return (s, ep)
+        }
+        // Require explicit paths on every episode; otherwise retain legacy
+        // grouping rather than mislabeling an unqualified episode as S1.
+        if tagged.count == episodes.count {
+            let ids = Set(tagged.map { $0.0 }).sorted()
+            if ids.count > 1 {
+                return ids.map { id in tagged.filter { $0.0 == id }.map { $0.1 } }
+            }
+        }
+        var out: [[EpisodeLink]] = [[first]]
+        for i in 1..<episodes.count {
+            if episodes[i].number <= episodes[i-1].number { out.append([]) }
+            out[out.count-1].append(episodes[i])
+        }
+        return out.count > 1 ? out : [episodes]
+    }
+
+    static func exactEpisode(_ episodes: [EpisodeLink], season: Int, episode: Int) -> EpisodeLink? {
+        episodes.first {
+            seasonNumber(for: $0.href) == season && episodeNumber(for: $0.href) == episode
+        }
+    }
+}
+
 struct DetailView: View {
     let item: SearchItem
+    // Carried from a particular TV-series episode selection, never inferred
+    // from an unrelated source's first available episode.
+    var requestedSeason: Int? = nil
+    var requestedEpisode: Int? = nil
+    var requestedMetadataTitle: String? = nil
     var offlineSnapshot: DownloadedMediaSnapshot? = nil
     var resumeEpisodeNumber: Int?
     var resumeWatchedSeconds: Double?
@@ -44,6 +93,8 @@ struct DetailView: View {
     @State private var existingMALEntry: LibraryEntry? = nil
     @State private var isSynopsisExpanded = false
     @State private var selectedSeason = 0
+    @State private var checkingRequestedEpisode = false
+    @State private var requestedEpisodeError: String?
     @State private var showResetConfirmation = false
     @State private var autoPlayOnLoad = false
     @State private var existingEntry: LibraryEntry? = nil
@@ -128,6 +179,10 @@ struct DetailView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     synopsisSection(detail: detail).padding(.top, 16)
                     actionBar(detail: detail).padding(.horizontal, 16).padding(.bottom, 8)
+                    if let requestedEpisodeError {
+                        Text(requestedEpisodeError).font(.caption)
+                            .foregroundStyle(.secondary).padding(.horizontal, 16)
+                    }
                 }
                 #endif
                 #if !os(iOS)
@@ -223,6 +278,14 @@ struct DetailView: View {
             guard !autoPlayOnLoad else { return }
 
             if let detail = vm.detail, !detail.episodes.isEmpty {
+                if let requestedSeason {
+                    let groups = ModuleSeasonRouting.groups(detail.episodes)
+                    if let index = groups.firstIndex(where: {
+                        $0.first.flatMap { ModuleSeasonRouting.seasonNumber(for: $0.href) } == requestedSeason
+                    }) {
+                        selectedSeason = index
+                    }
+                }
                 let moduleId = effectiveModuleId
                 ContinueWatchingManager.shared.notifyNewEpisodesAvailable(
                     aniListID: vm.aniListID ?? aniListID,
@@ -1254,15 +1317,7 @@ struct DetailView: View {
 
     // MARK: - Episodes (Season & Range Menus with neutral styling)
     private func detectSeasons(_ episodes: [EpisodeLink]) -> [[EpisodeLink]] {
-        guard !episodes.isEmpty else { return [] }
-        var seasons: [[EpisodeLink]] = [[episodes[0]]]
-        for i in 1..<episodes.count {
-            if episodes[i].number <= episodes[i - 1].number {
-                seasons.append([])
-            }
-            seasons[seasons.count - 1].append(episodes[i])
-        }
-        return seasons.count > 1 ? seasons : [episodes]
+        ModuleSeasonRouting.groups(episodes)
     }
 
     private func episodesSection(detail: MediaDetail) -> some View {
@@ -1419,7 +1474,7 @@ struct DetailView: View {
                                         selectedRangeIndex = 0
                                     }
                                 } label: {
-                                    Text("Season \(i + 1)")
+                                    Text("Season \(ModuleSeasonRouting.seasonNumber(for: seasons[i][0].href) ?? i + 1)")
                                     if selectedSeason == i {
                                         Image(systemName: "checkmark")
                                     }
@@ -1429,7 +1484,7 @@ struct DetailView: View {
                             HStack(spacing: 6) {
                                 Image(systemName: "tv")
                                     .font(.subheadline)
-                                Text("Season \(selectedSeason + 1)")
+                                Text("Season \(ModuleSeasonRouting.seasonNumber(for: seasons[min(selectedSeason, seasons.count - 1)][0].href) ?? selectedSeason + 1)")
                                     .font(.subheadline.weight(.medium))
                                 Image(systemName: "chevron.down")
                                     .font(.caption)
