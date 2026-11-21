@@ -9,6 +9,19 @@ import Combine
 
 @preconcurrency import JavaScriptCore
 
+/// A module reported that its host requires an interactive website check.
+/// Never turn a challenge page into a fabricated media URL.
+enum ModuleStreamResolutionError: LocalizedError {
+    case websiteVerificationRequired
+
+    var errorDescription: String? {
+        switch self {
+        case .websiteVerificationRequired:
+            return "This source requires website verification. Choose another available source."
+        }
+    }
+}
+
 /// A short-lived, standalone JS runner for a single module.
 /// Creates its own JSContext so it never interferes with JSEngine.shared.
 @MainActor
@@ -151,6 +164,9 @@ final class ModuleJSRunner {
             throw JSEngineError.parseError("Could not parse stream result")
         }
 
+        if obj["blockedReason"] as? String == "website_verification_required" {
+            throw ModuleStreamResolutionError.websiteVerificationRequired
+        }
         return parseStreamResults(from: obj)
     }
 
