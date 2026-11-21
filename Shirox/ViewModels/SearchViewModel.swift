@@ -1,6 +1,19 @@
 import Foundation
 import Combine
 
+/// A website refusing a request is distinct from an empty catalogue result.
+/// Never claim its protected page can be viewed without authorization.
+enum ModuleSearchFailure: LocalizedError {
+    case websiteRestricted
+
+    var errorDescription: String? {
+        switch self {
+        case .websiteRestricted:
+            return "Die Streamingquelle blockiert die Anfrage. Wähle eine andere verfügbare Quelle oder versuche es später erneut."
+        }
+    }
+}
+
 @MainActor
 final class SearchViewModel: ObservableObject {
     @Published var moduleResults: [SearchItem] = []
@@ -40,42 +53,29 @@ final class SearchViewModel: ObservableObject {
         aniListResults = []
         liveActionResults = []
         liveActionError = nil
-        liveActionLoading = true
-        // An anime/module failure must not hide an independent live-action result.
-        liveActionTask = Task { @MainActor in
-            do {
-                let results = try await LiveActionCatalog.shared.search(q)
-                guard !Task.isCancelled, query.trimmingCharacters(in: .whitespaces) == q else { return }
-                liveActionResults = results
-            } catch {
-                if !Task.isCancelled { liveActionError = error.localizedDescription }
-            }
-            if !Task.isCancelled { liveActionLoading = false }
-        }
+        liveActionLoading = false
+        // Series and films are searched exclusively through the selected
+        // streaming module. TVmaze/Apple metadata discovery is not started.
+
         searchTask = Task {
             do {
                 if usingModule {
                     CloudflareBypassManager.shared.pendingVerificationURL = nil
-                    var res: [SearchItem]
+                    // Do not automatically open a blocking Security Check window.
+                    // A verification-required page is not a valid search result.
+                    let res: [SearchItem]
                     do {
                         res = try await moduleSearch(q)
                     } catch {
-                        // Modules often swallow a CF wall as a JSON parse error and rethrow.
-                        // If a Turnstile host was flagged, fall through to verify; else surface it.
-                        guard CloudflareBypassManager.shared.pendingVerificationURL != nil else { throw error }
-                        res = []
-                    }
-                    // The user explicitly searched, so a Cloudflare wall here is solved inline
-                    // (auto-verify + retry once) rather than deferred to a button. Verify whenever
-                    // a wall was flagged — modules often swallow the CF page and return a bogus
-                    // result, so we can't rely on the result being empty.
-                    if !Task.isCancelled,
-                       let cfURL = CloudflareBypassManager.shared.pendingVerificationURL {
-                        try? await CloudflareBypassManager.shared.triggerBypass(for: cfURL)
-                        if !Task.isCancelled {
+                        if CloudflareBypassManager.shared.pendingVerificationURL != nil {
                             CloudflareBypassManager.shared.pendingVerificationURL = nil
-                            res = try await moduleSearch(q)
+                            throw ModuleSearchFailure.websiteRestricted
                         }
+                        throw error
+                    }
+                    if CloudflareBypassManager.shared.pendingVerificationURL != nil {
+                        CloudflareBypassManager.shared.pendingVerificationURL = nil
+                        throw ModuleSearchFailure.websiteRestricted
                     }
                     if !Task.isCancelled {
                         var seen = Set<String>()
