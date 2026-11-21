@@ -1040,27 +1040,7 @@ private final class ModuleStreamRowViewModel: ObservableObject {
         cloudflareURL = nil
     }
 
-    /// Runs the user-initiated Cloudflare challenge for this module, then re-runs the search.
-    func verifyAndRetry() {
-        guard let url = cloudflareURL, let host = url.host else { return }
-        verificationError = nil
-        Task {
-            do {
-                try await CloudflareBypassManager.shared.triggerBypass(for: url)
-                guard CloudflareBypassManager.shared.cookie(for: host) != nil else {
-                    verificationError = "The website did not confirm verification."
-                    return
-                }
-                // Search only after a confirmed, user-completed challenge.
-                reset()
-                startFind()
-            } catch CloudflareBypassError.cancelled {
-                verificationError = "Verification cancelled. The search was not restarted."
-            } catch {
-                verificationError = "Website verification did not complete: \(error.localizedDescription)"
-            }
-        }
-    }
+
 }
 
 // MARK: - Row View

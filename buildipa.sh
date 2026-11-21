@@ -10,17 +10,21 @@ WORKING_LOCATION="$(pwd)"
 APPLICATION_NAME=Shirox
 SCHEME_NAME="Shirox_iOS"
 
-echo "--- Applying SerienStream interactive verification patch ---"
-python3 "$WORKING_LOCATION/patch_serienstream_interactive.py"
-echo "--- Applying SerienStream continuation/adblock patch ---"
-python3 "$WORKING_LOCATION/patch_serienstream_interactive_v3.py"
-echo "--- Applying SerienStream session reuse fast-path patch ---"
-python3 "$WORKING_LOCATION/patch_serienstream_session_v5.py"
-echo "--- Applying SerienStream exact episode verification patch ---"
-python3 "$WORKING_LOCATION/patch_serienstream_exact_episode_v6.py"
-# Shirox supports iOS 15; SwiftUI's fontWeight modifier used by the generated
-# toolbar button is unavailable for this deployment target in the current SDK.
-sed -i '' '/\.fontWeight(.semibold)/d' "$WORKING_LOCATION/Shirox/Views/Shared/CloudflareBypassSheetView.swift"
+# Source code is the single source of truth for the iOS build.
+# Legacy build-time patches reopened the full-screen Cloudflare challenge
+# by injecting an interactive WKWebView into NetworkFetch.swift.
+# Keep these patches disabled: only user-authorized source responses
+# can be resolved, and protected pages must not be accepted as streams.
+if grep -Fq 'CloudflareBypassWindowController.shared.show()' \
+    "$WORKING_LOCATION/Shirox/ShiroxApp.swift"; then
+    echo "Error: global Security Check popup has been reintroduced."
+    exit 1
+fi
+if grep -Fq 'CloudflareBypassManager.shared.activeBypassWebView = webView' \
+    "$WORKING_LOCATION/Shirox/Services/NetworkFetch.swift"; then
+    echo "Error: legacy build-injected interactive S.to verification is present."
+    exit 1
+fi
 
 if [ ! -d "build" ]; then
    mkdir build
