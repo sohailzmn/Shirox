@@ -60,6 +60,34 @@ final class AnimeModulePreferenceTests: XCTestCase {
                                                foundStream: false, timedOut: true).contains("langsam"))
     }
 
+    func testSeasonSuffixIsStructuredMetadataNotSearchName() {
+        let intent = ModuleSeasonFallback.mediaIntent(for: "Dexter: Resurrection Season 2")
+        XCTAssertEqual(intent.seriesTitle, "Dexter: Resurrection")
+        XCTAssertEqual(intent.seasonNumber, 2)
+
+        let queries = ModuleSeasonFallback.queries(for: "Dexter: Resurrection Season 2")
+        XCTAssertEqual(queries.first, "Dexter: Resurrection")
+        XCTAssertEqual(queries.dropFirst().first, "Dexter: Wiedererwachen")
+    }
+
+    func testGermanSeasonSyntaxAlsoParses() {
+        let intent = ModuleSeasonFallback.mediaIntent(for: "Dexter: Wiedererwachen Staffel 2")
+        XCTAssertEqual(intent.seriesTitle, "Dexter: Wiedererwachen")
+        XCTAssertEqual(intent.seasonNumber, 2)
+    }
+
+    func testExplicitSeasonNeverFallsBackToSeasonOne() {
+        let module = mod("Shirox Unified GER (AniWorld + S.to)", manga: false)
+        let episodes = [
+            EpisodeLink(number: 1, href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-1"),
+            EpisodeLink(number: 2, href: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-2")
+        ]
+        let result = ModuleSeasonFallback.aniWorldEpisode(from: episodes,
+            title: "Dexter: Resurrection Season 2", module: module, number: 1)
+        XCTAssertTrue(result.handled)
+        XCTAssertNil(result.episode)
+    }
+
     func testSTOSeriesExplicitSeasonDoesNotChooseWrongEpisode() {
         let module = mod("s.to German Dub", manga: false)
         let episodes = [

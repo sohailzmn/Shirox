@@ -43,20 +43,39 @@ enum ModuleSeasonFallback {
         return nil
     }
 
+    /// Separate catalogue identity from release metadata before searching.
+    /// A season suffix is never the literal title: "Dexter: Resurrection Season 2"
+    /// means series "Dexter: Resurrection" and season 2. The player uses the
+    /// returned season to validate the episode URL; a language model may only
+    /// rank already-grounded matches, never override this explicit metadata.
+    struct MediaIntent: Equatable {
+        let seriesTitle: String
+        let seasonNumber: Int?
+    }
+
+    static func mediaIntent(for title: String) -> MediaIntent {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let suffix = parsedSuffix(in: trimmed) else {
+            return MediaIntent(seriesTitle: trimmed, seasonNumber: nil)
+        }
+        return MediaIntent(seriesTitle: suffix.base, seasonNumber: suffix.season)
+    }
+
     static func queries(for title: String, alternatives: [String] = []) -> [String] {
         var result: [String] = []
         var seen = Set<String>()
         for candidate in [title] + alternatives {
             let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
             guard trimmed.count > 1 else { continue }
-            let variants = [trimmed, parsedSuffix(in: trimmed)?.base].compactMap { $0 }
+            // Search the *series*, not the release suffix. Localized title
+            // matching must run before a slower literal "Season 2" fallback.
+            let parsed = mediaIntent(for: trimmed)
+            let variants = parsed.seasonNumber == nil
+                ? [trimmed] : [parsed.seriesTitle, trimmed]
             for value in variants {
                 let normalized = value.folding(
                     options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
                 if seen.insert(normalized).inserted { result.append(value) }
-                // Certain metadata services use the English release name while
-                // S.to publishes a localized title. Query both real names
-                // before doing weak one-word searches; don't invent results.
                 if normalized.lowercased().contains("dexter") &&
                     normalized.lowercased().contains("resurrection") {
                     let german = "Dexter: Wiedererwachen"
@@ -76,7 +95,7 @@ enum ModuleSeasonFallback {
         guard (module.sourceName.localizedCaseInsensitiveContains("AniWorld") ||
                module.sourceName.localizedCaseInsensitiveContains("s.to") ||
                module.sourceName.localizedCaseInsensitiveContains("SerienStream")),
-              let season = parsedSuffix(in: title)?.season else { return (false, nil) }
+              let season = mediaIntent(for: title).seasonNumber else { return (false, nil) }
         let hasSeasonPaths = episodes.contains { $0.href.localizedCaseInsensitiveContains("/staffel-") }
         guard hasSeasonPaths else { return (false, nil) }
         let ending = "/staffel-\(season)/episode-\(number)"
