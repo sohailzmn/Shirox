@@ -207,6 +207,8 @@ struct CatalogDetailScreen: View {
         error = nil; loading = true
         let request = AutomaticPlaybackRequest(catalogID: title.id, title: title.name,
                                                aliases: [title.originalName].compactMap { $0 }, kind: title.kind,
+                                               animeID: title.anime?.provider == .anilist ? title.anime?.id : nil,
+                                               seasonIsExplicit: title.kind != .anime,
                                                season: season, episode: episode, detailHref: title.sourceHref, moduleID: title.moduleID)
         #if os(iOS)
         PlayerPresenter.shared.presentResolvingEpisode(title: title.name, episode: episode, artwork: title.poster ?? "", onResolve: {

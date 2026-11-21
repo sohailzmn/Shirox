@@ -482,7 +482,9 @@ struct ModuleStreamPickerView: View {
                 let request = AutomaticPlaybackRequest(
                     catalogID: mediaId.map { "anilist-\($0)" }, title: intent.seriesTitle,
                     aliases: alternateTitles, kind: .anime,
-                    season: intent.seasonNumber ?? 1, episode: episodeNumber)
+                    animeID: mediaId, seasonIsExplicit: intent.seasonNumber != nil,
+                    season: intent.seasonNumber ?? 1,
+                    episode: ModuleSeasonFallback.sourceEpisodeNumber(for: animeTitle, fallback: episodeNumber))
                 let result = try await AutomaticPlaybackCoordinator.shared.resolve(request) { value in
                     autoPlayMessage = value
                     onStatus?(value)

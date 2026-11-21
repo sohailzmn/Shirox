@@ -3,6 +3,13 @@ import Combine
 
 extension JSEngine {
     func fetchStreams(episodeUrl: String, timeout: TimeInterval = 120) async throws -> [StreamResult] {
+        if let module = ModuleManager.shared.activeModule, !module.isLocalPlayback, !module.isJellyfin {
+            return try await PlaybackDeadline.run(seconds: min(timeout, 30)) {
+                let runner = ModuleJSRunner()
+                try await runner.load(module: module)
+                return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: episodeUrl, legacyModule: module)
+            }
+        }
         // A time limit applies to the entire JS resolver, including its hoster
         // attempts. The default remains unchanged for existing providers.
         let json = try await callAsyncJS("extractStreamUrl", args: [episodeUrl], timeout: timeout)

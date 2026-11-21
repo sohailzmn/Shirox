@@ -29,6 +29,7 @@ final class ModuleJSRunner {
 
     private var context: JSContext?
     private var moduleCacheKey = ""
+    private var loadedModule: ModuleDefinition?
 
     // Browsing a series, playing several episodes and Auto Next previously
     // re-downloaded the complete season list on every new runner. Only catalog
@@ -58,6 +59,7 @@ final class ModuleJSRunner {
     // MARK: - Load module
 
     func load(module: ModuleDefinition) async throws {
+        loadedModule = module
         moduleCacheKey = module.id + "|" + module.scriptUrl
         // Never globally wipe shared WKWebView cookies just because a new
         // episode is starting. It added I/O and invalidated legitimate website
@@ -151,7 +153,10 @@ final class ModuleJSRunner {
 
     // MARK: - Streams
 
-    func fetchStreams(episodeUrl: String, languagePriority: Int? = nil) async throws -> [StreamResult] {
+    func fetchStreams(episodeUrl: String, languagePriority: Int? = nil, preflight: Bool = true) async throws -> [StreamResult] {
+        if preflight, loadedModule?.isLocalPlayback != true, loadedModule?.isJellyfin != true {
+            return try await AutomaticPlaybackCoordinator.shared.streams(runner: self, episodeHref: episodeUrl, legacyModule: loadedModule)
+        }
         let args: [Any] = languagePriority.map { [episodeUrl, ["languagePriority": $0]] } ?? [episodeUrl]
         let json = try await callAsyncJS("extractStreamUrl", args: args)
         let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)

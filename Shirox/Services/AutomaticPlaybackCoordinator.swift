@@ -17,7 +17,8 @@ enum PlaybackLanguagePolicy {
         if stream.audioLanguage == nil,
            stream.title.range(of: #"(?i)\b(?:GER\s*DUB|German\s*Dub|Deutsch)\b"#,
                               options: .regularExpression) != nil,
-           !stream.title.lowercased().contains("sub") { stream.audioLanguage = "de" }
+           !stream.title.lowercased().contains("sub"),
+           !stream.title.lowercased().contains("untertitel") { stream.audioLanguage = "de" }
         let tracks = stream.allSubtitles ?? []
         let selected = tracks.first { code($0.language ?? $0.title) == "de" }
             ?? tracks.first { code($0.language ?? $0.title) == "en" }
@@ -71,6 +72,8 @@ struct AutomaticPlaybackRequest {
     let title: String
     var aliases: [String] = []
     var kind: CatalogKind = .anime
+    var animeID: Int? = nil
+    var seasonIsExplicit = false
     var season = 1
     var episode = 1
     var detailHref: String? = nil
@@ -103,6 +106,12 @@ final class AutomaticPlaybackCoordinator {
     private func resolveWithinDeadline(_ request: AutomaticPlaybackRequest,
                                        status: ((String) -> Void)?) async throws -> AutomaticPlaybackResult {
         let started = Date()
+        let seasonOffset: Int
+        if request.kind == .anime, let id = request.animeID, !request.seasonIsExplicit {
+            seasonOffset = (try? await PlaybackDeadline.run(seconds: 3) {
+                await SeasonChainMapper.shared.resolveOffset(anchorAniListID: id, anchorMALID: nil) ?? 0
+            }) ?? 0
+        } else { seasonOffset = 0 }
         var modules = ModuleManager.shared.modules.filter { !$0.isManga && !$0.isLocalPlayback && !$0.isJellyfin }
         if modules.isEmpty {
             await ModuleManager.shared.ensureUnifiedGermanSource()
@@ -134,10 +143,10 @@ final class AutomaticPlaybackCoordinator {
                     let queries = Array(ModuleSeasonFallback.queries(for: request.title, alternatives: request.aliases).prefix(2))
                     for query in queries {
                         let found = try await PlaybackDeadline.run(seconds: 5) { try await runner.search(keyword: query) }
-                        items += found.filter {
-                            CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: request.title)
+                        items += found.filter { item in
+                            CatalogModuleTitleMatch.matches(candidateTitle: item.title, requestedTitle: request.title)
                                 || request.aliases.contains { alias in
-                                    CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: alias)
+                                    CatalogModuleTitleMatch.matches(candidateTitle: item.title, requestedTitle: alias)
                                 }
                         }
                         if !items.isEmpty { break }
@@ -160,7 +169,13 @@ final class AutomaticPlaybackCoordinator {
                         episodes = []
                     } else {
                         episodes = try await PlaybackDeadline.run(seconds: 8) { try await runner.fetchEpisodes(url: item.href) }
-                        if let exact = ModuleSeasonRouting.exactEpisode(episodes, season: request.season, episode: request.episode) {
+                        if request.kind == .anime, seasonOffset > 0,
+                           let exact = EpisodeNavigator.resolve(href: nil, orNumber: seasonOffset + request.episode, in: episodes) {
+                            episode = exact
+                        } else if request.kind == .anime, seasonOffset > 0 {
+                            // An unresolved sequel must never silently play S1 E1.
+                            lastError = AutomaticPlaybackError.noEpisode; continue
+                        } else if let exact = ModuleSeasonRouting.exactEpisode(episodes, season: request.season, episode: request.episode) {
                             episode = exact
                         } else if request.kind == .movie, episodes.count == 1, let only = episodes.first {
                             episode = only
@@ -198,7 +213,7 @@ final class AutomaticPlaybackCoordinator {
                 try Task.checkCancellation()
                 do {
                     return try await PlaybackDeadline.run(seconds: 10) {
-                        let raw = try await runner.fetchStreams(episodeUrl: episodeHref, languagePriority: language)
+                        let raw = try await runner.fetchStreams(episodeUrl: episodeHref, languagePriority: language, preflight: false)
                         let candidates = raw.map(PlaybackLanguagePolicy.prepare).filter { PlaybackLanguagePolicy.priority($0) == language }
                         return try await self.verified(candidates, legacyModule: legacyModule)
                     }
@@ -208,7 +223,7 @@ final class AutomaticPlaybackCoordinator {
             }
             throw lastError
         }
-        let raw = try await PlaybackDeadline.run(seconds: 25) { try await runner.fetchStreams(episodeUrl: episodeHref) }
+        let raw = try await PlaybackDeadline.run(seconds: 25) { try await runner.fetchStreams(episodeUrl: episodeHref, preflight: false) }
         return try await verified(raw, legacyModule: legacyModule)
     }
 

@@ -67,7 +67,7 @@ final class CatalogConfiguration: ObservableObject {
     @Published private(set) var hasToken = false
     @Published var message: String?
     private let service = "com.shirox.catalog.tmdb"
-    private init() { hasToken = token != nil }
+    private init() { FreshInstallKeychainPurge.runIfNeeded(); hasToken = token != nil }
     var token: String? {
         let query: [CFString: Any] = [kSecClass: kSecClassGenericPassword, kSecAttrService: service,
                                      kSecAttrAccount: "read-token", kSecReturnData: true, kSecMatchLimit: kSecMatchLimitOne]
