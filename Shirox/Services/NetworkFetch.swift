@@ -1274,13 +1274,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         webView.customUserAgent = headers.first { $0.key.lowercased() == "user-agent" }?.value
         addRequest(url.absoluteString)
         var request = URLRequest(url: url)
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        request.setValue("en-US,en;q=0.5", forHTTPHeaderField: "Accept-Language")
-        request.setValue("gzip, deflate, br", forHTTPHeaderField: "Accept-Encoding")
-        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-        request.setValue("upgrade-insecure-requests", forHTTPHeaderField: "Upgrade-Insecure-Requests")
-        request.setValue("same-origin", forHTTPHeaderField: "Sec-Fetch-Site")
-        request.setValue("navigate", forHTTPHeaderField: "Sec-Fetch-Mode")
+        // WebKit supplies navigation, compression and fetch-metadata headers.
+        // Keep its real browser context instead of contradictory synthetic values.
 
         // WKWebView ignores Cookie headers set on URLRequest — inject via WKHTTPCookieStore instead
         var cookiesToInject: [HTTPCookie] = []
@@ -1305,10 +1300,6 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             }
         }
 
-        if request.value(forHTTPHeaderField: "Referer") == nil {
-            let randomReferers = ["https://www.google.com/", "https://www.youtube.com/", "https://twitter.com/", "https://www.reddit.com/", "https://www.facebook.com/"]
-            request.setValue(randomReferers.randomElement() ?? "https://www.google.com/", forHTTPHeaderField: "Referer")
-        }
 
         func doLoad() {
             webView.load(request)
