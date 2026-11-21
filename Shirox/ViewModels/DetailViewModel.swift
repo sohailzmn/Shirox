@@ -345,9 +345,7 @@ final class DetailViewModel: ObservableObject {
             // A CF wall during the fetch leaves no streams but a flagged host — offer
             // a user-initiated "Verify Cloudflare" button instead of "No Streams Found".
             guard !Task.isCancelled else { return }
-            needsCloudflareVerification = pendingStream == nil
-                && streamOptions.isEmpty
-                && CloudflareBypassManager.shared.pendingVerificationURL != nil
+            needsCloudflareVerification = false
             if needsCloudflareVerification {
                 errorMessage = "This provider requires website verification before streaming."
             } else if pendingStream == nil && streamOptions.isEmpty && errorMessage == nil {
@@ -385,8 +383,10 @@ final class DetailViewModel: ObservableObject {
     /// Fetches streams for the given episode and returns them sorted by title.
     /// Unlike loadStreams(for:), this does not affect UI state — safe to call from onWatchNext.
     func fetchStreams(for episode: EpisodeLink) async throws -> [StreamResult] {
-        let streams = try await JSEngine.shared.fetchStreams(episodeUrl: episode.href)
-        return streams.sorted { $0.title < $1.title }
+        guard let module = ModuleManager.shared.activeModule else { throw AutomaticPlaybackError.noSource }
+        let runner = ModuleJSRunner()
+        try await runner.load(module: module)
+        return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: episode.href, legacyModule: module)
     }
 
     func pickStream(_ stream: StreamResult) {
@@ -509,7 +509,7 @@ final class DetailViewModel: ObservableObject {
                 // episode. Never fall back to another season's episode number.
                 let runner = ModuleJSRunner()
                 try await runner.load(module: module)
-                return try await runner.fetchStreams(episodeUrl: episode.href)
+                return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: episode.href, legacyModule: module)
             }
         }()
         let watchNextLoader: WatchNextLoader? = {

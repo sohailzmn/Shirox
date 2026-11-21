@@ -265,6 +265,7 @@ struct PlayerView: View {
                                    firstFrameWatchdog?.cancel()
                                    firstFrameWatchdog = nil
                                    PlaybackPerformance.shared.firstFrameReady()
+                                   CatalogAvailabilityStore.shared.recordPlayback(context: currentContext)
                                })
                     .ignoresSafeArea()
                     .overlay { videoLoadingOverlay }

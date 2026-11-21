@@ -18,6 +18,8 @@ enum ModuleSearchFailure: LocalizedError {
 final class SearchViewModel: ObservableObject {
     @Published var moduleResults: [SearchItem] = []
     @Published var aniListResults: [Media] = []
+    @Published var catalogResults: [CatalogTitle] = []
+    @Published var catalogError: String?
     @Published var liveActionResults: [LiveActionTitle] = []
     @Published var liveActionLoading = false
     @Published var liveActionError: String?
@@ -54,8 +56,18 @@ final class SearchViewModel: ObservableObject {
         liveActionResults = []
         liveActionError = nil
         liveActionLoading = false
-        // Series and films are searched exclusively through the selected
-        // streaming module. TVmaze/Apple metadata discovery is not started.
+        catalogResults = []
+        catalogError = nil
+        liveActionTask = Task {
+            do {
+                let titles = try await UnifiedCatalog.shared.search(q)
+                guard !Task.isCancelled else { return }
+                catalogResults = CatalogAvailabilityStore.shared.rank(titles)
+            } catch {
+                guard !Task.isCancelled else { return }
+                catalogError = error.localizedDescription
+            }
+        }
 
         searchTask = Task {
             do {
@@ -73,8 +85,7 @@ final class SearchViewModel: ObservableObject {
                         }
                         throw error
                     }
-                    if CloudflareBypassManager.shared.pendingVerificationURL != nil {
-                        CloudflareBypassManager.shared.pendingVerificationURL = nil
+                    if CloudflareBypassManager.shared.pendingVerificationURL != nil && res.isEmpty {
                         throw ModuleSearchFailure.websiteRestricted
                     }
                     if !Task.isCancelled {
@@ -124,10 +135,12 @@ final class SearchViewModel: ObservableObject {
         isLoading = false
         errorMessage = nil
         hasSearched = false
+        catalogResults = []
+        catalogError = nil
     }
 
-    var hasResults: Bool { !moduleResults.isEmpty || !aniListResults.isEmpty || !liveActionResults.isEmpty }
-    var resultCount: Int { moduleResults.count + aniListResults.count + liveActionResults.count }
+    var hasResults: Bool { !catalogResults.isEmpty || !moduleResults.isEmpty || !aniListResults.isEmpty || !liveActionResults.isEmpty }
+    var resultCount: Int { catalogResults.count + moduleResults.count + aniListResults.count + liveActionResults.count }
 }
 
 

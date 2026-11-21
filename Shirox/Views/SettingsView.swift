@@ -111,6 +111,8 @@ struct SettingsView: View {
                         .tint(.secondary)
                 }
 
+                CatalogAccessSettings()
+
                 Section("Intelligente Suche") {
                     Toggle("Automatische Trefferverbesserung", isOn: $jev.enabled)
                         .tint(.secondary)

@@ -32,84 +32,22 @@ struct HomeView: View {
 
     var body: some View {
         NavigationStack {
-            Group {
-                if vm.isLoading && vm.trending.isEmpty {
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = vm.error, vm.trending.isEmpty {
-                    ContentUnavailableView(
-                        "Couldn't Load",
-                        systemImage: "wifi.slash",
-                        description: Text(error)
-                    )
-                    .toolbar {
-                        ToolbarItem(placement: .primaryAction) {
-                            Button("Retry") { Task { await vm.reload() } }
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    #if os(iOS)
+                    if !continueWatching.items.isEmpty {
+                        ContinueWatchingSection(items: continueWatching.items, navTarget: $cwNavTarget)
                     }
-                } else {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 24) {
-                            if !vm.trending.isEmpty {
-                                FeaturedCarousel(items: vm.trending)
-                            }
-                            #if os(iOS)
-                            if !continueWatching.items.isEmpty {
-                                ContinueWatchingSection(items: continueWatching.items, navTarget: $cwNavTarget)
-                            }
-                            if !mangaProgress.items.isEmpty {
-                                ContinueReadingSection(items: mangaProgress.items, readerContext: $readerContext)
-                            }
-                            #endif
-                            #if os(iOS)
-                            let suggestions = vm.recommendations(for: continueWatching.items)
-                            if !suggestions.isEmpty {
-                                AnimeSection(
-                                    title: "Because You Watched",
-                                    items: suggestions,
-                                    category: .trending
-                                )
-                            }
-                            #endif
-                            if !vm.trending.isEmpty {
-                                AnimeSection(title: "Trending Now",     items: vm.trending, category: .trending)
-                            }
-                            if !vm.seasonal.isEmpty {
-                                AnimeSection(title: "This Season",      items: vm.seasonal, category: .seasonal)
-                            }
-                            if !vm.lastSeason.isEmpty {
-                                AnimeSection(title: "Last Season · Complete", items: vm.lastSeason, category: .lastSeason)
-                            }
-                            if !vm.popular.isEmpty {
-                                AnimeSection(title: "All-Time Popular", items: vm.popular,  category: .popular)
-                            }
-                            if !vm.topRated.isEmpty {
-                                AnimeSection(title: "Top Rated",        items: vm.topRated, category: .topRated)
-                            }
-                        }
-                        Spacer().frame(height: 28)
-                    }
-                    .softScrollEdges()
-                    .refreshable {
-                        await withTaskGroup(of: Void.self) { group in
-                            group.addTask { await vm.reload() }
-                            group.addTask {
-                                // Sequential: both sync funcs mutate the same CW store across
-                                // await points, so running them concurrently could clobber items.
-                                await ContinueWatchingManager.shared.syncWithAniList()
-                                await ContinueWatchingManager.shared.syncWithMAL()
-                            }
-                        }
-                    }
-                    .coordinateSpace(name: "homeScroll")
-                    // Only the hero is allowed under the status bar — bleeding its banner up
-                    // there is the point of it. Without one, this same modifier slid whatever
-                    // row happened to be first up under the clock, which is what a title row
-                    // overlapping the time looked like. The hero can be absent for ordinary
-                    // reasons: a provider that doesn't fill Trending, or an outage on the
-                    // endpoint behind it.
-                    .ignoresSafeArea(edges: vm.trending.isEmpty ? [] : .top)
-                }
+                    #endif
+                    UnifiedHomeSections(animeVM: vm)
+                }.padding(.vertical, 16)
+            }
+            .softScrollEdges()
+            .refreshable {
+                await vm.reload()
+                await UnifiedCatalog.shared.load()
+                await ContinueWatchingManager.shared.syncWithAniList()
+                await ContinueWatchingManager.shared.syncWithMAL()
             }
             // `ProviderStatusBanner` existed but was never placed in any view — a provider
             // switch that quietly falls back (AniList failing in a way ProviderManager treats

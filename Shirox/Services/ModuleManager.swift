@@ -53,6 +53,12 @@ final class ModuleManager: ObservableObject {
         didCheckUnifiedGermanThisLaunch = true
 
         let task = Task { @MainActor in
+            if installBundledSource() {
+                // The app and its tested resolver ship together. A remote update
+                // is optional and must never delay the first playback attempt.
+                Task { await self.refreshUnifiedGermanSource() }
+                return
+            }
             // Already installed? Pick up a repaired manifest/script at launch.
             // Respect explicit user removal: do not silently reinstall it.
             if UserDefaults.standard.bool(forKey: unifiedGermanInstalledKey) {
@@ -74,6 +80,28 @@ final class ModuleManager: ObservableObject {
         unifiedGermanBootstrapTask = nil
     }
 
+    @discardableResult
+    private func installBundledSource() -> Bool {
+        guard var bundled = BundledUnifiedSource.module else { return false }
+        bundled.jsonUrl = unifiedGermanURL
+        if let index = modules.firstIndex(where: { $0.id == bundled.id || $0.jsonUrl == unifiedGermanURL }) {
+            if bundled.version.compare(modules[index].version, options: .numeric) == .orderedDescending {
+                let active = activeModule?.id == modules[index].id
+                modules[index] = bundled
+                saveToStorage()
+                if active { selectModule(bundled) }
+            }
+            return true
+        }
+        // An explicit removal remains respected across app upgrades.
+        guard !UserDefaults.standard.bool(forKey: unifiedGermanInstalledKey) else { return false }
+        modules.append(bundled)
+        UserDefaults.standard.set(true, forKey: unifiedGermanInstalledKey)
+        saveToStorage()
+        if activeModule == nil { selectModule(bundled) }
+        return true
+    }
+
     /// Refresh only the bundled unified source, not unrelated third-party
     /// modules. A cached working script remains installed if GitHub is offline.
     private func refreshUnifiedGermanSource() async {
@@ -87,7 +115,7 @@ final class ModuleManager: ObservableObject {
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             var fresh = try JSONDecoder().decode(ModuleDefinition.self, from: data)
             guard let old = modules.first(where: { $0.jsonUrl == unifiedGermanURL }),
-                  old.version != fresh.version,
+                  fresh.version.compare(old.version, options: .numeric) == .orderedDescending,
                   fresh.scriptUrl == old.scriptUrl else { return }
 
             fresh.jsonUrl = unifiedGermanURL

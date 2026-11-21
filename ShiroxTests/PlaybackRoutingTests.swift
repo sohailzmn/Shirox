@@ -17,6 +17,81 @@ import XCTest
 ///    Now Playing had the same problem in reverse — it published the local player's rate and
 ///    clock, so Control Center showed "paused, 0:00" over a movie the TV was happily playing.
 final class PlaybackRoutingTests: XCTestCase {
+    func testLanguageOrderAndUnknownAudio() {
+        let url = URL(string: "https://media.example/video.m3u8")!
+        let german = StreamResult(title: "Hoster", url: url, headers: [:], audioLanguage: "de")
+        let germanSub = StreamResult(title: "Hoster", url: url, headers: [:], subtitleLanguage: "de", isHardsub: true)
+        let englishSub = StreamResult(title: "Hoster", url: url, headers: [:], subtitleLanguage: "en", isHardsub: true)
+        XCTAssertEqual(PlaybackLanguagePolicy.priority(german), 0)
+        XCTAssertEqual(PlaybackLanguagePolicy.priority(germanSub), 1)
+        XCTAssertEqual(PlaybackLanguagePolicy.priority(englishSub), 2)
+        XCTAssertNil(PlaybackLanguagePolicy.priority(StreamResult(title: "Hoster", url: url, headers: [:])))
+    }
+
+    func testPerStreamSubtitleMetadataAndAutomaticSelection() throws {
+        let streams = parseStreamResults(from: ["streams": [[
+            "streamUrl": "https://media.example/video.m3u8", "audioLanguage": "ja",
+            "allSubtitles": [
+                ["url": "https://media.example/en.vtt", "lang": "en", "label": "English"],
+                ["url": "https://media.example/de.vtt", "lang": "de", "label": "Deutsch"]
+            ]
+        ]]])
+        let selected = PlaybackLanguagePolicy.prepare(try XCTUnwrap(streams.first))
+        XCTAssertEqual(selected.subtitleLanguage, "de")
+        XCTAssertEqual(selected.subtitleURL?.lastPathComponent, "de.vtt")
+        XCTAssertEqual(PlaybackLanguagePolicy.priority(selected), 1)
+    }
+
+    func testSubtitleLanguageRoundTripsAndLegacyBackupDecodes() throws {
+        let legacy = Data(#"{"id":"A52B0712-0413-4E90-B8B8-897CE7CC7197","title":"English","url":"https://media.example/en.vtt","headers":{}}"#.utf8)
+        let track = try JSONDecoder().decode(SubtitleTrack.self, from: legacy)
+        XCTAssertNil(track.language)
+        XCTAssertEqual(PlaybackLanguagePolicy.code(track.title), "en")
+    }
+
+    func testPreflightRejectsHTMLAndPrivateURLs() {
+        XCTAssertFalse(StreamPreflight.mediaBytes(Data("<html>Not a video</html>".utf8)))
+        XCTAssertFalse(StreamPreflight.isPlaylist(Data("<html>#EXTM3U</html>".utf8)))
+        XCTAssertTrue(StreamPreflight.isPlaylist(Data("#EXTM3U\n#EXTINF:10,\nsegment.ts".utf8)))
+        XCTAssertFalse(StreamPreflight.validRemoteURL(URL(string: "https://127.0.0.1/video.mp4")!))
+        XCTAssertFalse(StreamPreflight.validRemoteURL(URL(string: "https://user:secret@media.example/video.mp4")!))
+        XCTAssertTrue(StreamPreflight.validRemoteURL(URL(string: "https://media.example/video.m3u8?token=opaque")!))
+    }
+
+    @MainActor func testDeadlineReturnsWithoutWaitingForSlowOperation() async {
+        do {
+            let _: String = try await PlaybackDeadline.run(seconds: 0.01) {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                return "late"
+            }
+            XCTFail("Slow operation must time out")
+        } catch { XCTAssertTrue(error is AutomaticPlaybackError) }
+    }
+
+    @MainActor func testAvailabilityRankingPreservesChartOrderAndRequiresFirstFrameForPlayed() {
+        let a = CatalogTitle(id: UUID().uuidString, remoteID: 1, kind: .series, name: "A")
+        let b = CatalogTitle(id: UUID().uuidString, remoteID: 2, kind: .series, name: "B")
+        let c = CatalogTitle(id: UUID().uuidString, remoteID: 3, kind: .anime, name: "C")
+        let store = CatalogAvailabilityStore.shared
+        store.set(id: c.id, state: .reachable)
+        XCTAssertEqual(store.rank([a,b,c]).map(\.id), [c.id,a.id,b.id])
+        XCTAssertEqual(store.state(c.id), .reachable)
+        XCTAssertNotEqual(store.state(c.id), .played)
+    }
+
+    func testTMDBAndAnimeIDsCannotCollide() throws {
+        let data = Data(#"{"id":42,"name":"Titel","original_name":"Title","overview":"Deutsche Beschreibung"}"#.utf8)
+        let title = try JSONDecoder().decode(UnifiedCatalog.TMDBTitle.self, from: data)
+        XCTAssertEqual(title.mapped(kind: .series).id, "tmdb-tv-42")
+        XCTAssertEqual(title.mapped(kind: .movie).id, "tmdb-movie-42")
+        XCTAssertNotEqual(title.mapped(kind: .series).id, "anilist-42")
+    }
+
+    func testBundledResolverMatchesAppLanguageContract() throws {
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        XCTAssertEqual(bundled.version, "2.0.0")
+        XCTAssertTrue(bundled.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true)
+    }
     func testWebsiteChallengeIsNotAnEmptyVideoResult() {
         XCTAssertThrowsError(try parseResolvedStreamResults(from: [
             "streams": [], "blockedReason": "website_verification_required"

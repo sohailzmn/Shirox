@@ -151,8 +151,9 @@ final class ModuleJSRunner {
 
     // MARK: - Streams
 
-    func fetchStreams(episodeUrl: String) async throws -> [StreamResult] {
-        let json = try await callAsyncJS("extractStreamUrl", args: [episodeUrl])
+    func fetchStreams(episodeUrl: String, languagePriority: Int? = nil) async throws -> [StreamResult] {
+        let args: [Any] = languagePriority.map { [episodeUrl, ["languagePriority": $0]] } ?? [episodeUrl]
+        let json = try await callAsyncJS("extractStreamUrl", args: args)
         let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let url = URL(string: trimmed), url.scheme != nil, !trimmed.hasPrefix("{") {

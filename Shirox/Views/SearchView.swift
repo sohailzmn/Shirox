@@ -84,7 +84,7 @@ struct SearchView: View {
         NavigationStack {
             mainContent
                 .background(SearchActivationObserver { vm.clearResults() })
-                .navigationTitle("Search")
+                .navigationTitle("Suche")
                 .toolbar {
                     ToolbarItem(placement: .automatic) {
                         moduleButton
@@ -339,6 +339,18 @@ struct SearchView: View {
     private var resultsView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
+                if !vm.catalogResults.isEmpty {
+                    Text("Serien und Filme").font(.title3.bold()).padding(.horizontal, 16)
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(vm.catalogResults) { title in
+                            NavigationLink { CatalogDetailScreen(title: title) } label: { CatalogPoster(title: title) }
+                                .buttonStyle(CardPressStyle())
+                        }
+                    }.padding(.horizontal, 16)
+                }
+                if let message = vm.catalogError {
+                    Text(message).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
+                }
                 if let moduleEpisodeHint, usingModule {
                     Label(moduleEpisodeHint, systemImage: "info.circle")
                         .font(.subheadline)
@@ -567,7 +579,7 @@ private struct ConditionalSearchable: ViewModifier {
     @Binding var text: String
     func body(content: Content) -> some View {
         if enabled {
-            content.searchable(text: $text, prompt: "Search anime…")
+            content.searchable(text: $text, prompt: "Serien, Anime und Filme suchen …")
         } else {
             content
         }

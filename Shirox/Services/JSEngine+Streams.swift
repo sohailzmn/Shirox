@@ -35,7 +35,7 @@ func parseResolvedStreamResults(from obj: [String: Any]) throws -> [StreamResult
 func parseStreamResults(from obj: [String: Any]) -> [StreamResult] {
     let subtitleUrl = (obj["subtitle"] as? String ?? obj["subtitles"] as? String).flatMap { $0.isEmpty ? nil : $0 }
     let subtitleHeaders = obj["subtitleHeaders"] as? [String: String] ?? [:]
-    let allSubtitles = parseSubtitleTracks(from: obj["allSubtitles"])
+    let allSubtitles = parseSubtitleTracks(from: obj["allSubtitles"] ?? obj["subtitles"])
 
     var results: [StreamResult] = []
 
@@ -48,9 +48,16 @@ func parseStreamResults(from obj: [String: Any]) -> [StreamResult] {
             guard seen.insert(urlStr).inserted else { continue }
             let title = stream["title"] as? String ?? "Stream"
             let headers = stream["headers"] as? [String: String] ?? [:]
+            let tracks = parseSubtitleTracks(from: stream["allSubtitles"] ?? stream["subtitles"]) ?? allSubtitles
             results.append(StreamResult(title: title, url: url, headers: headers,
-                                        subtitle: subtitleUrl, subtitleHeaders: subtitleHeaders,
-                                        allSubtitles: allSubtitles))
+                                        subtitle: stream["subtitle"] as? String ?? subtitleUrl,
+                                        subtitleHeaders: stream["subtitleHeaders"] as? [String: String] ?? subtitleHeaders,
+                                        allSubtitles: tracks,
+                                        audioLanguage: stream["audioLanguage"] as? String,
+                                        subtitleLanguage: stream["subtitleLanguage"] as? String,
+                                        isHardsub: stream["isHardsub"] as? Bool ?? false,
+                                        resolution: stream["resolution"] as? Int,
+                                        expiresAt: (stream["expiresAt"] as? Double).map { Date(timeIntervalSince1970: $0) }))
         }
     } else if let streams = obj["streams"] as? [String] {
         for (i, urlStr) in streams.enumerated() {
@@ -90,7 +97,8 @@ private func parseSubtitleTracks(from value: Any?) -> [SubtitleTrack]? {
             ?? item["name"] as? String
             ?? "Subtitle"
         let headers = item["headers"] as? [String: String] ?? [:]
-        return SubtitleTrack(title: title, url: url, headers: headers)
+        return SubtitleTrack(title: title, url: url, headers: headers,
+                             language: item["lang"] as? String ?? item["language"] as? String)
     }
     return tracks.isEmpty ? nil : tracks
 }
