@@ -962,6 +962,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         let autoMaxWait = options?.maxWaitTime ?? 3
         let jsCode = """
         (function() {
+            // Challenge frames (including their initial empty documents) must
+            // retain the browser's original APIs and global scope.
+            if (location.protocol === 'about:' || location.hostname.toLowerCase() === 'challenges.cloudflare.com') return;
             const sourceHosts = ['aniworld.to','aniworld.cc','serienstream.to','serienstream.cx','s.to'];
             const sourceDocument = sourceHosts.includes(location.hostname.toLowerCase().replace(/^www\\./,''));
             const passiveDocument = sourceDocument || location.hostname.toLowerCase() === 'challenges.cloudflare.com';

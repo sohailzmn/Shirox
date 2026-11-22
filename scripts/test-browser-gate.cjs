@@ -26,3 +26,12 @@ assert.equal(playerFixture(true,'payload').length,0);
 assert.equal(playerFixture(false,'payload').length,1);
 assert.equal(playerFixture(false,'x'.repeat(1000001)).length,0);
 console.log('PASS: bounded single player capture; protected documents remain passive');
+
+// Evaluate the real document-start guard, before any observer or hook is installed.
+const guardStart=source.indexOf("            // Challenge frames");
+const guardEnd=source.indexOf("            const sourceHosts",guardStart);
+for(const location of [{protocol:'https:',hostname:'challenges.cloudflare.com'},{protocol:'about:',hostname:''}]){
+ const untouched={};vm.runInNewContext('(function(){'+source.slice(guardStart,guardEnd)+';window.modified=true})()', {location,window:untouched});
+ assert.equal(untouched.modified,undefined);
+}
+console.log('PASS: challenge and initial about documents receive no browser hooks');
