@@ -322,7 +322,7 @@ final class PlaybackRoutingTests: XCTestCase {
 
     func testBundledResolverMatchesAppLanguageContract() throws {
         let bundled = try XCTUnwrap(BundledUnifiedSource.module)
-        XCTAssertEqual(bundled.version, "2.0.5")
+        XCTAssertEqual(bundled.version, "2.0.6")
         XCTAssertTrue(bundled.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true)
     }
     func testWebsiteChallengeIsNotAnEmptyVideoResult() {
