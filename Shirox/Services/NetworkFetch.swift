@@ -995,11 +995,26 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                     const form = document.getElementById('player-prepare-form');
                     const response = form && Array.from(form.querySelectorAll('input[name="cf-turnstile-response"]')).find(function(input) { return !!input.value; });
                     const responsePresent = !!response;
+                    const proof = form && form.querySelector('altcha-widget');
+                    // Run the website's own proof-of-work implementation. Never
+                    // manufacture a payload or submit before both checks pass.
+                    if (proof && !proof.__shiroxProofStarted && typeof proof.verify === 'function') {
+                        try {
+                            const challenge = new URL(proof.getAttribute('challengeurl'), location.href);
+                            const action = new URL(form.action, location.href);
+                            if (challenge.origin === location.origin && action.origin === location.origin &&
+                                action.pathname === '/r' && form.target === 'player-iframe') {
+                                proof.__shiroxProofStarted = true;
+                                Promise.resolve(proof.verify()).catch(function() {});
+                            }
+                        } catch(e) {}
+                    }
+                    const proofReady = !proof || (typeof proof.getState === 'function' && proof.getState() === 'verified');
                     let continued = false;
                     // Keep the real site-issued response in its own form/session.
                     // requestSubmit preserves validation/submit handlers without
                     // sending the click through third-party advertising handlers.
-                    if (responsePresent && window.__shiroxProviderActivated && form.target === 'player-iframe') {
+                    if (responsePresent && proofReady && window.__shiroxProviderActivated && form.target === 'player-iframe') {
                         const action = new URL(form.action, location.href);
                         const button = form.querySelector('button[type="submit"]');
                         if (action.origin === location.origin && action.pathname === '/r' && button &&
