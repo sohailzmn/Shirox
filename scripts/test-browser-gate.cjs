@@ -31,10 +31,12 @@ console.log('PASS: bounded single player capture; protected documents remain pas
 const guardStart=source.indexOf("            // Challenge frames");
 const guardEnd=source.indexOf("            const sourceHosts",guardStart);
 for(const location of [{protocol:'https:',hostname:'challenges.cloudflare.com'},{protocol:'about:',hostname:''}]){
- const untouched={};vm.runInNewContext('(function(){'+source.slice(guardStart,guardEnd)+';window.modified=true})()', {location,window:untouched});
+ const untouched={};vm.runInNewContext('(function(){'+source.slice(guardStart,guardEnd).split('\\\\').join('\\')+';window.modified=true})()', {location,document:{referrer:'https://challenges.cloudflare.com/widget'},window:untouched});
  assert.equal(untouched.modified,undefined);
 }
-console.log('PASS: challenge and initial about documents receive no browser hooks');
+const playerBlank={};vm.runInNewContext('(function(){'+source.slice(guardStart,guardEnd).split('\\\\').join('\\')+';window.modified=true})()', {location:{protocol:'about:',hostname:''},document:{referrer:'https://hoster.example/e/episode'},window:playerBlank});
+assert.equal(playerBlank.modified,true,'ordinary empty player documents must keep capture');
+console.log('PASS: challenge frames untouched; ordinary empty player frames retain capture');
 
 form.action='https://serienstream.to/r';let proofRuns=0,proofState='unverified';
 proof={getAttribute:()=>'/challenge',verify(){proofRuns++;proofState='verifying'},getState:()=>proofState};

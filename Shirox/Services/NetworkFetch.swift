@@ -964,7 +964,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         (function() {
             // Challenge frames (including their initial empty documents) must
             // retain the browser's original APIs and global scope.
-            if (location.protocol === 'about:' || location.hostname.toLowerCase() === 'challenges.cloudflare.com') return;
+            if (location.hostname.toLowerCase() === 'challenges.cloudflare.com' ||
+                (location.protocol === 'about:' && /^https:\\/\\/challenges\\.cloudflare\\.com(?:\\/|$)/i.test(document.referrer))) return;
             const sourceHosts = ['aniworld.to','aniworld.cc','serienstream.to','serienstream.cx','s.to'];
             const sourceDocument = sourceHosts.includes(location.hostname.toLowerCase().replace(/^www\\./,''));
             const passiveDocument = sourceDocument || location.hostname.toLowerCase() === 'challenges.cloudflare.com';
