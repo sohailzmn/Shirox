@@ -13,3 +13,16 @@ response.value='real-site-response-2';interval();assert.equal(submits,2,'fresh s
 form.action='https://other.example/r';response.value='real-site-response-3';interval();assert.equal(submits,2);
 assert.ok(!JSON.stringify(messages).includes('real-site-response'));
 console.log('PASS: form-scoped response, native submit without ad clicks, single-use tokens, fresh retry, same-origin restriction, no token logging');
+
+const playerStart=source.indexOf('            const reportPlayerPayload = function() {');
+const playerEnd=source.indexOf("            document.addEventListener('DOMContentLoaded', reportPlayerPayload",playerStart);
+const playerFunction=source.slice(playerStart,playerEnd).split('\\\\').join('\\');
+function playerFixture(passiveDocument,html){
+ const sent=[];const context={passiveDocument,location:{pathname:'/e/abc123',href:'https://player.example/e/abc123'},document:{title:'Watch episode - VOE | Content Delivery Network',querySelector:()=>({}),documentElement:{outerHTML:html}},window:{webkit:{messageHandlers:{networkLogger:{postMessage:item=>sent.push(item)}}}}};
+ vm.runInNewContext(playerFunction+';reportPlayerPayload();reportPlayerPayload();',context);
+ return sent;
+}
+assert.equal(playerFixture(true,'payload').length,0);
+assert.equal(playerFixture(false,'payload').length,1);
+assert.equal(playerFixture(false,'x'.repeat(1000001)).length,0);
+console.log('PASS: bounded single player capture; protected documents remain passive');

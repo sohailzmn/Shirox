@@ -148,6 +148,8 @@ extension JSContext {
                             url: result.originalUrl,
                             originalUrl: result.originalUrl,
                             mediaPageURL: result.mediaPageURL || null,
+                            playerPageURL: result.playerPageURL || null,
+                            playerHTML: result.playerHTML || null,
                             verificationResponsePresent: result.verificationResponsePresent || false,
                             verifiedContinuationClicked: result.verifiedContinuationClicked || false,
                             requests: result.requests,
@@ -783,6 +785,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     private var waitResults: [String: Bool] = [:]
     private var cookies: [String: String] = [:]
     private var originalUrlString: String = ""
+    private var playerPageURL: String?
+    private var playerHTML: String?
     private var mediaPageURL: String?
     private var verificationResponsePresent = false
     private var verifiedContinuationClicked = false
@@ -798,6 +802,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         self.options = options
         originalUrlString = urlString
         mediaPageURL = nil
+        playerPageURL = nil
+        playerHTML = nil
         verificationResponsePresent = false
         verifiedContinuationClicked = false
         completionHandler = completion
@@ -1181,6 +1187,17 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                 });
             };
 
+            const reportPlayerPayload = function() {
+                if (passiveDocument || !/^\\/e\\/[a-z0-9]+\\/?$/i.test(location.pathname) ||
+                    !/VOE.*(?:Content Delivery Network|Video Cloud)/i.test(document.title) ||
+                    !document.querySelector('script[type="application/json"]') || window.__shiroxPlayerReported) return;
+                window.__shiroxPlayerReported = true;
+                const html = document.documentElement.outerHTML;
+                if (html.length <= 1000000) window.webkit.messageHandlers.networkLogger.postMessage({type:'player-page',url:location.href,html:html});
+            };
+            document.addEventListener('DOMContentLoaded', reportPlayerPayload, {once:true});
+            if (document.readyState !== 'loading') reportPlayerPayload();
+
             document.addEventListener('DOMContentLoaded', function() {
                 window.waitForElementAndClick([\(autoWaitSelectors)], [\(autoClickSelectors)], \(autoMaxWait));
             }, { once: true });
@@ -1440,6 +1457,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         let result: [String: Any] = [
             "originalUrl": originalUrl,
             "mediaPageURL": mediaPageURL as Any? ?? NSNull(),
+            "playerPageURL": playerPageURL as Any? ?? NSNull(),
+            "playerHTML": playerHTML as Any? ?? NSNull(),
             "verificationResponsePresent": verificationResponsePresent,
             "verifiedContinuationClicked": verifiedContinuationClicked,
             "requests": networkRequests,
@@ -1519,6 +1538,16 @@ extension NetworkFetchMonitor: WKScriptMessageHandler {
             addRequest(url)
         }
 
+        if body["type"] as? String == "player-page", playerHTML == nil,
+           let html = body["html"] as? String, html.utf8.count <= 1_000_000,
+           let href = body["url"] as? String, let page = URL(string: href),
+           StreamPreflight.validRemoteURL(page), message.frameInfo.request.url == page,
+           page.path.range(of: #"^/e/[a-zA-Z0-9]+/?$"#, options: .regularExpression) != nil {
+            playerPageURL = href
+            playerHTML = html
+            if options?.returnHTML == true { captureDataThenComplete() }
+            return
+        }
         if let type = body["type"] as? String {
             if type == "click-results", let results = body["results"] as? [String: Any] {
                 if let waitRes = results["waitResults"] as? [String: Bool] {
