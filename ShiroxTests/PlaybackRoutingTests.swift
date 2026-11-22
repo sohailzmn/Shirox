@@ -64,6 +64,7 @@ final class PlaybackRoutingTests: XCTestCase {
             try await runner.fetchStreams(episodeUrl: "https://aniworld.to/anime/stream/spy-x-family/staffel-1/episode-1")
         }
         XCTAssertFalse(streams.isEmpty, "The real source did not return a preflight-verified stream.")
+        XCTAssertTrue(streams.contains { PlaybackLanguagePolicy.priority($0) == 0 }, "Known German episode must keep German audio before subtitle fallbacks.")
         print("LIVE_ANIWORLD_PREFLIGHT streams=\(streams.count) german=\(streams.contains { PlaybackLanguagePolicy.priority($0) == 0 })")
         try await verifyLivePlayer(streams, source: "ANIWORLD")
         print("LIVE_ANIWORLD_TOTAL_SECONDS=\(Date().timeIntervalSince(started))")

@@ -198,7 +198,7 @@ final class ModuleJSRunner {
         if preflight, loadedModule?.isLocalPlayback != true, loadedModule?.isJellyfin != true {
             return try await AutomaticPlaybackCoordinator.shared.streams(runner: self, episodeHref: episodeUrl, legacyModule: loadedModule)
         }
-        let args: [Any] = languagePriority.map { [episodeUrl, ["languagePriority": $0, "firstVerifiedOnly": true]] } ?? [episodeUrl]
+        let args: [Any] = languagePriority.map { [episodeUrl, ["languagePriority": $0]] } ?? [episodeUrl]
         let json = try await callAsyncJS("extractStreamUrl", args: args)
         let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
 
