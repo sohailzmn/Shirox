@@ -993,6 +993,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                     window.webkit.messageHandlers.networkLogger.postMessage({type:'verification-error',code:code});
             });
             const ensureSourceProof = async function(form, root) {
+                // The combined tier creates its own widget after frameBridge.
+                // A second field with the same name can replace its valid payload.
+                if (root.dataset.redirectGateTier !== 'turnstile') return;
                 if (form.querySelector('altcha-widget') || form.__shiroxProofLoading) return;
                 const action = new URL(form.action, location.href);
                 const challenge = new URL(root.dataset.altchaChallengeUrl || '', location.href);

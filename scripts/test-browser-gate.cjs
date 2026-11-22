@@ -54,3 +54,19 @@ const loader=source.slice(loaderStart,loaderEnd),slash=String.fromCharCode(92);
 assert.equal(loader.split(slash+slash).join('').includes(slash),false,'JavaScript regex escapes must be doubled inside the Swift literal');
 new vm.Script(loader.split(slash+slash).join(slash));
 console.log('PASS: source widget loader parses after Swift escape decoding');
+(async()=>{
+ const decoded=loader.split(slash+slash).join(slash);
+ for(const tier of ['turnstile_altcha','none']){
+  let touched=false;
+  const context={form:{querySelector(){touched=true;throw Error('must not add a duplicate widget')}},root:{dataset:{redirectGateTier:tier}}};
+  await vm.runInNewContext('(async()=>{'+decoded+';await ensureSourceProof(form,root)})()',context);
+  assert.equal(touched,false,'source-owned proof must not be duplicated');
+ }
+ const attributes={},proofElement={setAttribute:(name,value)=>attributes[name]=value};let appended=0;
+ const localForm={target:'player-iframe',action:'https://serienstream.to/r',isConnected:true,querySelector:()=>appended?proofElement:null,appendChild:()=>appended++};
+ const context={form:localForm,root:{dataset:{redirectGateTier:'turnstile',altchaChallengeUrl:'https://serienstream.to/api/inline/verify-init'}},URL,location:{origin:'https://serienstream.to',href:'https://serienstream.to/serie/dexter'},customElements:{get:()=>true},document:{createElement:()=>proofElement}};
+ await vm.runInNewContext('(async()=>{'+decoded+';await ensureSourceProof(form,root)})()',context);
+ await vm.runInNewContext('(async()=>{'+decoded+';await ensureSourceProof(form,root)})()',context);
+ assert.equal(appended,1);assert.equal(attributes.name,'altcha');assert.equal(attributes.challengeurl,'https://serienstream.to/api/inline/verify-init');
+ console.log('PASS: source-owned widget is never duplicated; missing proof is installed once');
+})().catch(error=>{console.error(error);process.exitCode=1});
