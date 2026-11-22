@@ -399,14 +399,15 @@ enum StreamPreflight {
     }
 
     /// Streaming the response bounds memory/network use even if a CDN ignores Range.
-    private static func read(_ url: URL, headers: [String: String]) async throws -> (Data, HTTPURLResponse) {
+    private static func read(_ url: URL, headers: [String: String], session: URLSession) async throws -> (Data, HTTPURLResponse) {
         guard validRemoteURL(url) else { throw URLError(.badURL) }
-        let session = URLSession(configuration: .ephemeral, delegate: RedirectGuard(), delegateQueue: nil)
-        defer { session.invalidateAndCancel() }
         var request = URLRequest(url: url, timeoutInterval: 3)
         headers.forEach { request.setValue($1, forHTTPHeaderField: $0) }
         request.setValue("bytes=0-131071", forHTTPHeaderField: "Range")
         let (bytes, response) = try await session.bytes(for: request)
+        // Stop an ignored Range response without tearing down the connection
+        // pool needed by the next playlist, audio, key or segment request.
+        defer { bytes.task.cancel() }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               let final = http.url, validRemoteURL(final) else { throw URLError(.badServerResponse) }
         var data = Data()
@@ -430,7 +431,24 @@ enum StreamPreflight {
 
     static func check(_ stream: StreamResult, reader: Reader? = nil) async throws -> Bool {
         guard !isPreviewURL(stream.url) else { return false }
-        let fetch = reader ?? { try await read($0, headers: $1) }
+        let session: URLSession?
+        let fetch: Reader
+        if let reader {
+            session = nil
+            fetch = reader
+        } else {
+            // One pool per verification, rather than reconnecting for every
+            // master/rendition/audio/key/segment. Never share response cookies
+            // between those requests; explicit scoped headers remain in control.
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.httpShouldSetCookies = false
+            configuration.httpCookieStorage = nil
+            configuration.urlCache = nil
+            let transport = URLSession(configuration: configuration, delegate: RedirectGuard(), delegateQueue: nil)
+            session = transport
+            fetch = { try await read($0, headers: $1, session: transport) }
+        }
+        defer { session?.invalidateAndCancel() }
         let (data, response) = try await fetch(stream.url, stream.headers)
         guard (200..<300).contains(response.statusCode) else { return false }
         if isPlaylist(data) {
