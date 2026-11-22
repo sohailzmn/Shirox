@@ -3,7 +3,7 @@ const source=fs.readFileSync('Shirox/Services/NetworkFetch.swift','utf8');
 const a=source.indexOf('if (sourceDocument) setInterval(function() {'),b=source.indexOf('},500);',a)+7;
 let interval,submits=0,clicks=0,proof=null;const messages=[];
 const response={value:''},empty={value:''};const button={disabled:false,offsetParent:{},click(){clicks++}};
-const form={target:'player-iframe',action:'https://serienstream.to/r',querySelectorAll:()=>[empty,response],querySelector:selector=>selector==='altcha-widget'?proof:button,requestSubmit(value){assert.equal(value,button);submits++}};
+const form={target:'player-iframe',action:'https://serienstream.to/r',querySelectorAll:()=>[empty,response],querySelector:selector=>selector==='altcha-widget'?proof:selector==='input[name="t"]'?{value:'opaque-site-context'}:button,requestSubmit(value){assert.equal(value,button);submits++}};
 const ctx={sourceDocument:true,document:{getElementById:id=>id==='player-prepare-form'?form:null},window:{__shiroxProviderActivated:true,webkit:{messageHandlers:{networkLogger:{postMessage:value=>messages.push(value)}}}},Promise,location:{origin:'https://serienstream.to',href:'https://serienstream.to/serie/dexter'},URL,Array,setInterval:fn=>interval=fn};
 vm.runInNewContext(source.slice(a,b),ctx);
 interval();assert.equal(submits,0);
@@ -39,10 +39,12 @@ assert.equal(playerBlank.modified,true,'ordinary empty player documents must kee
 console.log('PASS: challenge frames untouched; ordinary empty player frames retain capture');
 
 form.action='https://serienstream.to/r';let proofRuns=0,proofState='unverified';
-proof={getAttribute:()=>'/challenge',verify(){proofRuns++;proofState='verifying'},getState:()=>proofState};
-response.value='site-issued-response-with-proof';interval();interval();
-assert.equal(proofRuns,1,'run the real proof once per widget');assert.equal(submits,2,'a pending proof must block submission');
-proofState='verified';interval();assert.equal(submits,3,'submit only after the site-issued proof and Cloudflare response');
+proof={getAttribute:()=>'/api/inline/verify-init',verify(){proofRuns++;proofState='verifying'},getState:()=>proofState};
+response.value='';interval();interval();
+assert.equal(proofRuns,1,'run the real proof once per widget');assert.equal(submits,2,'an unfinished proof without a Cloudflare response must not submit');
+proofState='verified';interval();assert.equal(submits,3,'a genuine verified proof can be submitted without a Cloudflare response');
+interval();assert.equal(submits,3,'do not replay a consumed proof');
 proof={getAttribute:()=> 'https://other.example/challenge',verify(){throw Error('must not run')},getState:()=> 'unverified'};
-response.value='site-issued-response-cross-origin';interval();assert.equal(submits,3);assert.equal(proof.__shiroxProofStarted,undefined);
-console.log('PASS: site proof runs once, pending proof prevents submission, verified proof permits submission, cross-origin proof rejected');
+interval();assert.equal(submits,3);assert.equal(proof.__shiroxProofStarted,undefined);
+response.value='fresh-cloudflare-response';interval();assert.equal(submits,4,'a genuine Cloudflare response remains an alternative');
+console.log('PASS: real proof without Cloudflare, no pending or consumed proof submission, same-origin proof, Cloudflare alternative');

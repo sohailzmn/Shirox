@@ -992,13 +992,50 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                 if (Number.isInteger(code) && code > 0 && code < 10000000)
                     window.webkit.messageHandlers.networkLogger.postMessage({type:'verification-error',code:code});
             });
+            const ensureSourceProof = async function(form, root) {
+                if (form.querySelector('altcha-widget') || form.__shiroxProofLoading) return;
+                const action = new URL(form.action, location.href);
+                const challenge = new URL(root.dataset.altchaChallengeUrl || '', location.href);
+                if (action.origin !== location.origin || action.pathname !== '/r' || form.target !== 'player-iframe' ||
+                    challenge.origin !== location.origin || challenge.pathname !== '/api/inline/verify-init') return;
+                form.__shiroxProofLoading = true;
+                // Use the source's published widget and genuine challenge. The
+                // source accepts this proof as an alternative to Turnstile.
+                if (!customElements.get('altcha-widget')) {
+                    const gate = Array.from(document.scripts).map(function(script) {
+                        try { return new URL(script.src, location.href); } catch(e) { return null; }
+                    }).find(function(url) {
+                        return url && url.origin === location.origin && /^\/build\/assets\/episode-redirect-gate-[a-z0-9_-]+\.js$/i.test(url.pathname);
+                    });
+                    if (!gate) return;
+                    const controller = new AbortController();
+                    const timer = setTimeout(function() { controller.abort(); }, 4000);
+                    let code;
+                    try {
+                        const response = await fetch(gate.href, {credentials:'same-origin',signal:controller.signal});
+                        if (!response.ok || new URL(response.url).origin !== location.origin) return;
+                        code = await response.text();
+                    } finally { clearTimeout(timer); }
+                    if (code.length > 262144) return;
+                    const asset = code.match(/assets\/(altcha-[a-z0-9_-]+\.js)/i);
+                    if (!asset) return;
+                    await import(new URL(asset[1], gate.href).href);
+                }
+                if (!customElements.get('altcha-widget') || !form.isConnected || form.querySelector('altcha-widget')) return;
+                const proof = document.createElement('altcha-widget');
+                proof.setAttribute('challengeurl', challenge.href);
+                proof.setAttribute('name', 'altcha');
+                form.appendChild(proof);
+            };
             if (sourceDocument) setInterval(function() {
                     const form = document.getElementById('player-prepare-form');
                     const response = form && Array.from(form.querySelectorAll('input[name="cf-turnstile-response"]')).find(function(input) { return !!input.value; });
                     const responsePresent = !!response;
+                    const root = document.getElementById('episode-redirect-gate-root');
+                    if (form && root) ensureSourceProof(form, root).catch(function() {});
                     const proof = form && form.querySelector('altcha-widget');
                     // Run the website's own proof-of-work implementation. Never
-                    // manufacture a payload or submit before both checks pass.
+                    // manufacture a payload or mark an unverified challenge as solved.
                     if (proof && !proof.__shiroxProofStarted && typeof proof.verify === 'function') {
                         try {
                             const challenge = new URL(proof.getAttribute('challengeurl'), location.href);
@@ -1010,18 +1047,22 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                             }
                         } catch(e) {}
                     }
-                    const proofReady = !proof || (typeof proof.getState === 'function' && proof.getState() === 'verified');
+                    const proofVerified = !!proof && typeof proof.getState === 'function' && proof.getState() === 'verified';
+                    const freshResponse = responsePresent && form.__shiroxSubmittedResponse !== response.value;
+                    const freshProof = proofVerified && !proof.__shiroxProofSubmitted;
+                    const context = form && form.querySelector('input[name="t"]');
                     let continued = false;
                     // Keep the real site-issued response in its own form/session.
                     // requestSubmit preserves validation/submit handlers without
                     // sending the click through third-party advertising handlers.
-                    if (responsePresent && proofReady && window.__shiroxProviderActivated && form.target === 'player-iframe') {
+                    if ((freshResponse || freshProof) && context && context.value && window.__shiroxProviderActivated && form.target === 'player-iframe') {
                         const action = new URL(form.action, location.href);
                         const button = form.querySelector('button[type="submit"]');
                         if (action.origin === location.origin && action.pathname === '/r' && button &&
                             !button.disabled && button.offsetParent !== null &&
-                            form.__shiroxSubmittedResponse !== response.value && typeof form.requestSubmit === 'function') {
-                            form.__shiroxSubmittedResponse = response.value;
+                            typeof form.requestSubmit === 'function') {
+                            if (responsePresent) form.__shiroxSubmittedResponse = response.value;
+                            if (proofVerified) proof.__shiroxProofSubmitted = true;
                             form.requestSubmit(button);
                             continued = true;
                         }
