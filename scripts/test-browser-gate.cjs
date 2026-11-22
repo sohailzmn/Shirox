@@ -48,3 +48,9 @@ proof={getAttribute:()=> 'https://other.example/challenge',verify(){throw Error(
 interval();assert.equal(submits,3);assert.equal(proof.__shiroxProofStarted,undefined);
 response.value='fresh-cloudflare-response';interval();assert.equal(submits,4,'a genuine Cloudflare response remains an alternative');
 console.log('PASS: real proof without Cloudflare, no pending or consumed proof submission, same-origin proof, Cloudflare alternative');
+const loaderStart=source.indexOf('            const ensureSourceProof = async function');
+const loaderEnd=source.indexOf('            if (sourceDocument) setInterval',loaderStart);
+const loader=source.slice(loaderStart,loaderEnd),slash=String.fromCharCode(92);
+assert.equal(loader.split(slash+slash).join('').includes(slash),false,'JavaScript regex escapes must be doubled inside the Swift literal');
+new vm.Script(loader.split(slash+slash).join(slash));
+console.log('PASS: source widget loader parses after Swift escape decoding');

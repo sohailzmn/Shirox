@@ -1005,7 +1005,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                     const gate = Array.from(document.scripts).map(function(script) {
                         try { return new URL(script.src, location.href); } catch(e) { return null; }
                     }).find(function(url) {
-                        return url && url.origin === location.origin && /^\/build\/assets\/episode-redirect-gate-[a-z0-9_-]+\.js$/i.test(url.pathname);
+                        return url && url.origin === location.origin && /^\\/build\\/assets\\/episode-redirect-gate-[a-z0-9_-]+\\.js$/i.test(url.pathname);
                     });
                     if (!gate) return;
                     const controller = new AbortController();
@@ -1017,7 +1017,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                         code = await response.text();
                     } finally { clearTimeout(timer); }
                     if (code.length > 262144) return;
-                    const asset = code.match(/assets\/(altcha-[a-z0-9_-]+\.js)/i);
+                    const asset = code.match(/assets\\/(altcha-[a-z0-9_-]+\\.js)/i);
                     if (!asset) return;
                     await import(new URL(asset[1], gate.href).href);
                 }
