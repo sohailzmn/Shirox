@@ -150,6 +150,7 @@ extension JSContext {
                             mediaPageURL: result.mediaPageURL || null,
                             playerPageURL: result.playerPageURL || null,
                             playerHTML: result.playerHTML || null,
+                            verificationErrorCode: result.verificationErrorCode || null,
                             verificationResponsePresent: result.verificationResponsePresent || false,
                             verifiedContinuationClicked: result.verifiedContinuationClicked || false,
                             requests: result.requests,
@@ -788,6 +789,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     private var playerPageURL: String?
     private var playerHTML: String?
     private var mediaPageURL: String?
+    private var verificationErrorCode: Int?
     private var verificationResponsePresent = false
     private var verifiedContinuationClicked = false
 
@@ -804,6 +806,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         mediaPageURL = nil
         playerPageURL = nil
         playerHTML = nil
+        verificationErrorCode = nil
         verificationResponsePresent = false
         verifiedContinuationClicked = false
         completionHandler = completion
@@ -975,7 +978,15 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                         if (url) window.webkit.messageHandlers.networkLogger.postMessage({type:'media',url:url});
                     }
                 }, true);
-                if (sourceDocument) setInterval(function() {
+                if (sourceDocument) window.addEventListener('message', function(event) {
+                const data = event.data;
+                if (event.origin !== 'https://challenges.cloudflare.com' || !data ||
+                    data.source !== 'cloudflare-challenge' || data.event !== 'fail') return;
+                const code = Number(data.code);
+                if (Number.isInteger(code) && code > 0 && code < 10000000)
+                    window.webkit.messageHandlers.networkLogger.postMessage({type:'verification-error',code:code});
+            });
+            if (sourceDocument) setInterval(function() {
                     const form = document.getElementById('player-prepare-form');
                     const response = form && Array.from(form.querySelectorAll('input[name="cf-turnstile-response"]')).find(function(input) { return !!input.value; });
                     const responsePresent = !!response;
@@ -1459,6 +1470,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             "mediaPageURL": mediaPageURL as Any? ?? NSNull(),
             "playerPageURL": playerPageURL as Any? ?? NSNull(),
             "playerHTML": playerHTML as Any? ?? NSNull(),
+            "verificationErrorCode": verificationErrorCode as Any? ?? NSNull(),
             "verificationResponsePresent": verificationResponsePresent,
             "verifiedContinuationClicked": verifiedContinuationClicked,
             "requests": networkRequests,
@@ -1561,6 +1573,8 @@ extension NetworkFetchMonitor: WKScriptMessageHandler {
                         }
                     }
                 }
+            } else if type == "verification-error", let code = body["code"] as? Int, (1..<10_000_000).contains(code) {
+                verificationErrorCode = code
             } else if type == "verification-state" {
                 verificationResponsePresent = verificationResponsePresent || (body["responsePresent"] as? Bool == true)
                 verifiedContinuationClicked = verifiedContinuationClicked || (body["continued"] as? Bool == true)

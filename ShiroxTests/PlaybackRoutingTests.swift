@@ -68,6 +68,21 @@ final class PlaybackRoutingTests: XCTestCase {
         try await verifyLivePlayer(streams, source: "ANIWORLD")
         print("LIVE_ANIWORLD_TOTAL_SECONDS=\(Date().timeIntervalSince(started))")
     }
+    @MainActor func testLiveSerienStreamVerificationDeadlineDiagnostic() async throws {
+        guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else { throw XCTSkip("Live source diagnostic") }
+        let monitor = NetworkFetchMonitor()
+        let started = Date()
+        let result: [String: Any] = await withCheckedContinuation { continuation in
+            monitor.startMonitoring(urlString: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-1",
+                options: NetworkFetchOptions(timeoutSeconds: 45, returnHTML: true,
+                    clickSelectors: ["[data-provider-name=\"VOE\"][data-language-id=\"1\"]"],
+                    waitForSelectors: ["[data-provider-name=\"VOE\"][data-language-id=\"1\"]"], maxWaitTime: 3)) { value in
+                continuation.resume(returning: value)
+            }
+        }
+        print("LIVE_SERIENSTREAM_GATE seconds=\(Date().timeIntervalSince(started)) response=\(result["verificationResponsePresent"] ?? false) continued=\(result["verifiedContinuationClicked"] ?? false) errorCode=\(result["verificationErrorCode"] ?? "none") playerPayload=\((result["playerHTML"] as? String)?.isEmpty == false)")
+    }
+
     @MainActor func testLiveSerienStreamPlaybackProbe() async throws {
         guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else {
             throw XCTSkip("Live provider probe is opt-in.")
