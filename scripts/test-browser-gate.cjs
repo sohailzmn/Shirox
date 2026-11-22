@@ -79,9 +79,10 @@ const selectionScript=source.slice(selectionStart,selectionEnd).split(slash+slas
  const provider={offsetParent:{},disabled:false,matches:()=>true,getAttribute:()=>'/r?t=desired-provider',click(){clicked++}};
  const context={Date:{now:()=>now},URL,location:{origin:'https://serienstream.to',href:'https://serienstream.to/serie/dexter'},setTimeout:fn=>callbacks.push(fn),document:{getElementById:()=>gate,querySelector:()=>provider,querySelectorAll:()=>[provider]},window:{webkit:{messageHandlers:{networkLogger:{postMessage(){}}}}}};
  vm.runInNewContext(selectionScript,context);
- const result=context.window.waitForElementAndClick(['provider'],['provider'],3);
+ const result=context.window.waitForElementAndClick(['provider'],['provider'],3,14);
  assert.equal(clicked,0,'a button without its site handler must not be activated');
- gate.dataset.episodeRedirectGateInit='1';now=100;callbacks.shift()();await result;
+ now=4000;callbacks.shift()();assert.equal(clicked,0,'site readiness must survive the short selector wait');
+ gate.dataset.episodeRedirectGateInit='1';now=4100;callbacks.shift()();await result;
  assert.equal(clicked,1);assert.equal(context.window.__shiroxProviderToken,'desired-provider');
  console.log('PASS: provider activation waits for site initialization and preserves the selected provider context');
 })().catch(error=>{console.error(error);process.exitCode=1});

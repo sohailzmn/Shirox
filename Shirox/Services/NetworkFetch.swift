@@ -153,6 +153,9 @@ extension JSContext {
                             verificationErrorCode: result.verificationErrorCode || null,
                             verificationResponsePresent: result.verificationResponsePresent || false,
                             verifiedContinuationClicked: result.verifiedContinuationClicked || false,
+                            verificationProviderActivated: result.verificationProviderActivated || false,
+                            verificationContextMatches: result.verificationContextMatches || false,
+                            verificationProofState: result.verificationProofState || null,
                             requests: result.requests,
                             html: result.html || null,
                             cookies: result.cookies || null,
@@ -793,6 +796,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     private var verificationErrorCode: Int?
     private var verificationResponsePresent = false
     private var verifiedContinuationClicked = false
+    private var verificationProviderActivated = false
+    private var verificationContextMatches = false
+    private var verificationProofState: String?
 
     @Published private(set) var networkRequests: [String] = []
     @Published private(set) var cutoffTriggered = false
@@ -811,6 +817,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         verificationErrorCode = nil
         verificationResponsePresent = false
         verifiedContinuationClicked = false
+        verificationProviderActivated = false
+        verificationContextMatches = false
+        verificationProofState = nil
         completionHandler = completion
         networkRequests.removeAll()
         cutoffTriggered = false
@@ -960,6 +969,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         let autoWaitSelectors = (options?.waitForSelectors ?? []).map { JSEngine.jsStringLiteral($0) }.joined(separator: ",")
         let autoClickSelectors = (options?.clickSelectors ?? []).map { JSEngine.jsStringLiteral($0) }.joined(separator: ",")
         let autoMaxWait = options?.maxWaitTime ?? 3
+        let autoCaptureTimeout = options?.timeoutSeconds ?? 10
         let jsCode = """
         (function() {
             // Challenge frames (including their initial empty documents) must
@@ -1072,7 +1082,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                             continued = true;
                         }
                     }
-                    window.webkit.messageHandlers.networkLogger.postMessage({type:'verification-state',responsePresent:responsePresent,continued:continued});
+                    window.webkit.messageHandlers.networkLogger.postMessage({type:'verification-state',responsePresent:responsePresent,continued:continued,providerActivated:!!window.__shiroxProviderActivated,contextMatches:!!(context && context.value && (!window.__shiroxProviderToken || context.value === window.__shiroxProviderToken)),proofState:proof && typeof proof.getState === 'function' ? proof.getState() : null});
                 },500);
             }
             if (!passiveDocument) {
@@ -1205,11 +1215,12 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
             }
 
-            window.waitForElementAndClick = function(waitSelectors, clickSelectors, maxWaitTime) {
+            window.waitForElementAndClick = function(waitSelectors, clickSelectors, maxWaitTime, captureTimeout) {
                 return new Promise(function(resolve) {
                     const results = { waitResults: {}, clickResults: [] };
                     waitSelectors.forEach(function(selector) { results.waitResults[selector] = false; });
                     const startTime = Date.now();
+                    const sourceReadyTimeout = Math.max(maxWaitTime, Number(captureTimeout) || maxWaitTime);
                     const checkInterval = 100;
 
                     const checkAndClick = function() {
@@ -1219,7 +1230,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                         // and the site silently selects its default VOE mirror.
                         const sourceGate = document.getElementById('episode-redirect-gate-root');
                         if (sourceGate && sourceGate.dataset.episodeRedirectGateInit !== '1') {
-                            if (elapsed < maxWaitTime) setTimeout(checkAndClick, checkInterval);
+                            if (elapsed < sourceReadyTimeout) setTimeout(checkAndClick, checkInterval);
                             else {
                                 window.webkit.messageHandlers.networkLogger.postMessage({ type: 'click-results', results: results });
                                 resolve(results);
@@ -1297,7 +1308,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             if (document.readyState !== 'loading') reportPlayerPayload();
 
             document.addEventListener('DOMContentLoaded', function() {
-                window.waitForElementAndClick([\(autoWaitSelectors)], [\(autoClickSelectors)], \(autoMaxWait));
+                window.waitForElementAndClick([\(autoWaitSelectors)], [\(autoClickSelectors)], \(autoMaxWait), \(autoCaptureTimeout));
             }, { once: true });
 
             const nuclearScan = function() {
@@ -1463,7 +1474,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         if !options.waitForSelectors.isEmpty || !options.clickSelectors.isEmpty {
             let waitSels = options.waitForSelectors.map { JSEngine.jsStringLiteral($0) }.joined(separator: ", ")
             let clickSels = options.clickSelectors.map { JSEngine.jsStringLiteral($0) }.joined(separator: ", ")
-            let js = "if (typeof window.waitForElementAndClick === 'function') { window.waitForElementAndClick([\(waitSels)], [\(clickSels)], \(options.maxWaitTime)); }"
+            let js = "if (typeof window.waitForElementAndClick === 'function') { window.waitForElementAndClick([\(waitSels)], [\(clickSels)], \(options.maxWaitTime), \(options.timeoutSeconds)); }"
             webView.evaluateJavaScript(js, completionHandler: nil)
         } else {
             simulateUserInteraction()
@@ -1561,6 +1572,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             "verificationErrorCode": verificationErrorCode as Any? ?? NSNull(),
             "verificationResponsePresent": verificationResponsePresent,
             "verifiedContinuationClicked": verifiedContinuationClicked,
+            "verificationProviderActivated": verificationProviderActivated,
+            "verificationContextMatches": verificationContextMatches,
+            "verificationProofState": verificationProofState as Any? ?? NSNull(),
             "requests": networkRequests,
             "html": htmlContent as Any? ?? NSNull(),
             "cookies": cookies.isEmpty ? NSNull() as Any : cookies as Any,
@@ -1666,6 +1680,11 @@ extension NetworkFetchMonitor: WKScriptMessageHandler {
             } else if type == "verification-state" {
                 verificationResponsePresent = verificationResponsePresent || (body["responsePresent"] as? Bool == true)
                 verifiedContinuationClicked = verifiedContinuationClicked || (body["continued"] as? Bool == true)
+                verificationProviderActivated = verificationProviderActivated || (body["providerActivated"] as? Bool == true)
+                verificationContextMatches = verificationContextMatches || (body["contextMatches"] as? Bool == true)
+                if let state = body["proofState"] as? String, ["unverified","verifying","verified","error","expired"].contains(state) {
+                    verificationProofState = state
+                }
             } else if type == "cookies", let cookiesData = body["cookies"] as? [String: String] {
                 for (key, value) in cookiesData {
                     cookies[key] = value
