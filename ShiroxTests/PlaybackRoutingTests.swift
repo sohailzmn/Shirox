@@ -72,6 +72,21 @@ final class PlaybackRoutingTests: XCTestCase {
         guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else { throw XCTSkip("Live source diagnostic") }
         let monitor = NetworkFetchMonitor()
         let started = Date()
+        #if os(iOS)
+        let snapshotTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled,
+                  let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                    .flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) else { return }
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            if let data = image.pngData(), let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                try? data.write(to: directory.appendingPathComponent("website-gate-ios.png"))
+            }
+        }
+        defer { snapshotTask.cancel() }
+        #endif
         let result: [String: Any] = await withCheckedContinuation { continuation in
             monitor.startMonitoring(urlString: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-1",
                 options: NetworkFetchOptions(timeoutSeconds: 45, returnHTML: true,
