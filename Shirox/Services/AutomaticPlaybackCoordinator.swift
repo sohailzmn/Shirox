@@ -283,7 +283,7 @@ final class AutomaticPlaybackCoordinator {
             for language in 0...2 {
                 try Task.checkCancellation()
                 do {
-                    return try await PlaybackDeadline.run(seconds: 28) {
+                    return try await PlaybackDeadline.run(seconds: DetailViewModel.isSeriesSource(episodeHref) ? 36 : 28) {
                         let raw = try await runner.fetchStreams(episodeUrl: episodeHref, languagePriority: language, preflight: false)
                         let candidates = raw.map { PlaybackLanguagePolicy.prepare($0, preferredSubtitleLanguage: language == 0 ? nil : language == 1 ? "de" : "en") }
                             .filter { PlaybackLanguagePolicy.priority($0) == language }

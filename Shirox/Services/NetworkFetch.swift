@@ -1058,7 +1058,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                     // Keep the real site-issued response in its own form/session.
                     // requestSubmit preserves validation/submit handlers without
                     // sending the click through third-party advertising handlers.
-                    if ((freshResponse || freshProof) && context && context.value && window.__shiroxProviderActivated && form.target === 'player-iframe') {
+                    if ((freshResponse || freshProof) && context && context.value &&
+                        (!window.__shiroxProviderToken || context.value === window.__shiroxProviderToken) &&
+                        window.__shiroxProviderActivated && form.target === 'player-iframe') {
                         const action = new URL(form.action, location.href);
                         const button = form.querySelector('button[type="submit"]');
                         if (action.origin === location.origin && action.pathname === '/r' && button &&
@@ -1212,6 +1214,18 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
                     const checkAndClick = function() {
                         const elapsed = (Date.now() - startTime) / 1000;
+                        // Provider buttons exist before the site's deferred
+                        // handlers are installed. An early click is then lost,
+                        // and the site silently selects its default VOE mirror.
+                        const sourceGate = document.getElementById('episode-redirect-gate-root');
+                        if (sourceGate && sourceGate.dataset.episodeRedirectGateInit !== '1') {
+                            if (elapsed < maxWaitTime) setTimeout(checkAndClick, checkInterval);
+                            else {
+                                window.webkit.messageHandlers.networkLogger.postMessage({ type: 'click-results', results: results });
+                                resolve(results);
+                            }
+                            return;
+                        }
                         let allFound = waitSelectors.length === 0;
                         waitSelectors.forEach(function(selector) {
                             const element = document.querySelector(selector);
@@ -1235,7 +1249,15 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                                     elements.forEach(function(element) {
                                         if (element && element.offsetParent !== null && !element.disabled && !element.__shiroxCaptureClicked && !(element.matches('[data-play-url]') && element.__shiroxProviderActivated)) {
                                             element.__shiroxCaptureClicked = true;
-                                            if (element.matches('[data-play-url]')) { element.__shiroxProviderActivated = true; window.__shiroxProviderActivated=true; }
+                                            if (element.matches('[data-play-url]')) {
+                                                element.__shiroxProviderActivated = true;
+                                                window.__shiroxProviderActivated = true;
+                                                try {
+                                                    const target = new URL(element.getAttribute('data-play-url'), location.href);
+                                                    if (target.origin === location.origin && target.pathname === '/r')
+                                                        window.__shiroxProviderToken = target.searchParams.get('t');
+                                                } catch(e) {}
+                                            }
                                             try {
                                                 element.click();
                                                 clicked = true;
