@@ -26,6 +26,7 @@ final class JSEngine: ObservableObject {
     // MARK: - Module Loading
 
     func loadModule(_ module: ModuleDefinition) async throws {
+        let module = SourceModuleRevision.effective(module)
         // Only clear cookies when changing module identity. Reloading the same
         // site after a user completed its Cloudflare check must not throw away
         // that verified browsing session. Never auto-solve CAPTCHA challenges.

@@ -65,6 +65,8 @@ final class ModuleJSRunner {
     // MARK: - Load module
 
     func load(module: ModuleDefinition) async throws {
+        let module = SourceModuleRevision.effective(module)
+        Logger.shared.log("[Modules] Playback resolver \(module.sourceName) version=\(module.version)", type: "General")
         loadedModule = module
         moduleCacheKey = module.id + "|" + module.version + "|" + module.scriptUrl
         // Never globally wipe shared WKWebView cookies just because a new

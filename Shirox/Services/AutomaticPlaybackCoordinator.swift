@@ -179,7 +179,8 @@ final class AutomaticPlaybackCoordinator {
                 await SeasonChainMapper.shared.resolveOffset(anchorAniListID: id, anchorMALID: nil) ?? 0
             }) ?? 0
         } else { seasonOffset = 0 }
-        var modules = ModuleManager.shared.modules.filter { !$0.isManga && !$0.isLocalPlayback && !$0.isJellyfin && SourceCatalogRouting.acceptsModule($0, kind: request.kind) }
+        await ModuleManager.shared.ensureUnifiedGermanSource()
+        var modules = ModuleManager.shared.modules.map { SourceModuleRevision.effective($0) }.filter { !$0.isManga && !$0.isLocalPlayback && !$0.isJellyfin && SourceCatalogRouting.acceptsModule($0, kind: request.kind) }
         if modules.isEmpty {
             await ModuleManager.shared.ensureUnifiedGermanSource()
             modules = ModuleManager.shared.modules.filter { !$0.isManga && !$0.isLocalPlayback && !$0.isJellyfin && SourceCatalogRouting.acceptsModule($0, kind: request.kind) }

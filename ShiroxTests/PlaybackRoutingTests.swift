@@ -325,6 +325,50 @@ final class PlaybackRoutingTests: XCTestCase {
         XCTAssertEqual(bundled.version, "2.0.8")
         XCTAssertTrue(bundled.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true)
     }
+
+    private func sourceRevision(_ version: String, scriptURL: String? = nil) throws -> ModuleDefinition {
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(bundled)) as? [String: Any])
+        json["version"] = version
+        json["sourceName"] = "Shirox Unified GER (AniWorld + S.to)"
+        json["scriptContent"] = "old cached resolver"
+        if let scriptURL { json["scriptUrl"] = scriptURL }
+        return try JSONDecoder().decode(ModuleDefinition.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    func testLaunchUpdateCannotDowngradeBundledResolverToPublicMain() throws {
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        let publicMain = try sourceRevision("1.1.1")
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(publicMain, replacing: bundled))
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(publicMain, replacing: publicMain))
+        let loaded = SourceModuleRevision.effective(publicMain)
+        XCTAssertEqual(loaded.version, bundled.version)
+        XCTAssertEqual(loaded.scriptContent, bundled.scriptContent)
+        XCTAssertEqual(loaded.id, publicMain.id)
+    }
+
+    func testDetailSnapshotCannotRunOldOrMismatchedCachedSource() throws {
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        for version in ["1.1.1", bundled.version] {
+            let stale = try sourceRevision(version)
+            XCTAssertEqual(SourceModuleRevision.effective(stale).scriptContent, bundled.scriptContent)
+        }
+    }
+
+    func testNewerUnifiedResolverIsPreservedAndComparedNumerically() throws {
+        let newer = try sourceRevision("2.0.10")
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        XCTAssertTrue(SourceModuleRevision.acceptsRemote(newer, replacing: bundled))
+        XCTAssertEqual(SourceModuleRevision.effective(newer), newer)
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(bundled, replacing: newer))
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(newer, replacing: newer))
+    }
+
+    func testResolverFloorDoesNotReplaceUnrelatedModules() throws {
+        let unrelated = try sourceRevision("1.0", scriptURL: "https://example.com/UnifiedGerman_v1.js")
+        XCTAssertEqual(SourceModuleRevision.effective(unrelated), unrelated)
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(try XCTUnwrap(BundledUnifiedSource.module), replacing: unrelated))
+    }
     func testWebsiteChallengeIsNotAnEmptyVideoResult() {
         XCTAssertThrowsError(try parseResolvedStreamResults(from: [
             "streams": [], "blockedReason": "website_verification_required"
