@@ -76,11 +76,11 @@ final class PlaybackRoutingTests: XCTestCase {
             monitor.startMonitoring(urlString: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-1",
                 options: NetworkFetchOptions(timeoutSeconds: 45, returnHTML: true,
                     clickSelectors: ["[data-provider-name=\"VOE\"][data-language-id=\"1\"]"],
-                    waitForSelectors: ["[data-provider-name=\"VOE\"][data-language-id=\"1\"]"], maxWaitTime: 3)) { value in
+                    waitForSelectors: ["[data-provider-name=\"VOE\"][data-language-id=\"1\"]"], maxWaitTime: 3), showsBrowser: true) { value in
                 continuation.resume(returning: value)
             }
         }
-        print("LIVE_SERIENSTREAM_GATE seconds=\(Date().timeIntervalSince(started)) response=\(result["verificationResponsePresent"] ?? false) continued=\(result["verifiedContinuationClicked"] ?? false) errorCode=\(result["verificationErrorCode"] ?? "none") playerPayload=\((result["playerHTML"] as? String)?.isEmpty == false)")
+        print("LIVE_SERIENSTREAM_VISIBLE_GATE seconds=\(Date().timeIntervalSince(started)) response=\(result["verificationResponsePresent"] ?? false) continued=\(result["verifiedContinuationClicked"] ?? false) errorCode=\(result["verificationErrorCode"] ?? "none") playerPayload=\((result["playerHTML"] as? String)?.isEmpty == false)")
     }
 
     @MainActor func testLiveSerienStreamPlaybackProbe() async throws {

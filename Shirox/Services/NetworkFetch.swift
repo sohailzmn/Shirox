@@ -781,6 +781,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     private var webView: WKWebView?
     private var completionHandler: (([String: Any]) -> Void)?
     private var timer: Timer?
+    private var showsBrowser = false
     private var options: NetworkFetchOptions?
     private var elementsClicked: [String] = []
     private var waitResults: [String: Bool] = [:]
@@ -800,7 +801,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     @Published private(set) var htmlCaptured = false
     @Published private(set) var cookiesCaptured = false
 
-    func startMonitoring(urlString: String, options: NetworkFetchOptions, completion: @escaping ([String: Any]) -> Void) {
+    func startMonitoring(urlString: String, options: NetworkFetchOptions, showsBrowser: Bool = false, completion: @escaping ([String: Any]) -> Void) {
+        self.showsBrowser = showsBrowser
         self.options = options
         originalUrlString = urlString
         mediaPageURL = nil
@@ -1271,11 +1273,12 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }
             if let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first(where: { !$0.isHidden }) {
                 webView.frame = window.bounds
-                webView.isUserInteractionEnabled = false
+                webView.isUserInteractionEnabled = showsBrowser
                 webView.accessibilityElementsHidden = true
                 // WebKit media initialisation depends on belonging to a window.
                 // Keep capture beneath the app without changing its layout.
-                window.insertSubview(webView, at: 0)
+                if showsBrowser { window.addSubview(webView) }
+                else { window.insertSubview(webView, at: 0) }
             }
         }
         #endif
