@@ -13,6 +13,7 @@ struct ProgressBackupPayload: Codable {
     var continueReading: [MangaReadingItem]
     var readChapters: [String: Set<String>]
     var watchHistory: [WatchProgress]
+    var episodeProgress: [String: EpisodePlaybackProgress]? = nil
 }
 
 /// Continue Watching, Continue Reading, and watch history — the data users would be most
@@ -31,7 +32,8 @@ struct ProgressBackupSection: BackupSection {
             watchedHrefKeys: cw.watchedHrefKeys,
             continueReading: manga.items,
             readChapters: manga.readChapters,
-            watchHistory: WatchHistoryService.shared.history)
+            watchHistory: WatchHistoryService.shared.history,
+            episodeProgress: cw.episodeProgress)
     }
 
     @MainActor func apply(_ payload: ProgressBackupPayload) async throws -> [String] {
@@ -42,7 +44,8 @@ struct ProgressBackupSection: BackupSection {
         }
         ContinueWatchingManager.shared.restore(items: payload.continueWatching,
                                                watchedKeys: payload.watchedKeys,
-                                               watchedHrefKeys: payload.watchedHrefKeys)
+                                               watchedHrefKeys: payload.watchedHrefKeys,
+                                               episodeProgress: payload.episodeProgress ?? [:])
         MangaProgressManager.shared.restore(items: payload.continueReading,
                                             readChapters: payload.readChapters)
         WatchHistoryService.shared.restore(history: payload.watchHistory)

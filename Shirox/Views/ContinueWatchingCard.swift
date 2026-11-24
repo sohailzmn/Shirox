@@ -80,7 +80,7 @@ struct ContinueWatchingSection: View {
 
     @ViewBuilder
     private func itemView(for item: ContinueWatchingItem) -> some View {
-        if item.sourceReferenceOnly == true {
+        if item.sourceReferenceOnly == true || item.usesSourceResume {
             Button { AutomaticPlaybackCoordinator.shared.resume(item) } label: { ContinueWatchingCardDisplay(item: item) }
                 .buttonStyle(.plain)
                 .contextMenu { contextMenuItems(for: item) }
@@ -451,6 +451,10 @@ struct ContinueWatchingCardDisplay: View {
     ///   - "Ep 3 / 24"             — completed series
     ///   - "Ep 3 / 5 • Ongoing"    — ongoing show (availableEpisodes < totalEpisodes or total unknown)
     private func episodeLabelText(item: ContinueWatchingItem, prefix: String?) -> String {
+        if let season = item.sourceSeason ?? item.episodeHref.flatMap({ ModuleSeasonRouting.seasonNumber(for: $0) }),
+           let episode = item.sourceEpisode ?? item.episodeHref.flatMap({ ModuleSeasonRouting.episodeNumber(for: $0) }) {
+            return "S\(season) · F\(episode)"
+        }
         let epPart: String
         let avail = item.availableEpisodes
         let total = item.totalEpisodes
@@ -591,6 +595,9 @@ struct ContinueWatchingCardDisplay: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(.primary)
                 .lineLimit(1)
+            if item.totalSeconds > 0 {
+                Text(EpisodePlaybackProgress(item).label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            }
             HStack(spacing: 6) {
                 Image(systemName: item.isPlaceholder ? "forward.end.fill" : "play.fill")
                     .font(.system(size: 9, weight: .semibold))

@@ -791,7 +791,7 @@ struct AniListDetailView: View {
     }
 
     private func resumeWatching(item: ContinueWatchingItem) {
-        if item.sourceReferenceOnly == true { AutomaticPlaybackCoordinator.shared.resume(item); return }
+        if item.sourceReferenceOnly == true || item.usesSourceResume { AutomaticPlaybackCoordinator.shared.resume(item); return }
         if item.isPlaceholder {
             vm.watchEpisode(item.episodeNumber)
             return
@@ -1448,11 +1448,16 @@ private struct AniListEpisodeRowContainer: View {
         #endif
     }
 
+    private var progressDetail: EpisodePlaybackProgress? {
+        continueWatching.episodeRecord(aniListID: mediaId, moduleId: nil, mediaTitle: mediaTitle, episodeNumber: ep)
+    }
+
     private var progress: Double? {
         if continueWatching.isWatched(aniListID: mediaId, moduleId: nil,
                                       mediaTitle: mediaTitle, episodeNumber: ep) {
             return 1.0
         }
+        if let progressDetail { return progressDetail.fraction }
         guard let item = continueWatching.items
             .first(where: { $0.aniListID == mediaId && $0.episodeNumber == ep }),
               item.totalSeconds > 0
@@ -1469,6 +1474,7 @@ private struct AniListEpisodeRowContainer: View {
             airdate: aniMapEpisode?.airdate,
             episodeDescription: aniMapEpisode?.description,
             progress: progress,
+            progressDetail: progressDetail,
             onTap: onTap,
             onMarkWatched: {
                 Task {

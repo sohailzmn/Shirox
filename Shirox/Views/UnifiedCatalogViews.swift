@@ -158,6 +158,37 @@ struct CatalogDetailScreen: View {
     @ObservedObject private var availability = CatalogAvailabilityStore.shared
     @ObservedObject private var watchlist = CatalogWatchlist.shared
 
+    @ObservedObject private var history = ContinueWatchingManager.shared
+
+    private var savedItem: ContinueWatchingItem? {
+        history.latestItem(aniListID: title.anime?.provider == .anilist ? title.anime?.id : nil,
+                           moduleId: title.moduleID, mediaTitle: title.name, detailHref: title.sourceHref)
+    }
+    private var resumeLabel: String {
+        guard let item = savedItem else { return title.kind == .movie ? "Abspielen" : "Folge 1 abspielen" }
+        let s = item.sourceSeason ?? item.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? 1
+        let e = item.sourceEpisode ?? item.episodeHref.flatMap { ModuleSeasonRouting.episodeNumber(for: $0) } ?? item.episodeNumber
+        return "\(item.watchedSeconds > 0 ? "Weiterschauen" : "Abspielen") · S\(s) F\(e)"
+    }
+    private func sourceLink(_ number: Int) -> EpisodeLink? {
+        sourceEpisodes.first { (ModuleSeasonRouting.seasonNumber(for: $0.href) ?? 1) == season &&
+            (ModuleSeasonRouting.episodeNumber(for: $0.href) ?? Int($0.number)) == number }
+    }
+    private func record(_ number: Int) -> EpisodePlaybackProgress? {
+        history.episodeRecord(aniListID: title.anime?.provider == .anilist ? title.anime?.id : nil,
+            moduleId: title.moduleID, mediaTitle: title.name, detailHref: title.sourceHref,
+            episodeNumber: number, episodeHref: sourceLink(number)?.href, season: season)
+    }
+    private func watched(_ number: Int) -> Bool {
+        let link = sourceLink(number)
+        let aid = title.anime?.provider == .anilist ? title.anime?.id : nil
+        if history.isWatchedHref(aniListID: aid, moduleId: title.moduleID, mediaTitle: title.name, episodeHref: link?.href) { return true }
+        // Numeric markers cannot identify a season in a multi-season source list.
+        guard seasons.count <= 1 else { return false }
+        return history.isWatched(aniListID: aid, moduleId: title.moduleID, mediaTitle: title.name,
+                                 episodeNumber: link.map { Int($0.number) } ?? number)
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -175,10 +206,16 @@ struct CatalogDetailScreen: View {
                     if let media = title.anime {
                         NavigationLink("Anime-Details und Merkliste") { AniListDetailView(mediaId: media.id, preloadedMedia: media) }
                     }
-                    Button { play(episode: 1) } label: {
-                        Label(title.kind == .movie ? "Abspielen" : "Folge 1 abspielen", systemImage: "play.fill")
+                    Button {
+                        if let item = savedItem { AutomaticPlaybackCoordinator.shared.resume(item) }
+                        else { play(episode: 1) }
+                    } label: {
+                        Label(resumeLabel, systemImage: "play.fill")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
                     }.buttonStyle(.borderedProminent).disabled(loading || (title.sourceHref != nil && episodes.isEmpty))
+                    if let item = savedItem, item.totalSeconds > 0 {
+                        EpisodeProgressIndicator(record: EpisodePlaybackProgress(item))
+                    }
                     Text("Deutsch bevorzugt · danach deutsche, zuletzt englische Untertitel")
                         .font(.caption).foregroundStyle(.secondary)
                     if !seasons.isEmpty {
@@ -192,6 +229,11 @@ struct CatalogDetailScreen: View {
                                 Text("\(episode.number)").font(.title3.monospacedDigit()).frame(width: 35)
                                 VStack(alignment: .leading) {
                                     Text(episode.name).font(.subheadline.weight(.semibold))
+                                    if let progress = record(episode.number) {
+                                        EpisodeProgressIndicator(record: progress, isWatched: watched(episode.number))
+                                    } else if watched(episode.number) {
+                                        Label("Gesehen", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+                                    }
                                     if !episode.released { Text("Noch nicht veröffentlicht").font(.caption).foregroundStyle(.secondary) }
                                 }
                                 Spacer(); Image(systemName: "play.circle.fill")
@@ -218,14 +260,18 @@ struct CatalogDetailScreen: View {
                     sourceEpisodes = try await PlaybackDeadline.run(seconds: 25) { try await runner.fetchEpisodes(url: href) }
                     let groups = Dictionary(grouping: sourceEpisodes) { ModuleSeasonRouting.seasonNumber(for: $0.href) ?? 1 }
                     seasons = groups.keys.sorted().map { CatalogSeason(number: $0, name: "Staffel \($0)", episodeCount: groups[$0]?.count ?? 0) }
-                    season = seasons.first?.number ?? 1
+                    season = savedItem?.sourceSeason ?? savedItem?.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? seasons.first?.number ?? 1
                     await loadEpisodes()
                     sourceSynopsis = try? await runner.sourceDescription(url: href)
                     if sourceEpisodes.isEmpty { error = "Die Quelle hat keine Folgen geliefert. Bitte später erneut versuchen." }
                 } catch { self.error = error.localizedDescription }
                 return
             }
-            do { seasons = try await UnifiedCatalog.shared.seasons(title); await loadEpisodes() }
+            do {
+                seasons = try await UnifiedCatalog.shared.seasons(title)
+                if let saved = savedItem { season = saved.sourceSeason ?? saved.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? 1 }
+                await loadEpisodes()
+            }
             catch { self.error = error.localizedDescription }
             if let anime = title.anime {
                 let count = anime.nextAiringEpisode.map { max(0, $0.episode - 1) }
@@ -262,7 +308,8 @@ struct CatalogDetailScreen: View {
                                                aliases: [title.originalName].compactMap { $0 }, kind: title.kind,
                                                animeID: title.anime?.provider == .anilist ? title.anime?.id : nil,
                                                seasonIsExplicit: title.sourceHref != nil || title.kind != .anime,
-                                               season: season, episode: episode, detailHref: title.sourceHref, moduleID: title.moduleID)
+                                               season: season, episode: episode, detailHref: title.sourceHref,
+                                               episodeHref: sourceLink(episode)?.href, moduleID: title.moduleID)
         #if os(iOS)
         PlayerPresenter.shared.presentResolvingEpisode(title: title.name, episode: episode, artwork: title.poster ?? "", onResolve: {
             defer { loading = false }
@@ -284,7 +331,10 @@ struct CatalogDetailScreen: View {
         let context = PlayerContext(mediaTitle: title.name, episodeNumber: title.anime != nil ? request.episode : Int(result.episode.number), episodeTitle: nil,
                                     imageUrl: title.poster ?? "", aniListID: title.anime?.provider == .anilist ? title.anime?.id : nil,
                                     malID: title.anime?.idMal, moduleId: result.module.id, totalEpisodes: total,
-                                    availableEpisodes: available, isAiring: total > available, resumeFrom: nil,
+                                    availableEpisodes: available, isAiring: total > available,
+                                    resumeFrom: history.episodeRecord(aniListID: title.anime?.provider == .anilist ? title.anime?.id : nil,
+                                        moduleId: result.module.id, mediaTitle: title.name, detailHref: result.detailHref,
+                                        episodeNumber: request.episode, episodeHref: result.episode.href, season: request.season)?.resumeSeconds,
                                     detailHref: result.detailHref, episodeHref: result.episode.href, streamTitle: result.selected.title,
                                     workingDetailHref: result.detailHref, thumbnailUrl: nil)
         let refresh: StreamRefetchLoader = { number, href in

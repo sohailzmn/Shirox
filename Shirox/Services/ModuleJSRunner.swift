@@ -194,11 +194,15 @@ final class ModuleJSRunner {
 
     // MARK: - Streams
 
-    func fetchStreams(episodeUrl: String, languagePriority: Int? = nil, preflight: Bool = true) async throws -> [StreamResult] {
+    func fetchStreams(episodeUrl: String, languagePriority: Int? = nil, preflight: Bool = true,
+                      preferredStreamTitle: String? = nil) async throws -> [StreamResult] {
         if preflight, loadedModule?.isLocalPlayback != true, loadedModule?.isJellyfin != true {
             return try await AutomaticPlaybackCoordinator.shared.streams(runner: self, episodeHref: episodeUrl, legacyModule: loadedModule)
         }
-        let args: [Any] = languagePriority.map { [episodeUrl, ["languagePriority": $0]] } ?? [episodeUrl]
+        var options: [String: Any] = [:]
+        if let languagePriority { options["languagePriority"] = languagePriority }
+        if let preferredStreamTitle { options["preferredProvider"] = preferredStreamTitle }
+        let args: [Any] = options.isEmpty ? [episodeUrl] : [episodeUrl, options]
         let json = try await callAsyncJS("extractStreamUrl", args: args)
         let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
 

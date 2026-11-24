@@ -229,6 +229,17 @@ final class PlaybackRoutingTests: XCTestCase {
     #if os(iOS)
     @MainActor func testCatalogueDetailVisualSnapshot() async throws {
         let title = CatalogTitle(id:"fixture-series", remoteID:1, kind:.series, name:"Serienvorschau", synopsis:"Deutsche Beschreibung für die visuelle Prüfung der neuen Detailseite.", year:"2026")
+        let manager = ContinueWatchingManager.shared
+        let original = try XCTUnwrap(ProgressBackupSection().export())
+        defer { manager.restore(items: original.continueWatching, watchedKeys: original.watchedKeys,
+            watchedHrefKeys: original.watchedHrefKeys, episodeProgress: original.episodeProgress ?? [:]) }
+        var saved = ContinueWatchingItem(id: UUID(), mediaTitle: title.name, episodeNumber: 13, episodeTitle: nil,
+            imageUrl: "", streamUrl: "", headers: nil, subtitle: nil, streamTitle: "VOE",
+            aniListID: nil, malID: nil, moduleId: "fixture", detailHref: "https://serienstream.to/serie/preview",
+            episodeHref: "https://serienstream.to/serie/preview/staffel-2/episode-3",
+            watchedSeconds: 840, totalSeconds: 3600, lastWatchedAt: .now)
+        saved.sourceReferenceOnly = true; saved.sourceSeason = 2; saved.sourceEpisode = 3
+        manager.save(saved)
         for size in [CGSize(width:390,height:844), CGSize(width:500,height:768), CGSize(width:1024,height:768)] {
             let controller = UIHostingController(rootView: NavigationStack { CatalogDetailScreen(title:title) }
                 .environment(\.horizontalSizeClass, size.width < 600 ? .compact : .regular).preferredColorScheme(.dark))
@@ -248,6 +259,34 @@ final class PlaybackRoutingTests: XCTestCase {
             try data.write(to:path)
             let attachment=XCTAttachment(image:image); attachment.name=name; attachment.lifetime = .keepAlways; add(attachment)
             window.isHidden=true; window.rootViewController=nil
+        }
+    }
+
+    @MainActor func testEpisodeProgressVisualSnapshot() async throws {
+        let saved = ContinueWatchingItem(id: UUID(), mediaTitle: "Serienvorschau", episodeNumber: 3,
+            episodeTitle: nil, imageUrl: "", streamUrl: "https://media.example/unused", headers: nil,
+            subtitle: nil, streamTitle: "VOE", aniListID: nil, malID: nil, moduleId: "fixture",
+            detailHref: nil, watchedSeconds: 840, totalSeconds: 3600, lastWatchedAt: .now)
+        let record = EpisodePlaybackProgress(saved)
+        for width in [CGFloat(390), CGFloat(1024)] {
+            let size = CGSize(width: width, height: 500)
+            let root = VStack(alignment: .leading, spacing: 20) {
+                Text("Staffel 2 · Folge 3").font(.title.bold())
+                EpisodeProgressIndicator(record: record)
+                EpisodeRowView(episode: EpisodeLink(number: 3, href: "fixture/episode-3"),
+                    progress: record.fraction, progressDetail: record, onTap: {})
+                ThumbnailEpisodeRow(number: 4, title: "Bereits angesehen", progress: 1, onTap: {})
+            }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).preferredColorScheme(.dark)
+            let controller = UIHostingController(rootView: root)
+            let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+            window.rootViewController = controller; window.isHidden = false
+            controller.view.frame = window.bounds; controller.view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(size: size).image { _ in controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true) }
+            let name = "catalog-detail-progress-\(Int(width)).png"
+            let path = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
+            try XCTUnwrap(image.pngData()).write(to: path)
+            let attachment = XCTAttachment(image: image); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+            window.isHidden = true; window.rootViewController = nil
         }
     }
     #endif
@@ -323,7 +362,7 @@ final class PlaybackRoutingTests: XCTestCase {
 
     func testBundledResolverMatchesAppLanguageContract() throws {
         let bundled = try XCTUnwrap(BundledUnifiedSource.module)
-        XCTAssertEqual(bundled.version, "2.0.8")
+        XCTAssertEqual(bundled.version, "2.1.0")
         XCTAssertTrue(bundled.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true)
     }
 
@@ -357,7 +396,7 @@ final class PlaybackRoutingTests: XCTestCase {
     }
 
     func testNewerUnifiedResolverIsPreservedAndComparedNumerically() throws {
-        let newer = try sourceRevision("2.0.10")
+        let newer = try sourceRevision("2.10.0")
         let bundled = try XCTUnwrap(BundledUnifiedSource.module)
         XCTAssertTrue(SourceModuleRevision.acceptsRemote(newer, replacing: bundled))
         XCTAssertEqual(SourceModuleRevision.effective(newer), newer)

@@ -1390,7 +1390,7 @@ struct PlayerView: View {
             subtitle: referenceOnly ? nil : effectiveSubtitle,
             subtitleHeaders: referenceOnly ? nil : effectiveSubtitleHeaders,
             allSubtitles: referenceOnly ? nil : subtitleTracks,
-            streamTitle: context.streamTitle,
+            streamTitle: currentStream.title,
             allStreams: !referenceOnly && availableStreams.count > 1 ? availableStreams.map {
                 StoredStream(title: $0.title, url: $0.url.absoluteString, headers: $0.headers,
                              subtitle: $0.subtitle, subtitleHeaders: $0.subtitleHeaders.isEmpty ? nil : $0.subtitleHeaders)
@@ -1408,6 +1408,9 @@ struct PlayerView: View {
             lastWatchedAt: .now,
             thumbnailUrl: context.thumbnailUrl
         )
+        item.audioLanguage = currentStream.audioLanguage
+        item.subtitleLanguage = currentStream.subtitleLanguage
+        item.isHardsub = currentStream.isHardsub
         if referenceOnly {
             item.sourceReferenceOnly = true
             item.sourceSeason = context.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) }

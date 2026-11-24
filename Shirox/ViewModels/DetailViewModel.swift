@@ -486,7 +486,10 @@ final class DetailViewModel: ObservableObject {
                 ? resumeWatchedSeconds
                 // Anchor on the episode's unique href: on a flat multi-season list the numbers
                 // repeat, so a number-only lookup would resume S2 E5 from S1 E5's position.
-                : ContinueWatchingManager.shared.items.first(where: { $0.moduleId == ModuleManager.shared.activeModule?.id && $0.mediaTitle == (detail?.title ?? "") && $0.matchesEpisode(number: Int(selectedEpisode?.number ?? 1), href: selectedEpisode?.href) })?.watchedSeconds,
+                : ContinueWatchingManager.shared.episodeRecord(aniListID: aniListID,
+                    moduleId: ModuleManager.shared.activeModule?.id, mediaTitle: detail?.title ?? "",
+                    detailHref: detailHref, episodeNumber: Int(selectedEpisode?.number ?? 1),
+                    episodeHref: selectedEpisode?.href)?.resumeSeconds,
             detailHref: detailHref,
             episodeHref: selectedEpisode?.href,
             streamTitle: stream.title,

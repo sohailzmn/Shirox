@@ -456,10 +456,8 @@ struct DetailView: View {
     // MARK: - Continue Watching Helpers
     private func continueWatchingItem(for detail: MediaDetail) -> ContinueWatchingItem? {
         let moduleId = effectiveModuleId
-        return continueWatching.items
-            .filter { $0.moduleId == moduleId && $0.mediaTitle == detail.title }
-            .sorted { $0.lastWatchedAt > $1.lastWatchedAt }
-            .first
+        return continueWatching.latestItem(aniListID: vm.aniListID ?? aniListID, moduleId: moduleId,
+                                           mediaTitle: detail.title, detailHref: item.href)
     }
 
     private func loadWatchOrder() async {
@@ -732,7 +730,7 @@ struct DetailView: View {
     }
 
     private func resumeWatching(item: ContinueWatchingItem) {
-        if item.sourceReferenceOnly == true { AutomaticPlaybackCoordinator.shared.resume(item); return }
+        if item.sourceReferenceOnly == true || item.usesSourceResume { AutomaticPlaybackCoordinator.shared.resume(item); return }
         if item.isPlaceholder {
             if let episode = vm.detail?.episodes.first(where: { Int($0.number) == item.episodeNumber }) {
                 vm.loadStreams(for: episode)
@@ -2056,6 +2054,11 @@ private struct ModuleEpisodeRowContainer: View {
         #endif
     }
 
+    private var progressDetail: EpisodePlaybackProgress? {
+        continueWatching.episodeRecord(aniListID: aniListID, moduleId: moduleId, mediaTitle: mediaTitle,
+            detailHref: detailHref, episodeNumber: epNum, episodeHref: episode.href)
+    }
+
     private var progress: Double? {
         // Reconcile the season-unique href marker with the legacy number key so completing
         // S1 E5 doesn't light up S2 E5 on a flat multi-season list (see isEpisodeWatched).
@@ -2067,6 +2070,7 @@ private struct ModuleEpisodeRowContainer: View {
             showUsesHrefTracking: showUsesHrefTracking,
             numberIsAmbiguous: numberIsAmbiguous)
         if watched { return 1.0 }
+        if let progressDetail { return progressDetail.fraction }
 
         let mid = moduleId
         // Match on the unique episode href, not the number: on a flat multi-season list the
@@ -2132,6 +2136,7 @@ private struct ModuleEpisodeRowContainer: View {
                     airdate: aniMapEpisode?.airdate,
                     episodeDescription: aniMapEpisode?.description,
                     progress: progress,
+                    progressDetail: progressDetail,
                     onTap: onTap,
                     onMarkWatched: {
                         Task {
@@ -2164,6 +2169,7 @@ private struct ModuleEpisodeRowContainer: View {
                     episode: episode,
                     displayNumber: displayEpisodeNumber,
                     progress: progress,
+                    progressDetail: progressDetail,
                     onTap: onTap,
                     onMarkWatched: {
                         Task {

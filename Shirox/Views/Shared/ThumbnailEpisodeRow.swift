@@ -8,6 +8,7 @@ struct ThumbnailEpisodeRow: View {
     var airdate: String? = nil
     var episodeDescription: String? = nil
     var progress: Double? = nil
+    var progressDetail: EpisodePlaybackProgress? = nil
     let onTap: () -> Void
     var onMarkWatched: (() -> Void)? = nil
     var onMarkUnwatched: (() -> Void)? = nil
@@ -113,6 +114,9 @@ struct ThumbnailEpisodeRow: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }
+                    if let progressDetail { Text(progressDetail.label).font(.caption2).foregroundStyle(.secondary) }
+                    else if isComplete { Text("Gesehen").font(.caption2).foregroundStyle(.green) }
+                    else if let progress, progress > 0 { Text("\(Int(progress * 100)) % angesehen").font(.caption2).foregroundStyle(.secondary) }
 
                     if let dateText = Self.formattedAirdate(airdate) {
                         Text(dateText)

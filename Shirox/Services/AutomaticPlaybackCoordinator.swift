@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 
 enum PlaybackLanguagePolicy {
+    static func resolutionStages(resuming: Bool) -> [Int] { resuming ? [0, 0, 1, 2] : [0, 1, 2] }
     static func code(_ value: String?) -> String? {
         guard let value else { return nil }
         let name = value.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,6 +82,8 @@ struct AutomaticPlaybackRequest {
     var detailHref: String? = nil
     var episodeHref: String? = nil
     var moduleID: String? = nil
+    var preferredStreamTitle: String? = nil
+    var isResume = false
 }
 
 struct AutomaticPlaybackResult {
@@ -105,7 +108,8 @@ final class AutomaticPlaybackCoordinator {
             let request = AutomaticPlaybackRequest(title: item.mediaTitle,
                 kind: DetailViewModel.isSeriesSource(item.episodeHref ?? item.detailHref ?? "") ? .series : .anime,
                 animeID: item.aniListID, seasonIsExplicit: true, season: sourceSeason, episode: sourceEpisode,
-                detailHref: item.detailHref, episodeHref: item.episodeHref, moduleID: item.moduleId)
+                detailHref: item.detailHref, episodeHref: item.episodeHref, moduleID: item.moduleId,
+                preferredStreamTitle: item.streamTitle, isResume: true)
             let result = try await self.resolve(request)
             let context = PlayerContext(mediaTitle: item.mediaTitle, episodeNumber: item.episodeNumber,
                 episodeTitle: item.episodeTitle, imageUrl: item.imageUrl, aniListID: item.aniListID,
@@ -265,7 +269,8 @@ final class AutomaticPlaybackCoordinator {
                         } else { lastError = AutomaticPlaybackError.noEpisode; continue }
                     }
                     status?("Tonspur und Video werden geprüft …")
-                    let streams = try await self.streams(runner: runner, episodeHref: episode.href, legacyModule: module)
+                    let streams = try await self.streams(runner: runner, episodeHref: episode.href, legacyModule: module,
+                                                         preferredStreamTitle: request.preferredStreamTitle, isResume: request.isResume)
                     guard !streams.isEmpty else { continue }
                     if let id = request.catalogID {
                         CatalogAvailabilityStore.shared.bind(id: id, sourceHref: episode.href)
@@ -285,16 +290,18 @@ final class AutomaticPlaybackCoordinator {
         throw lastError
     }
 
-    func streams(runner: ModuleJSRunner, episodeHref: String, legacyModule: ModuleDefinition? = nil) async throws -> [StreamResult] {
+    func streams(runner: ModuleJSRunner, episodeHref: String, legacyModule: ModuleDefinition? = nil,
+                 preferredStreamTitle: String? = nil, isResume: Bool = false) async throws -> [StreamResult] {
         runner.allowsVerificationPrompt = false
         if legacyModule?.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true {
             var lastError: Error = AutomaticPlaybackError.noStream
             var websiteBlocked = false
-            for language in 0...2 {
+            for language in PlaybackLanguagePolicy.resolutionStages(resuming: isResume) {
                 try Task.checkCancellation()
                 do {
                     return try await PlaybackDeadline.run(seconds: DetailViewModel.isSeriesSource(episodeHref) ? 36 : 28) {
-                        let raw = try await runner.fetchStreams(episodeUrl: episodeHref, languagePriority: language, preflight: false)
+                        let raw = try await runner.fetchStreams(episodeUrl: episodeHref, languagePriority: language,
+                                                                preflight: false, preferredStreamTitle: preferredStreamTitle)
                         let candidates = raw.map { PlaybackLanguagePolicy.prepare($0, preferredSubtitleLanguage: language == 0 ? nil : language == 1 ? "de" : "en") }
                             .filter { PlaybackLanguagePolicy.priority($0) == language }
                         return try await self.verified(candidates, legacyModule: legacyModule)

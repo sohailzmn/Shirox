@@ -6,6 +6,7 @@ struct EpisodeRowView: View {
     /// untouched for progress, downloads and unique episodeHref tracking.
     var displayNumber: Int? = nil
     var progress: Double? = nil
+    var progressDetail: EpisodePlaybackProgress? = nil
     let onTap: () -> Void
     var onMarkWatched: (() -> Void)? = nil
     var onMarkUnwatched: (() -> Void)? = nil
@@ -67,9 +68,13 @@ struct EpisodeRowView: View {
                                 radius: 4, y: 2)
                     }
 
-                    Text("Folge \(displayNumber.map(String.init) ?? episode.displayNumber)")
-                        .font(.callout.weight(.medium))
-                        .foregroundStyle(.primary)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Folge \(displayNumber.map(String.init) ?? episode.displayNumber)")
+                            .font(.callout.weight(.medium)).foregroundStyle(.primary)
+                        if let progressDetail { Text(progressDetail.label).font(.caption2).foregroundStyle(.secondary) }
+                        else if isComplete { Text("Gesehen").font(.caption2).foregroundStyle(.green) }
+                        else if let progress, progress > 0 { Text("\(Int(progress * 100)) % angesehen").font(.caption2).foregroundStyle(.secondary) }
+                    }
 
                     // Selection mode swaps the numbered circle for a checkbox and hides both
                     // the progress bar and the trailing status icons — which left the batch
@@ -191,6 +196,18 @@ struct EpisodeRowView: View {
                 }
             }
         }
+    }
+}
+
+struct EpisodeProgressIndicator: View {
+    let record: EpisodePlaybackProgress
+    var isWatched = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(isWatched ? "Gesehen · \(record.label)" : record.label)
+                .font(.caption).foregroundStyle(.secondary)
+            ProgressView(value: record.fraction).tint(isWatched || record.fraction >= 0.9 ? .green : .accentColor)
+        }.accessibilityElement(children: .combine)
     }
 }
 

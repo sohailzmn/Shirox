@@ -10,6 +10,82 @@ import XCTest
 /// *every* row numbered 5 — so S2 E5 showed S1 E5's progress bar and, when tapped, resumed
 /// season 1's stream. The unique per-episode `href` disambiguates the two.
 final class ContinueWatchingSeasonMatchTests: XCTestCase {
+    @MainActor func testEpisodePositionsSurviveSwitchingEpisodesAndBackupRoundTrip() throws {
+        let manager = ContinueWatchingManager.shared
+        let original = try XCTUnwrap(ProgressBackupSection().export())
+        defer { manager.restore(items: original.continueWatching, watchedKeys: original.watchedKeys,
+            watchedHrefKeys: original.watchedHrefKeys, episodeProgress: original.episodeProgress ?? [:]) }
+        manager.restore(items: [], watchedKeys: [], watchedHrefKeys: [])
+        let one = makeItem(episodeNumber: 5, episodeHref: "https://aniworld.to/anime/stream/show/staffel-1/episode-5")
+        var two = makeItem(episodeNumber: 5, episodeHref: "https://aniworld.to/anime/stream/show/staffel-2/episode-5")
+        two.watchedSeconds = 450
+        manager.save(one); manager.save(two)
+        XCTAssertEqual(manager.items.count, 1)
+        XCTAssertEqual(manager.episodeRecord(aniListID: nil, moduleId: "mod", mediaTitle: "Show", episodeNumber: 5,
+            episodeHref: one.episodeHref)?.resumeSeconds, 100)
+        XCTAssertEqual(manager.episodeRecord(aniListID: nil, moduleId: "mod", mediaTitle: "Show", episodeNumber: 5,
+            episodeHref: two.episodeHref)?.resumeSeconds, 450)
+        let payload = try XCTUnwrap(ProgressBackupSection().export())
+        let roundTrip = try JSONDecoder().decode(ProgressBackupPayload.self, from: JSONEncoder().encode(payload))
+        manager.restore(items: roundTrip.continueWatching, watchedKeys: roundTrip.watchedKeys,
+            watchedHrefKeys: roundTrip.watchedHrefKeys, episodeProgress: roundTrip.episodeProgress ?? [:])
+        XCTAssertEqual(manager.episodeProgress.count, 2)
+        let json = String(decoding: try JSONEncoder().encode(manager.episodeProgress), as: UTF8.self)
+        XCTAssertFalse(json.contains("streamUrl")); XCTAssertFalse(json.contains("headers"))
+        manager.resetEpisodeProgress(aniListID: nil, moduleId: "mod", mediaTitle: "Show", episodeNumber: 5, episodeHref: one.episodeHref)
+        XCTAssertEqual(manager.episodeProgress.count, 1)
+        XCTAssertNotNil(manager.episodeRecord(aniListID: nil, moduleId: "mod", mediaTitle: "Show", episodeNumber: 5, episodeHref: two.episodeHref))
+        manager.resetProgress(aniListID: nil, moduleId: "mod", mediaTitle: "Show")
+        XCTAssertTrue(manager.episodeProgress.isEmpty)
+    }
+
+    @MainActor func testCompletedEpisodeKeepsItsPositionWhenNextCardIsQueued() throws {
+        let manager = ContinueWatchingManager.shared
+        let original = try XCTUnwrap(ProgressBackupSection().export())
+        defer { manager.restore(items: original.continueWatching, watchedKeys: original.watchedKeys,
+            watchedHrefKeys: original.watchedHrefKeys, episodeProgress: original.episodeProgress ?? [:]) }
+        manager.restore(items: [], watchedKeys: [], watchedHrefKeys: [])
+        var item = makeItem(episodeNumber: 5, episodeHref: "https://serienstream.to/serie/show/staffel-2/episode-5")
+        item.watchedSeconds = 960; item.sourceReferenceOnly = true; item.sourceSeason = 2; item.sourceEpisode = 5
+        manager.save(item)
+        XCTAssertEqual(manager.items.first?.episodeNumber, 6)
+        XCTAssertEqual(manager.items.first?.sourceSeason, 2)
+        XCTAssertEqual(manager.items.first?.sourceEpisode, 6)
+        let record = try XCTUnwrap(manager.episodeRecord(aniListID: nil, moduleId: "mod", mediaTitle: "Show",
+            episodeNumber: 5, episodeHref: item.episodeHref))
+        XCTAssertEqual(record.fraction, 0.96, accuracy: 0.001)
+        XCTAssertNil(record.resumeSeconds)
+        XCTAssertTrue(record.label.contains("16:00"))
+    }
+
+    func testHistoryCanonicalizesSourceAliasesWithoutMixingSeasonsOrShows() {
+        let old = "https://s.to/serie/stream/dexter/staffel-2/episode-5?lang=1"
+        let current = "https://serienstream.cx/serie/dexter/staffel-2/episode-5/"
+        XCTAssertEqual(PlaybackHistoryIdentity.canonical(old), PlaybackHistoryIdentity.canonical(current))
+        XCTAssertTrue(PlaybackHistoryIdentity.matches(aniListID: nil, moduleID: "old", title: "Old alias", detailHref: old,
+            otherID: nil, otherModule: "new", otherTitle: "Dexter", otherHref: current))
+        XCTAssertFalse(PlaybackHistoryIdentity.matches(aniListID: nil, moduleID: "mod", title: "Dexter", detailHref: old,
+            otherID: nil, otherModule: "mod", otherTitle: "Dexter", otherHref: "https://serienstream.to/serie/dexter-wiedererwachen"))
+        XCTAssertFalse(makeItem(episodeNumber: 5, episodeHref: old).matchesEpisode(number: 5,
+            href: "https://serienstream.to/serie/dexter/staffel-1/episode-5"))
+    }
+
+    func testLegacySourceResumeRefreshesLanguageInsteadOfReplayingOldMediaURL() {
+        var item = makeItem(episodeNumber: 5, episodeHref: "https://aniworld.to/anime/stream/show/staffel-1/episode-5")
+        XCTAssertNil(item.sourceReferenceOnly)
+        XCTAssertTrue(item.usesSourceResume)
+        item.localImportName = "picked-video.mp4"
+        XCTAssertFalse(item.usesSourceResume)
+        XCTAssertEqual(PlaybackLanguagePolicy.resolutionStages(resuming: true), [0, 0, 1, 2])
+        XCTAssertEqual(PlaybackLanguagePolicy.resolutionStages(resuming: false), [0, 1, 2])
+    }
+
+    func testLegacySavedPositionsDecodeWithoutLanguageMetadata() throws {
+        let item = makeItem(episodeNumber: 5, episodeHref: "show/episode-5")
+        let restored = try JSONDecoder().decode(ContinueWatchingItem.self, from: JSONEncoder().encode(item))
+        XCTAssertNil(restored.audioLanguage); XCTAssertEqual(restored.watchedSeconds, 100)
+        XCTAssertEqual(EpisodePlaybackProgress(restored).label, "1:40 von 16:40 · 10 %")
+    }
 
     /// Builds an item carrying only the fields the matcher inspects; the rest are inert.
     private func makeItem(episodeNumber: Int, episodeHref: String?) -> ContinueWatchingItem {

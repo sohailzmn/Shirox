@@ -11,11 +11,13 @@ import Combine
         static let watched = "watchedEpisodeKeys"
         static let watchedHrefs = "watchedEpisodeHrefKeys"
         static let dataVersion = "cwDataVersion"
+        static let episodeProgress = "episodePlaybackProgressV1"
     }
 
     // MARK: - Published Properties
 
     @Published private(set) var items: [ContinueWatchingItem] = []
+    @Published private(set) var episodeProgress: [String: EpisodePlaybackProgress] = [:]
     @Published private(set) var watchedKeys: Set<String> = []
     /// Show-namespaced markers ("ah:<id>:<href>" / "mh:<mid>:<title>:<href>") for episodes
     /// completed or marked in-app. Unlike `watchedKeys` these are season-unique (the href is),
@@ -43,6 +45,7 @@ import Combine
     /// At ≥ 90%: marks episode watched and queues the next one as a placeholder.
     /// Enforces the one-item-per-show invariant via removeAllShowItems.
     func save(_ item: ContinueWatchingItem) {
+        recordEpisodeProgress(item)
         Logger.shared.log("[CW] save called: ep=\(item.episodeNumber) streamUrl=\(item.isPlaceholder ? "placeholder" : "inprog") watched=\(item.watchedSeconds)/\(item.totalSeconds) title=\(item.mediaTitle)", type: "Debug")
         var newItems = items
         removeAllShowItems(for: item, in: &newItems)
@@ -123,6 +126,8 @@ import Combine
     /// Removes the watched key and any CW item for a single episode.
     func resetEpisodeProgress(aniListID: Int?, moduleId: String?, mediaTitle: String,
                               episodeNumber: Int, episodeHref: String? = nil) {
+        clearEpisodeHistory(aniListID: aniListID, moduleId: moduleId, mediaTitle: mediaTitle,
+                            episodeNumber: episodeNumber, episodeHref: episodeHref)
         if let key = Self.watchedKey(aniListID: aniListID, moduleId: moduleId,
                                      mediaTitle: mediaTitle, episodeNumber: episodeNumber) {
             watchedKeys.remove(key)
@@ -138,6 +143,7 @@ import Combine
 
     /// Removes all watched keys and CW items for a single show.
     func resetProgress(aniListID: Int?, moduleId: String?, mediaTitle: String) {
+        clearEpisodeHistory(aniListID: aniListID, moduleId: moduleId, mediaTitle: mediaTitle)
         if let aid = aniListID {
             watchedKeys = watchedKeys.filter { !$0.hasPrefix("a:\(aid):") }
         } else if let mid = moduleId, !mid.isEmpty {
@@ -155,6 +161,9 @@ import Combine
 
     /// Returns true if the show has any CW item or watched episode.
     func hasProgress(aniListID: Int?, moduleId: String?, mediaTitle: String) -> Bool {
+        if episodeProgress.values.contains(where: { PlaybackHistoryIdentity.matches(aniListID: aniListID,
+            moduleID: moduleId, title: mediaTitle, detailHref: nil, otherID: $0.aniListID,
+            otherModule: $0.moduleID, otherTitle: $0.mediaTitle, otherHref: nil) }) { return true }
         if items.contains(where: { matchesShow($0, aniListID: aniListID, moduleId: moduleId, mediaTitle: mediaTitle) }) {
             return true
         }
@@ -169,6 +178,8 @@ import Combine
 
     /// Clears all watched history and Continue Watching cards.
     func resetAllData() {
+        episodeProgress = [:]
+        UserDefaults.standard.removeObject(forKey: Keys.episodeProgress)
         items = []
         watchedKeys = []
         watchedHrefKeys = []
@@ -431,6 +442,8 @@ import Combine
     func markUnwatched(aniListID: Int?, moduleId: String?, mediaTitle: String, episodeNumber: Int,
                        imageUrl: String? = nil, totalEpisodes: Int? = nil, availableEpisodes: Int? = nil,
                        detailHref: String? = nil, episodeHref: String? = nil) {
+        clearEpisodeHistory(aniListID: aniListID, moduleId: moduleId, mediaTitle: mediaTitle,
+                            episodeNumber: episodeNumber, episodeHref: episodeHref)
         guard let key = Self.watchedKey(aniListID: aniListID, moduleId: moduleId,
                                         mediaTitle: mediaTitle, episodeNumber: episodeNumber)
         else { return }
@@ -518,6 +531,7 @@ import Combine
                        aniListID: Int?, moduleId: String?, mediaTitle: String) {
         guard episodeNumber > 1 else { return }
         for ep in 1..<episodeNumber {
+            clearEpisodeHistory(aniListID: aniListID, moduleId: moduleId, mediaTitle: mediaTitle, episodeNumber: ep)
             if let key = Self.watchedKey(aniListID: aniListID, moduleId: moduleId,
                                          mediaTitle: mediaTitle, episodeNumber: ep) {
                 watchedKeys.remove(key)
@@ -734,7 +748,7 @@ import Combine
         var placeholder = ContinueWatchingItem(
             id: id, mediaTitle: srcMediaTitle, episodeNumber: episodeNumber,
             episodeTitle: nil, imageUrl: srcImageUrl, streamUrl: "",
-            headers: nil, subtitle: nil, streamTitle: nil, aniListID: srcAniListID,
+            headers: nil, subtitle: nil, streamTitle: source?.streamTitle, aniListID: srcAniListID,
             malID: source?.malID,
             moduleId: srcModuleId, detailHref: srcDetailHref,
             watchedSeconds: 0, totalSeconds: 0, totalEpisodes: srcTotalEps,
@@ -1158,6 +1172,7 @@ import Combine
             UserDefaults.standard.set(watchedData, forKey: Keys.watched)
             let watchedHrefData = try JSONEncoder().encode(watchedHrefKeys)
             UserDefaults.standard.set(watchedHrefData, forKey: Keys.watchedHrefs)
+            UserDefaults.standard.set(try JSONEncoder().encode(episodeProgress), forKey: Keys.episodeProgress)
         } catch {
             assertionFailure("ContinueWatchingManager: encode failed — \(error)")
         }
@@ -1171,10 +1186,13 @@ import Combine
     /// restored data as a stale schema and wipe it.
     func restore(items newItems: [ContinueWatchingItem],
                  watchedKeys newWatchedKeys: Set<String>,
-                 watchedHrefKeys newWatchedHrefKeys: Set<String>) {
+                 watchedHrefKeys newWatchedHrefKeys: Set<String>,
+                 episodeProgress newEpisodeProgress: [String: EpisodePlaybackProgress] = [:]) {
         items = newItems
         watchedKeys = newWatchedKeys
         watchedHrefKeys = newWatchedHrefKeys
+        episodeProgress = newEpisodeProgress
+        for item in newItems { recordEpisodeProgress(item) }
         UserDefaults.standard.set(Self.currentDataVersion, forKey: Keys.dataVersion)
         persist()
     }
@@ -1189,6 +1207,7 @@ import Combine
             // takes priority over the (now empty) number keys — so a migration silently marked
             // episodes of a freshly-cleared show as already seen.
             UserDefaults.standard.removeObject(forKey: Keys.watchedHrefs)
+            UserDefaults.standard.removeObject(forKey: Keys.episodeProgress)
             UserDefaults.standard.set(Self.currentDataVersion, forKey: Keys.dataVersion)
             return
         }
@@ -1205,6 +1224,56 @@ import Combine
         if let hdata = UserDefaults.standard.data(forKey: Keys.watchedHrefs),
            let hdecoded = try? JSONDecoder().decode(Set<String>.self, from: hdata) {
             watchedHrefKeys = hdecoded
+        }
+        if let data = UserDefaults.standard.data(forKey: Keys.episodeProgress),
+           let records = try? JSONDecoder().decode([String: EpisodePlaybackProgress].self, from: data) {
+            episodeProgress = records
+        }
+        for item in items { recordEpisodeProgress(item) }
+    }
+}
+
+extension ContinueWatchingManager {
+    private func recordEpisodeProgress(_ item: ContinueWatchingItem) {
+        guard !item.isPlaceholder, item.watchedSeconds.isFinite, item.totalSeconds.isFinite,
+              item.watchedSeconds > 0, item.totalSeconds > 0 else { return }
+        let record = EpisodePlaybackProgress(item)
+        guard episodeProgress[record.key].map({ $0.updatedAt <= record.updatedAt }) ?? true else { return }
+        episodeProgress[record.key] = record
+        if episodeProgress.count > 3000 {
+            episodeProgress = Dictionary(uniqueKeysWithValues: episodeProgress.values.sorted { $0.updatedAt > $1.updatedAt }
+                .prefix(2500).map { ($0.key, $0) })
+        }
+    }
+
+    func latestItem(aniListID: Int?, moduleId: String?, mediaTitle: String, detailHref: String?) -> ContinueWatchingItem? {
+        items.filter { PlaybackHistoryIdentity.matches(aniListID: aniListID, moduleID: moduleId, title: mediaTitle,
+            detailHref: detailHref, otherID: $0.aniListID, otherModule: $0.moduleId,
+            otherTitle: $0.mediaTitle, otherHref: $0.detailHref ?? $0.episodeHref) }
+            .max { $0.lastWatchedAt < $1.lastWatchedAt }
+    }
+
+    func episodeRecord(aniListID: Int?, moduleId: String?, mediaTitle: String, detailHref: String? = nil,
+                       episodeNumber: Int, episodeHref: String? = nil, season: Int? = nil) -> EpisodePlaybackProgress? {
+        if let episodeHref, let exact = episodeProgress["href:" + PlaybackHistoryIdentity.canonical(episodeHref)] { return exact }
+        return episodeProgress.values.filter { record in
+            if let episodeHref, !episodeHref.isEmpty, let saved = record.episodeHref, !saved.isEmpty { return false }
+            if let season, let savedSeason = record.sourceSeason, season != savedSeason { return false }
+            let number = season != nil ? (record.sourceEpisode ?? record.episodeNumber) : record.episodeNumber
+            return number == episodeNumber && PlaybackHistoryIdentity.matches(aniListID: aniListID, moduleID: moduleId,
+                title: mediaTitle, detailHref: detailHref, otherID: record.aniListID, otherModule: record.moduleID,
+                otherTitle: record.mediaTitle, otherHref: record.detailHref ?? record.episodeHref)
+        }.max { $0.updatedAt < $1.updatedAt }
+    }
+
+    private func clearEpisodeHistory(aniListID: Int?, moduleId: String?, mediaTitle: String,
+                                     episodeNumber: Int? = nil, episodeHref: String? = nil) {
+        episodeProgress = episodeProgress.filter { _, record in
+            guard PlaybackHistoryIdentity.matches(aniListID: aniListID, moduleID: moduleId, title: mediaTitle,
+                detailHref: nil, otherID: record.aniListID, otherModule: record.moduleID,
+                otherTitle: record.mediaTitle, otherHref: nil) else { return true }
+            if let episodeHref, let saved = record.episodeHref { return PlaybackHistoryIdentity.canonical(episodeHref) != PlaybackHistoryIdentity.canonical(saved) }
+            return episodeNumber.map { $0 != record.episodeNumber } ?? false
         }
     }
 }
