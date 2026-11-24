@@ -34,12 +34,13 @@ jobs:
           xcodebuild -version
           python3 - <<'PY'
           import json, subprocess, os
-          devices = json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j']))['devices']
+          devices = json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j'], timeout=60))['devices']
           selected = next(d['udid'] for runtime, group in sorted(devices.items(), reverse=True) if os.environ['SIMULATOR_FAMILY'] in runtime for d in group if d.get('isAvailable'))
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write('SIMULATOR_ID=' + selected + '\n')
-          subprocess.run(['xcrun', 'simctl', 'boot', selected], timeout=60, check=False)
-          subprocess.run(['xcrun', 'simctl', 'bootstatus', selected, '-b'], timeout=180, check=True)
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'simulator-boot.log'), 'w') as log:
+              subprocess.run(['xcrun', 'simctl', 'boot', selected], timeout=60, check=False, stdout=log, stderr=subprocess.STDOUT)
+              subprocess.run(['xcrun', 'simctl', 'bootstatus', selected, '-b'], timeout=180, check=True, stdout=log, stderr=subprocess.STDOUT)
           PY
       - name: Pass live probe flag into the XCTest app
         run: |
@@ -78,6 +79,10 @@ jobs:
       - name: Collect catalogue visual snapshot
         if: always()
         run: |
+          if [ ! -d "$RUNNER_TEMP/SeriesTests/Logs/Test" ]; then
+            echo "No test result bundle exists; simulator startup did not reach XCTest."
+            exit 0
+          fi
           find "$HOME/Library/Developer/CoreSimulator/Devices" -name 'website-gate-*.png' -type f -exec cp {} "$RUNNER_TEMP/" \;
           find "$HOME/Library/Developer/CoreSimulator/Devices" -name 'catalog-detail-*.png' -type f -exec cp {} "$RUNNER_TEMP/" \;
           SNAPSHOT=$(find "$HOME/Library/Developer/CoreSimulator/Devices" -name catalog-detail-ipad.png -type f -print -quit)
@@ -95,6 +100,7 @@ jobs:
         with:
           name: automatic-series-test-log
           path: |
+            ${{ runner.temp }}/simulator-boot.log
             ${{ runner.temp }}/series-tests.log
             ${{ runner.temp }}/catalog-detail-*.png
             ${{ runner.temp }}/website-gate-*.png
