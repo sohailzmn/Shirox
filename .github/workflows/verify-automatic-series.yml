@@ -7,7 +7,7 @@ on:
       runner_image:
         description: Standard hosted Mac image
         type: choice
-        options: [macos-26, macos-15]
+        options: [macos-26, macos-15, macos-15-intel]
         default: macos-26
       live_source_probe:
         description: Probe one real AniWorld episode through native WebKit and media preflight
@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Select compatible Xcode on the fallback image
-        if: inputs.runner_image == 'macos-15'
+        if: startsWith(inputs.runner_image, 'macos-15')
         run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
       - name: Verify website gate submission
         run: node scripts/test-browser-gate.cjs

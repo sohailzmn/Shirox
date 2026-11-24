@@ -9,7 +9,7 @@ on:
       runner_image:
         description: Standard hosted Mac image
         type: choice
-        options: [macos-26, macos-15]
+        options: [macos-26, macos-15, macos-15-intel]
         default: macos-26
 jobs:
   build-ios:
@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Select compatible Xcode on the fallback image
-        if: inputs.runner_image == 'macos-15'
+        if: startsWith(inputs.runner_image, 'macos-15')
         run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
       - name: Build iOS IPA without signing
         run: |
