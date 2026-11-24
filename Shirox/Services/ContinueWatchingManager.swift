@@ -1241,8 +1241,8 @@ extension ContinueWatchingManager {
         guard episodeProgress[record.key].map({ $0.updatedAt <= record.updatedAt }) ?? true else { return }
         episodeProgress[record.key] = record
         if episodeProgress.count > 3000 {
-            episodeProgress = Dictionary(uniqueKeysWithValues: episodeProgress.values.sorted { $0.updatedAt > $1.updatedAt }
-                .prefix(2500).map { ($0.key, $0) })
+            episodeProgress = Dictionary(episodeProgress.values.sorted { $0.updatedAt > $1.updatedAt }
+                .prefix(2500).map { ($0.key, $0) }, uniquingKeysWith: { $0.updatedAt >= $1.updatedAt ? $0 : $1 })
         }
     }
 

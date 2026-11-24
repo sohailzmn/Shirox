@@ -212,7 +212,7 @@ struct CatalogDetailScreen: View {
                     } label: {
                         Label(resumeLabel, systemImage: "play.fill")
                             .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 8)
-                    }.buttonStyle(.borderedProminent).disabled(loading || (title.sourceHref != nil && episodes.isEmpty))
+                    }.buttonStyle(.borderedProminent).disabled(loading || (savedItem == nil && title.sourceHref != nil && episodes.isEmpty))
                     if let item = savedItem, item.totalSeconds > 0 {
                         EpisodeProgressIndicator(record: EpisodePlaybackProgress(item))
                     }
