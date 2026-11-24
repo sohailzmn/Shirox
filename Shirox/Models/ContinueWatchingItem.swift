@@ -177,7 +177,7 @@ struct EpisodePlaybackProgress: Codable, Equatable {
 
 extension ContinueWatchingItem {
     var usesSourceResume: Bool {
-        localImportName == nil && bookmarkData == nil &&
+        localImportName == nil && bookmarkData == nil && URL(string: streamUrl)?.isFileURL != true &&
         [episodeHref, detailHref].compactMap { $0 }.contains {
             SourceCatalogRouting.accepts($0, kind: .anime) || SourceCatalogRouting.accepts($0, kind: .series)
         }

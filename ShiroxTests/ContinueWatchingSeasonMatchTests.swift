@@ -80,6 +80,14 @@ final class ContinueWatchingSeasonMatchTests: XCTestCase {
         XCTAssertEqual(PlaybackLanguagePolicy.resolutionStages(resuming: false), [0, 1, 2])
     }
 
+    func testDownloadedEpisodeWithSourceMetadataKeepsLocalResume() throws {
+        let item = makeItem(episodeNumber: 5, episodeHref: "https://aniworld.to/anime/stream/show/staffel-1/episode-5")
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any])
+        json["streamUrl"] = "file:///private/var/mobile/downloads/episode.mp4"
+        let downloaded = try JSONDecoder().decode(ContinueWatchingItem.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertFalse(downloaded.usesSourceResume)
+    }
+
     func testLegacySavedPositionsDecodeWithoutLanguageMetadata() throws {
         let item = makeItem(episodeNumber: 5, episodeHref: "show/episode-5")
         let restored = try JSONDecoder().decode(ContinueWatchingItem.self, from: JSONEncoder().encode(item))
