@@ -103,12 +103,32 @@ final class AutomaticPlaybackCoordinator {
 
     func resume(_ item: ContinueWatchingItem) {
         let operation: @MainActor () async throws -> Void = {
-            let sourceSeason = item.sourceSeason ?? item.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? 1
-            let sourceEpisode = item.sourceEpisode ?? item.episodeHref.flatMap { ModuleSeasonRouting.episodeNumber(for: $0) } ?? item.episodeNumber
+            var sourceSeason = item.sourceSeason ?? item.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? 1
+            var sourceEpisode = item.sourceEpisode ?? item.episodeHref.flatMap { ModuleSeasonRouting.episodeNumber(for: $0) } ?? item.episodeNumber
+            var episodeHref = item.episodeHref
+            // A queued next episode can cross a season boundary. Resolve it
+            // after the actual completed href, never by inventing S1 E11.
+            if item.isPlaceholder,
+               let previous = ContinueWatchingManager.shared.episodeRecord(aniListID: item.aniListID,
+                    moduleId: item.moduleId, mediaTitle: item.mediaTitle, detailHref: item.detailHref,
+                    episodeNumber: item.episodeNumber - 1),
+               let anchor = previous.episodeHref, let detail = item.detailHref {
+                await ModuleManager.shared.ensureUnifiedGermanSource()
+                if let module = ModuleManager.shared.modules.first(where: { $0.id == item.moduleId }) {
+                    let runner = ModuleJSRunner(); try await runner.load(module: module)
+                    let episodes = try await runner.fetchEpisodes(url: detail)
+                    guard let next = EpisodeNavigator.next(afterHref: anchor, orNumber: item.episodeNumber - 1, in: episodes) else {
+                        throw AutomaticPlaybackError.noEpisode
+                    }
+                    episodeHref = next.href
+                    sourceSeason = ModuleSeasonRouting.seasonNumber(for: next.href) ?? sourceSeason
+                    sourceEpisode = ModuleSeasonRouting.episodeNumber(for: next.href) ?? Int(next.number)
+                }
+            }
             let request = AutomaticPlaybackRequest(title: item.mediaTitle,
                 kind: DetailViewModel.isSeriesSource(item.episodeHref ?? item.detailHref ?? "") ? .series : .anime,
                 animeID: item.aniListID, seasonIsExplicit: true, season: sourceSeason, episode: sourceEpisode,
-                detailHref: item.detailHref, episodeHref: item.episodeHref, moduleID: item.moduleId,
+                detailHref: item.detailHref, episodeHref: episodeHref, moduleID: item.moduleId,
                 preferredStreamTitle: item.streamTitle, isResume: true)
             let result = try await self.resolve(request)
             let context = PlayerContext(mediaTitle: item.mediaTitle, episodeNumber: item.episodeNumber,

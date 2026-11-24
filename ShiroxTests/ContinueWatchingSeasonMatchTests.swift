@@ -87,6 +87,18 @@ final class ContinueWatchingSeasonMatchTests: XCTestCase {
         XCTAssertEqual(EpisodePlaybackProgress(restored).label, "1:40 von 16:40 · 10 %")
     }
 
+    @MainActor func testNativeResumeBridgeForwardsProviderAndGermanStage() async throws {
+        let script = #"async function extractStreamUrl(url, options) { return JSON.stringify({streams:[{streamUrl:'https://media.example/fixture.m3u8',title:options.preferredProvider,audioLanguage:options.languagePriority===0?'de':'en'}]}); }"#
+        let json: [String: Any] = ["sourceName": "Resume fixture", "version": "1", "type": "anime",
+            "scriptUrl": "https://fixture.example/resume.js", "scriptContent": script]
+        let module = try JSONDecoder().decode(ModuleDefinition.self, from: JSONSerialization.data(withJSONObject: json))
+        let runner = ModuleJSRunner(); try await runner.load(module: module)
+        let streams = try await runner.fetchStreams(episodeUrl: "https://fixture.example/episode-5",
+            languagePriority: 0, preflight: false, preferredStreamTitle: "Vidmoly · Auto HLS")
+        XCTAssertEqual(streams.first?.title, "Vidmoly · Auto HLS")
+        XCTAssertEqual(streams.first?.audioLanguage, "de")
+    }
+
     /// Builds an item carrying only the fields the matcher inspects; the rest are inert.
     private func makeItem(episodeNumber: Int, episodeHref: String?) -> ContinueWatchingItem {
         ContinueWatchingItem(

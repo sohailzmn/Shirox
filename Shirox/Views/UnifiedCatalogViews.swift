@@ -308,8 +308,7 @@ struct CatalogDetailScreen: View {
                                                aliases: [title.originalName].compactMap { $0 }, kind: title.kind,
                                                animeID: title.anime?.provider == .anilist ? title.anime?.id : nil,
                                                seasonIsExplicit: title.sourceHref != nil || title.kind != .anime,
-                                               season: season, episode: episode, detailHref: title.sourceHref,
-                                               episodeHref: sourceLink(episode)?.href, moduleID: title.moduleID)
+                                               season: season, episode: episode, detailHref: title.sourceHref, moduleID: title.moduleID)
         #if os(iOS)
         PlayerPresenter.shared.presentResolvingEpisode(title: title.name, episode: episode, artwork: title.poster ?? "", onResolve: {
             defer { loading = false }
@@ -327,7 +326,7 @@ struct CatalogDetailScreen: View {
         let result = try await AutomaticPlaybackCoordinator.shared.resolve(request)
         ModuleManager.shared.selectModule(result.module)
         let available = title.anime?.airedOrAnnouncedEpisodes ?? result.episodes.count
-        let total = title.anime?.episodes ?? seasons.first(where: { $0.number == season })?.episodeCount ?? result.episodes.count
+        let total = title.anime?.episodes ?? (title.sourceHref != nil ? result.episodes.count : seasons.first(where: { $0.number == season })?.episodeCount) ?? result.episodes.count
         let context = PlayerContext(mediaTitle: title.name, episodeNumber: title.anime != nil ? request.episode : Int(result.episode.number), episodeTitle: nil,
                                     imageUrl: title.poster ?? "", aniListID: title.anime?.provider == .anilist ? title.anime?.id : nil,
                                     malID: title.anime?.idMal, moduleId: result.module.id, totalEpisodes: total,

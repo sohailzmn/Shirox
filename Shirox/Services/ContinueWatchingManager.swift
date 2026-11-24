@@ -1236,7 +1236,7 @@ import Combine
 extension ContinueWatchingManager {
     private func recordEpisodeProgress(_ item: ContinueWatchingItem) {
         guard !item.isPlaceholder, item.watchedSeconds.isFinite, item.totalSeconds.isFinite,
-              item.watchedSeconds > 0, item.totalSeconds > 0 else { return }
+              item.watchedSeconds >= 0, item.totalSeconds > 0 else { return }
         let record = EpisodePlaybackProgress(item)
         guard episodeProgress[record.key].map({ $0.updatedAt <= record.updatedAt }) ?? true else { return }
         episodeProgress[record.key] = record

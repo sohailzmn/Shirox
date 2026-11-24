@@ -163,8 +163,8 @@ struct EpisodePlaybackProgress: Codable, Equatable {
         if let aniListID { return "anime:\(aniListID):\(episodeNumber)" }
         return "module:\(moduleID ?? ""):\(mediaTitle):\(sourceSeason ?? 0):\(episodeNumber)"
     }
-    var fraction: Double { totalSeconds > 0 ? min(max(watchedSeconds / totalSeconds, 0), 1) : 0 }
-    var resumeSeconds: Double? { watchedSeconds > 0 && fraction < 0.95 ? watchedSeconds : nil }
+    var fraction: Double { totalSeconds.isFinite && watchedSeconds.isFinite && totalSeconds > 0 ? min(max(watchedSeconds / totalSeconds, 0), 1) : 0 }
+    var resumeSeconds: Double? { watchedSeconds.isFinite && totalSeconds.isFinite && totalSeconds > 0 && watchedSeconds > 0 && fraction < 0.95 ? watchedSeconds : nil }
     var label: String { "\(Self.time(watchedSeconds)) von \(Self.time(totalSeconds)) · \(Int(fraction * 100)) %" }
     static func time(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds >= 0 else { return "0:00" }
