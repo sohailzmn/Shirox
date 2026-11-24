@@ -308,7 +308,9 @@ struct CatalogDetailScreen: View {
                                                aliases: [title.originalName].compactMap { $0 }, kind: title.kind,
                                                animeID: title.anime?.provider == .anilist ? title.anime?.id : nil,
                                                seasonIsExplicit: title.sourceHref != nil || title.kind != .anime,
-                                               season: season, episode: episode, detailHref: title.sourceHref, moduleID: title.moduleID)
+                                               season: season, episode: episode, detailHref: title.sourceHref, moduleID: title.moduleID,
+                                               preferredStreamTitle: record(episode)?.streamTitle ?? savedItem?.streamTitle,
+                                               isResume: record(episode)?.resumeSeconds != nil)
         #if os(iOS)
         PlayerPresenter.shared.presentResolvingEpisode(title: title.name, episode: episode, artwork: title.poster ?? "", onResolve: {
             defer { loading = false }
@@ -339,7 +341,8 @@ struct CatalogDetailScreen: View {
         let refresh: StreamRefetchLoader = { number, href in
             guard let exact = EpisodeNavigator.resolve(href: href, orNumber: number, in: result.episodes + [result.episode]) else { return [] }
             let runner = ModuleJSRunner(); try await runner.load(module: result.module)
-            return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: exact.href, legacyModule: result.module)
+            return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: exact.href, legacyModule: result.module,
+                preferredStreamTitle: result.selected.title, isResume: true)
         }
         var anchor = result.episode.href
         let sourceOffset = (ModuleSeasonRouting.episodeNumber(for: anchor) ?? Int(result.episode.number)) - context.episodeNumber
@@ -348,7 +351,8 @@ struct CatalogDetailScreen: View {
             guard let step = EpisodeNavigator.next(afterHref: anchor, orNumber: number, in: result.episodes) else { return nil }
             if title.anime != nil, ModuleSeasonRouting.seasonNumber(for: step.href) != sourceSeason { return nil }
             let runner = ModuleJSRunner(); try await runner.load(module: result.module)
-            let streams = try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: step.href, legacyModule: result.module)
+            let streams = try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: step.href, legacyModule: result.module,
+                preferredStreamTitle: result.selected.title, isResume: true)
             anchor = step.href
             let progressNumber = title.anime != nil ? (ModuleSeasonRouting.episodeNumber(for: step.href) ?? Int(step.number)) - sourceOffset : Int(step.number)
             return (streams: streams, episodeNumber: progressNumber, episodeHref: step.href)

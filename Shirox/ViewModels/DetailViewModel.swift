@@ -386,7 +386,10 @@ final class DetailViewModel: ObservableObject {
         guard let module = ModuleManager.shared.activeModule else { throw AutomaticPlaybackError.noSource }
         let runner = ModuleJSRunner()
         try await runner.load(module: module)
-        return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: episode.href, legacyModule: module)
+        let saved = ContinueWatchingManager.shared.episodeRecord(aniListID: aniListID, moduleId: module.id,
+            mediaTitle: detail?.title ?? "", detailHref: detailHref, episodeNumber: Int(episode.number), episodeHref: episode.href)
+        return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: episode.href, legacyModule: module,
+            preferredStreamTitle: saved?.streamTitle, isResume: saved?.resumeSeconds != nil)
     }
 
     func pickStream(_ stream: StreamResult) {

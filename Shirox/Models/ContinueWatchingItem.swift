@@ -139,6 +139,7 @@ enum PlaybackHistoryIdentity {
 /// Contains source identities only, never expiring media URLs or request headers.
 struct EpisodePlaybackProgress: Codable, Equatable {
     let mediaTitle: String
+    let streamTitle: String?
     let aniListID: Int?
     let moduleID: String?
     let detailHref: String?
@@ -151,7 +152,7 @@ struct EpisodePlaybackProgress: Codable, Equatable {
     let updatedAt: Date
 
     init(_ item: ContinueWatchingItem) {
-        mediaTitle = item.mediaTitle; aniListID = item.aniListID; moduleID = item.moduleId
+        mediaTitle = item.mediaTitle; streamTitle = item.streamTitle; aniListID = item.aniListID; moduleID = item.moduleId
         detailHref = item.detailHref; episodeHref = item.episodeHref; episodeNumber = item.episodeNumber
         sourceSeason = item.sourceSeason ?? item.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) }
         sourceEpisode = item.sourceEpisode ?? item.episodeHref.flatMap { ModuleSeasonRouting.episodeNumber(for: $0) }

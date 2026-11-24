@@ -140,7 +140,8 @@ final class AutomaticPlaybackCoordinator {
             let refresh: StreamRefetchLoader = { _, href in
                 guard let href else { return [] }
                 let runner = ModuleJSRunner(); try await runner.load(module: result.module)
-                return try await self.streams(runner: runner, episodeHref: href, legacyModule: result.module)
+                return try await self.streams(runner: runner, episodeHref: href, legacyModule: result.module,
+                    preferredStreamTitle: result.selected.title, isResume: true)
             }
             var playingHref = result.episode.href
             let relativeOffset = sourceEpisode - item.episodeNumber
@@ -150,7 +151,8 @@ final class AutomaticPlaybackCoordinator {
                     try await runner.fetchEpisodes(url: result.detailHref, season: sourceSeason)
                 }
                 guard let next = EpisodeNavigator.next(afterHref: playingHref, orNumber: number, in: episodes) else { return nil }
-                let streams = try await self.streams(runner: runner, episodeHref: next.href, legacyModule: result.module)
+                let streams = try await self.streams(runner: runner, episodeHref: next.href, legacyModule: result.module,
+                    preferredStreamTitle: result.selected.title, isResume: true)
                 playingHref = next.href
                 let sourceNumber = ModuleSeasonRouting.episodeNumber(for: next.href) ?? Int(next.number)
                 let progressNumber = sourceNumber - relativeOffset
