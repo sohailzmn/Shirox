@@ -4,6 +4,11 @@ on:
     branches: [codex/automatic-series-playback-20261121]
   workflow_dispatch:
     inputs:
+      runner_image:
+        description: Standard hosted Mac image
+        type: choice
+        options: [macos-26, macos-15]
+        default: macos-26
       live_source_probe:
         description: Probe one real AniWorld episode through native WebKit and media preflight
         type: boolean
@@ -12,12 +17,15 @@ permissions:
   contents: read
 jobs:
   ios-tests:
-    runs-on: macos-26
+    runs-on: ${{ inputs.runner_image || 'macos-26' }}
     env:
       SHIROX_LIVE_SOURCE_PROBE: ${{ (github.event_name == 'push' || inputs.live_source_probe) && '1' || '0' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Select compatible Xcode on the fallback image
+        if: inputs.runner_image == 'macos-15'
+        run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
       - name: Verify website gate submission
         run: node scripts/test-browser-gate.cjs
       - name: Select available iOS simulator
@@ -26,7 +34,7 @@ jobs:
           python3 - <<'PY'
           import json, subprocess, os
           devices = json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j']))['devices']
-          selected = next(d['udid'] for runtime, group in devices.items() if 'iOS' in runtime for d in group if d.get('isAvailable'))
+          selected = next(d['udid'] for runtime, group in sorted(devices.items(), reverse=True) if 'iOS-26' in runtime for d in group if d.get('isAvailable'))
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write('SIMULATOR_ID=' + selected + '\n')
           PY
