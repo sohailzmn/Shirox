@@ -281,6 +281,7 @@ final class PlaybackRoutingTests: XCTestCase {
             let window = UIWindow(frame: CGRect(origin: .zero, size: size))
             window.rootViewController = controller; window.isHidden = false
             controller.view.frame = window.bounds; controller.view.layoutIfNeeded()
+            try await Task.sleep(nanoseconds: 100_000_000)
             let image = UIGraphicsImageRenderer(size: size).image { _ in controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true) }
             let name = "catalog-detail-progress-\(Int(width)).png"
             let path = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(name)

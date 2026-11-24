@@ -59,6 +59,7 @@ jobs:
             -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
             -derivedDataPath "$RUNNER_TEMP/SeriesTests" -skipPackagePluginValidation \
             -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 150 -maximum-test-execution-time-allowance 180 \
             -only-testing:ShiroxTests/PlaybackRoutingTests \
             -only-testing:ShiroxTests/CloudflareBypassClearanceTests \
             -only-testing:ShiroxTests/EpisodeNavigatorTests \
