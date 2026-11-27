@@ -268,7 +268,9 @@ struct CatalogDetailScreen: View {
             if let href = title.sourceHref, let module = BundledUnifiedSource.module {
                 do {
                     let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
-                    sourceMetadata = try? await runner.sourceMetadata(url: href)
+                    sourceMetadata = try? await PlaybackDeadline.run(seconds: 6) {
+                        try await runner.sourceMetadata(url: href)
+                    }
                     sourceEpisodes = try await PlaybackDeadline.run(seconds: 25) { try await runner.fetchEpisodes(url: href) }
                     let groups = Dictionary(grouping: sourceEpisodes) { ModuleSeasonRouting.seasonNumber(for: $0.href) ?? 1 }
                     seasons = groups.keys.sorted().map { CatalogSeason(number: $0, name: "Staffel \($0)", episodeCount: groups[$0]?.count ?? 0) }
