@@ -199,28 +199,33 @@ final class SkipTimestampsService {
               payload.found else { return nil }
         var result = SkipSegments()
         for entry in payload.results {
-            guard let cutLength = entry.episodeLength, cutLength > 0,
-                  abs(cutLength - duration) <= max(4, duration * 0.005),
+            guard PlayerChapterTiming.canOfferManualChapter(entry.episodeLength, playbackDuration: duration),
                   let segment = validSegment(
                     .init(startMs: entry.interval.startTime * 1000,
                           endMs: entry.interval.endTime * 1000),
                     duration: duration
                   ) else { continue }
+            let verified = PlayerChapterTiming.matchesRuntime(entry.episodeLength, playbackDuration: duration)
             switch entry.skipType {
             case "op", "mixed-op":
-                if result.intro == nil { result.intro = segment }
+                if result.intro == nil || verified && !result.autoSkipIntro {
+                    result.intro = segment; result.autoSkipIntro = verified
+                }
             case "ed", "mixed-ed":
-                if result.credits == nil { result.credits = segment }
+                if result.credits == nil || verified && !result.autoNextCredits {
+                    result.credits = segment; result.autoNextCredits = verified
+                }
             case "recap":
-                if result.recap == nil { result.recap = segment }
+                if result.recap == nil || verified && !result.autoSkipRecap {
+                    result.recap = segment; result.autoSkipRecap = verified
+                }
             default: break
             }
         }
         guard result.intro != nil || result.credits != nil || result.recap != nil else { return nil }
-        result.autoSkipIntro = result.intro != nil
-        result.autoSkipRecap = result.recap != nil
-        result.autoNextCredits = result.credits != nil
-        result.isDurationVerified = true
+        // Different language cuts still get manual buttons. Only an exact-cut
+        // marker can authorize automatic seeking or automatic next-episode.
+        result.isDurationVerified = result.autoSkipIntro || result.autoSkipRecap || result.autoNextCredits
         return result
     }
 

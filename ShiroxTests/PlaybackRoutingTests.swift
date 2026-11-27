@@ -678,4 +678,15 @@ final class PlaybackRoutingTests: XCTestCase {
         XCTAssertFalse(PlayerChapterTiming.shouldAutoSkip(.recap, segments: chapters))
     }
 
+    func testDifferentLanguageCutsKeepManualChaptersWithoutAuthorizingAutoSkip() {
+        XCTAssertTrue(PlayerChapterTiming.matchesRuntime(1442, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.matchesRuntime(1500, playbackDuration: 1440))
+        XCTAssertTrue(PlayerChapterTiming.canOfferManualChapter(1500, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.canOfferManualChapter(2400, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.matchesRuntime(nil, playbackDuration: 1440))
+        XCTAssertTrue(PlayerChapterTiming.canOfferManualChapter(nil, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.canOfferManualChapter(.nan, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.canOfferManualChapter(1440, playbackDuration: .infinity))
+    }
+
 }
