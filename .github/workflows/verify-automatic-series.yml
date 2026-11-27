@@ -7,17 +7,20 @@ on:
       runner_image:
         description: Standard hosted Mac image
         type: choice
-        options: [macos-26, macos-15, macos-15-intel]
-        default: macos-26
+        options: [macos-26-intel, macos-26, macos-15, macos-15-intel]
+        default: macos-26-intel
       live_source_probe:
         description: Probe one real AniWorld episode through native WebKit and media preflight
         type: boolean
         default: false
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   ios-tests:
-    runs-on: ${{ inputs.runner_image || 'macos-26' }}
+    runs-on: ${{ inputs.runner_image || 'macos-26-intel' }}
     env:
       SHIROX_LIVE_SOURCE_PROBE: ${{ (github.event_name == 'push' || inputs.live_source_probe) && '1' || '0' }}
       SIMULATOR_FAMILY: ${{ startsWith(inputs.runner_image, 'macos-15') && 'iOS-18' || 'iOS-26' }}
