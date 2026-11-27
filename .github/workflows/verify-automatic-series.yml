@@ -45,7 +45,24 @@ jobs:
               f.write('SIMULATOR_ID=' + selected + '\n')
           with open(os.path.join(os.environ['RUNNER_TEMP'], 'simulator-boot.log'), 'w') as log:
               subprocess.run(['xcrun', 'simctl', 'boot', selected], timeout=60, check=False, stdout=log, stderr=subprocess.STDOUT)
-              subprocess.run(['xcrun', 'simctl', 'bootstatus', selected, '-b'], timeout=180, check=True, stdout=log, stderr=subprocess.STDOUT)
+          PY
+      - name: Compile native tests while the simulator migrates
+        run: |
+          xcodebuild build-for-testing -project Shirox.xcodeproj -scheme Shirox_iOS \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/SeriesTests" \
+            -skipPackagePluginValidation \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
+            > "$RUNNER_TEMP/series-build.log" 2>&1 || {
+              tail -100 "$RUNNER_TEMP/series-build.log"
+              exit 1
+            }
+      - name: Wait for simulator migration to finish
+        run: |
+          python3 - <<'PY'
+          import subprocess, os
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'simulator-boot.log'), 'a') as log:
+              subprocess.run(['xcrun','simctl','bootstatus',os.environ['SIMULATOR_ID'],'-b'], timeout=420, check=True, stdout=log, stderr=subprocess.STDOUT)
           PY
       - name: Pass live probe flag into the XCTest app
         run: |
@@ -107,5 +124,6 @@ jobs:
           path: |
             ${{ runner.temp }}/simulator-boot.log
             ${{ runner.temp }}/series-tests.log
+            ${{ runner.temp }}/series-build.log
             ${{ runner.temp }}/catalog-detail-*.png
             ${{ runner.temp }}/website-gate-*.png
