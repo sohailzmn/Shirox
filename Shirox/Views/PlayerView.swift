@@ -118,7 +118,7 @@ struct PlayerView: View {
     @State private var skip85ButtonFrame: CGRect = .zero
     // Netflix/Crunchyroll-style: show Skip Intro by default; automatic seeks
     // remain opt-in under the existing player setting.
-    @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = true
+    @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = false
 
     // AniList tracking
     @ObservedObject private var aniListAuth = AniListAuthManager.shared
@@ -331,8 +331,7 @@ struct PlayerView: View {
 
             if !castManager.isConnected, skip85ButtonFrame != .zero,
                activeSkipSegment != nil || showNextEpisodePrompt {
-                ZStack(alignment: .topLeading) {
-                    Color.clear
+                GeometryReader { geometry in
                     HStack(spacing: 10) {
                         if let segment = activeSkipSegment {
                             PlayerSkipButton(segmentType: segment, onSkip: skipToSegmentEnd)
@@ -352,10 +351,10 @@ struct PlayerView: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 7))
 
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("UP NEXT · EP \((currentContext?.episodeNumber ?? 0) + 1)")
+                                        Text("ALS NÄCHSTES · FOLGE \((currentContext?.sourceEpisodeNumber ?? 0) + 1)")
                                             .font(.caption2.weight(.bold))
                                             .foregroundStyle(.white.opacity(0.8))
-                                        Text(upcomingEpisodeTitle ?? "Play Next Episode")
+                                        Text(upcomingEpisodeTitle ?? "Nächste Folge abspielen")
                                             .font(.subheadline.weight(.semibold))
                                             .foregroundStyle(.white)
                                             .lineLimit(1)
@@ -369,7 +368,11 @@ struct PlayerView: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    .offset(x: skip85ButtonFrame.minX, y: skip85ButtonFrame.minY)
+                    .frame(maxWidth: min(geometry.size.width - 40, 560), alignment: .trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.horizontal, 20)
+                    .padding(.top, max(20, min(skip85ButtonFrame.minY - geometry.frame(in: .global).minY - 62,
+                                               geometry.size.height - 100)))
                 }
                 .ignoresSafeArea()
                 .allowsHitTesting(true)
@@ -762,8 +765,8 @@ struct PlayerView: View {
                 Text(currentContext?.mediaTitle ?? currentStream.title)
                     .font(.title3.weight(.semibold)).foregroundStyle(.white)
                     .multilineTextAlignment(.center).lineLimit(2)
-                if let ep = currentContext?.episodeNumber {
-                    Text("Episode \(ep)").font(.subheadline).foregroundStyle(.white.opacity(0.65))
+                if let ep = currentContext?.sourceEpisodeNumber {
+                    Text("Folge \(ep)").font(.subheadline).foregroundStyle(.white.opacity(0.65))
                 }
 
                 VStack(spacing: 8) {
@@ -1025,7 +1028,8 @@ struct PlayerView: View {
                 #endif
             },
             topPadding: topPad,
-            isLandscape: isLandscape
+            isLandscape: isLandscape,
+            languageLabel: isLocalPlayback ? nil : PlaybackLanguagePolicy.label(currentStream)
         )
         .buttonStyle(CircularButtonStyle())
     }
@@ -1191,7 +1195,7 @@ struct PlayerView: View {
                     .font(.subheadline).foregroundStyle(.white.opacity(0.65))
                     .multilineTextAlignment(.center)
                 Button(action: manualStallRetry) {
-                    Text("Retry")
+                    Text("Erneut versuchen")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.black)
                         .padding(.horizontal, 28).padding(.vertical, 10)
@@ -1210,7 +1214,7 @@ struct PlayerView: View {
                             }
                         }
                     } label: {
-                        Text("Choose Source")
+                        Text("Andere Quelle")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                     }
@@ -1364,9 +1368,10 @@ struct PlayerView: View {
             return
         }
         let urlString = currentStream.url.absoluteString
+        let referenceOnly = !isLocalPlayback && context.episodeHref != nil && context.detailHref != nil && context.moduleId != nil
         let episodeNumber = context.episodeNumber
         let existingId = ContinueWatchingManager.shared.items
-            .first { $0.streamUrl == urlString && $0.episodeNumber == episodeNumber }?.id
+            .first { ($0.streamUrl == urlString || (context.episodeHref != nil && $0.episodeHref == context.episodeHref)) && $0.episodeNumber == episodeNumber }?.id
         // If user selected a specific track from allSubtitles, persist it so it reloads on resume
         let effectiveSubtitle: String?
         let effectiveSubtitleHeaders: [String: String]?
@@ -1383,13 +1388,13 @@ struct PlayerView: View {
             episodeNumber: context.episodeNumber,
             episodeTitle: context.episodeTitle,
             imageUrl: context.imageUrl,
-            streamUrl: currentStream.url.absoluteString,
-            headers: currentStream.headers.isEmpty ? nil : currentStream.headers,
-            subtitle: effectiveSubtitle,
-            subtitleHeaders: effectiveSubtitleHeaders,
-            allSubtitles: { Logger.shared.log("[Subtitles] saveProgress: saving subtitleTracks=\(subtitleTracks?.count ?? -1) effectiveSubtitle=\(effectiveSubtitle ?? "nil")", type: "Debug"); return subtitleTracks }(),
-            streamTitle: context.streamTitle,
-            allStreams: availableStreams.count > 1 ? availableStreams.map {
+            streamUrl: referenceOnly ? "" : currentStream.url.absoluteString,
+            headers: referenceOnly ? nil : currentStream.headers.isEmpty ? nil : currentStream.headers,
+            subtitle: referenceOnly ? nil : effectiveSubtitle,
+            subtitleHeaders: referenceOnly ? nil : effectiveSubtitleHeaders,
+            allSubtitles: referenceOnly ? nil : subtitleTracks,
+            streamTitle: currentStream.title,
+            allStreams: !referenceOnly && availableStreams.count > 1 ? availableStreams.map {
                 StoredStream(title: $0.title, url: $0.url.absoluteString, headers: $0.headers,
                              subtitle: $0.subtitle, subtitleHeaders: $0.subtitleHeaders.isEmpty ? nil : $0.subtitleHeaders)
             } : nil,
@@ -1406,6 +1411,14 @@ struct PlayerView: View {
             lastWatchedAt: .now,
             thumbnailUrl: context.thumbnailUrl
         )
+        item.audioLanguage = currentStream.audioLanguage
+        item.subtitleLanguage = currentStream.subtitleLanguage
+        item.isHardsub = currentStream.isHardsub
+        if referenceOnly {
+            item.sourceReferenceOnly = true
+            item.sourceSeason = context.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) }
+            item.sourceEpisode = context.episodeHref.flatMap { ModuleSeasonRouting.episodeNumber(for: $0) }
+        }
         if context.isLocalPlayback {
             // Resume from our own persistent copy, not the transient picker URL.
             item.localImportName = LocalPlaybackCoordinator.shared.importName(for: currentStream.url)
@@ -1612,7 +1625,8 @@ struct PlayerView: View {
     private func requestSkipMetadataIfNeeded() {
         guard !didRequestSkipSegments, skipLookupAttempts < 2,
               nextSkipLookupAt.map({ Date() >= $0 }) ?? true,
-              let ctx = currentContext, ctx.aniListID != nil || ctx.malID != nil,
+              let ctx = currentContext,
+              ctx.aniListID != nil || ctx.malID != nil || SourceAnimeSkipIdentity.canResolve(ctx),
               let item = player?.currentItem, item.status == .readyToPlay else { return }
 
         // A hoster swap can leave the previous episode's duration in SwiftUI until
@@ -1635,6 +1649,30 @@ struct PlayerView: View {
             // Recover a missing MAL mapping so AniSkip can deliver verified
             // opening/ending times. Older module contexts often carry only AniList ID.
             var malID = initialMalID
+            var firstLookupEpisode = ep
+            if aniListID == nil, malID == nil,
+               let identity = await SourceAnimeSkipIdentity.shared.resolve(ctx) {
+                aniListID = identity.aniListID
+                malID = identity.malID
+                // Source episodes are franchise-global; resolve the season before
+                // querying AniSkip, whose episode numbers restart for each entry.
+                let sourceGlobal = await SourceAnimeSkipIdentity.shared.globalEpisode(ctx)
+                if let sourceGlobal, let mapped = await SeasonChainMapper.shared.resolve(
+                    globalEpisode: sourceGlobal, anchorAniListID: aniListID, anchorMALID: malID) {
+                    aniListID = mapped.aniListID ?? aniListID
+                    malID = mapped.malID ?? aniListID.flatMap {
+                        IDMappingService.shared.cachedMalId(forAnilistId: $0)
+                    }
+                    firstLookupEpisode = mapped.relativeEpisode
+                } else if (ctx.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? 1) > 1 {
+                    // Never apply the first season's intro to an unmapped sequel.
+                    guard !Task.isCancelled, player?.currentItem === item,
+                          currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                    didRequestSkipSegments = false
+                    nextSkipLookupAt = Date().addingTimeInterval(18)
+                    return
+                }
+            }
             if malID == nil, let aniListID {
                 malID = await IDMappingService.shared.malId(forAnilistId: aniListID)
             }
@@ -1643,7 +1681,7 @@ struct PlayerView: View {
 
             if let malID, malID > 0 {
                 let fast = await SkipTimestampsService.shared.fetchFastSegments(
-                    malID: malID, episode: ep, playbackDuration: actualDuration,
+                    malID: malID, episode: firstLookupEpisode, playbackDuration: actualDuration,
                     refreshIncomplete: retryIncomplete)
                 guard !Task.isCancelled, player?.currentItem === item,
                       currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
@@ -1659,8 +1697,8 @@ struct PlayerView: View {
             // tracking, but skip metadata previously never used it. Only attempt
             // the slower season mapping after the instant raw lookup was
             // incomplete. Never change the actual playback/progress episode.
-            var lookupEpisode = ep
-            if ep > 1, let mapped = await SeasonChainMapper.shared.resolve(
+            var lookupEpisode = firstLookupEpisode
+            if firstLookupEpisode == ep, ep > 1, let mapped = await SeasonChainMapper.shared.resolve(
                 globalEpisode: ep, anchorAniListID: aniListID, anchorMALID: malID
             ) {
                 guard !Task.isCancelled, player?.currentItem === item,
@@ -2025,6 +2063,9 @@ struct PlayerView: View {
                 bufferProgress = min(maxLoaded / duration, 1)
             }
             saveProgressIfDue()
+            if videoReady, isPlaying, currentTime >= 2, audioGroup?.options.isEmpty == false {
+                CatalogAvailabilityStore.shared.recordPlayback(context: currentContext)
+            }
             if duration > 0 {
                 let progress = currentTime / duration
                 if progress >= watchedPercentage / 100.0 && !didTrackEpisode {
@@ -2165,6 +2206,9 @@ struct PlayerView: View {
     }
 
     private func loadSubtitles() {
+        if currentStream.subtitleLanguage != nil, !currentStream.isHardsub {
+            subtitleSettings.enabled = true
+        }
         if let track = selectedSubtitleTrack {
             Task {
                 do {
@@ -2230,7 +2274,7 @@ struct PlayerView: View {
 
     private func updateNowPlaying(player p: AVPlayer) {
         let mediaTitle = currentContext?.mediaTitle ?? currentStream.title
-        let epNumber = currentContext?.episodeNumber
+        let epNumber = currentContext?.sourceEpisodeNumber
         let epTitle = tvdbEpisodeTitle ?? currentContext?.episodeTitle
         let subtitleString: String
         if let n = epNumber {
@@ -3262,6 +3306,10 @@ struct PlayerView: View {
     private func applyRememberedAudio(
         to item: AVPlayerItem, group: AVMediaSelectionGroup, subtitle: Bool
     ) {
+        if let code = PlaybackLanguagePolicy.code(currentStream.audioLanguage) {
+            let options = AVMediaSelectionGroup.mediaSelectionOptions(from: group.options, with: Locale(identifier: code))
+            if let option = options.first { item.select(option, in: group); return }
+        }
         let language = preferredAudioLanguage
         if language != "auto" {
             let preferred = AVMediaSelectionGroup.mediaSelectionOptions(

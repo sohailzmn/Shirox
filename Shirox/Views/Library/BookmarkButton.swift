@@ -77,7 +77,7 @@ private struct LocalCollectionPickerSheet: View {
                         local.remove(uniqueId: media.uniqueId)
                         dismiss()
                     } label: {
-                        Label("Remove from Library", systemImage: "bookmark.slash")
+                        Label("Aus Mediathek entfernen", systemImage: "bookmark.slash")
                     }
                 }
             }
@@ -88,7 +88,7 @@ private struct LocalCollectionPickerSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Fertig") { dismiss() }
                 }
             }
             .alert("New Collection", isPresented: $showNewCollection) {
@@ -102,7 +102,7 @@ private struct LocalCollectionPickerSheet: View {
                                         inCollection: collection.id, member: true,
                                         localSource: localSource)
                 }
-                Button("Cancel", role: .cancel) { newCollectionName = "" }
+                Button("Abbrechen", role: .cancel) { newCollectionName = "" }
             }
         }
     }

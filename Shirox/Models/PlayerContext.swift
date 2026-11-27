@@ -1,6 +1,10 @@
 import Foundation
 
 struct PlayerContext {
+    /// Display source numbering without changing the global progress identity.
+    var sourceEpisodeNumber: Int {
+        episodeHref.flatMap { ModuleSeasonRouting.episodeNumber(for: $0) } ?? episodeNumber
+    }
     let mediaTitle: String
     let episodeNumber: Int
     let episodeTitle: String?

@@ -35,7 +35,7 @@ struct BrowseView: View {
                 )
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
-                        Button("Retry") { Task { await vm.retry() } }
+                        Button("Erneut versuchen") { Task { await vm.retry() } }
                     }
                 }
             } else {

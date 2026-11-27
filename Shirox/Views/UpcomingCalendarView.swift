@@ -122,7 +122,7 @@ struct UpcomingCalendarView: View {
                     list
                 }
             }
-            .navigationTitle("Upcoming")
+            .navigationTitle("Demnächst")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -139,7 +139,7 @@ struct UpcomingCalendarView: View {
                     }
                 }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Fertig") { dismiss() }
                 }
             }
         }

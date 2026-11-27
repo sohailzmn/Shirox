@@ -3,6 +3,13 @@ import Combine
 
 extension JSEngine {
     func fetchStreams(episodeUrl: String, timeout: TimeInterval = 120) async throws -> [StreamResult] {
+        if let module = ModuleManager.shared.activeModule, !module.isLocalPlayback, !module.isJellyfin {
+            return try await PlaybackDeadline.run(seconds: min(timeout, 30)) {
+                let runner = ModuleJSRunner()
+                try await runner.load(module: module)
+                return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: episodeUrl, legacyModule: module)
+            }
+        }
         // A time limit applies to the entire JS resolver, including its hoster
         // attempts. The default remains unchanged for existing providers.
         let json = try await callAsyncJS("extractStreamUrl", args: [episodeUrl], timeout: timeout)
@@ -18,16 +25,24 @@ extension JSEngine {
             throw JSEngineError.parseError("Could not parse stream result")
         }
 
-        return parseStreamResults(from: obj)
+        return try parseResolvedStreamResults(from: obj)
     }
 }
 
 // MARK: - Shared parsing
 
+func parseResolvedStreamResults(from obj: [String: Any]) throws -> [StreamResult] {
+    let streams = parseStreamResults(from: obj)
+    if streams.isEmpty, obj["blockedReason"] as? String == "website_verification_required" {
+        throw ModuleStreamResolutionError.websiteVerificationRequired
+    }
+    return streams
+}
+
 func parseStreamResults(from obj: [String: Any]) -> [StreamResult] {
     let subtitleUrl = (obj["subtitle"] as? String ?? obj["subtitles"] as? String).flatMap { $0.isEmpty ? nil : $0 }
     let subtitleHeaders = obj["subtitleHeaders"] as? [String: String] ?? [:]
-    let allSubtitles = parseSubtitleTracks(from: obj["allSubtitles"])
+    let allSubtitles = parseSubtitleTracks(from: obj["allSubtitles"] ?? obj["subtitles"])
 
     var results: [StreamResult] = []
 
@@ -40,9 +55,16 @@ func parseStreamResults(from obj: [String: Any]) -> [StreamResult] {
             guard seen.insert(urlStr).inserted else { continue }
             let title = stream["title"] as? String ?? "Stream"
             let headers = stream["headers"] as? [String: String] ?? [:]
+            let tracks = parseSubtitleTracks(from: stream["allSubtitles"] ?? stream["subtitles"]) ?? allSubtitles
             results.append(StreamResult(title: title, url: url, headers: headers,
-                                        subtitle: subtitleUrl, subtitleHeaders: subtitleHeaders,
-                                        allSubtitles: allSubtitles))
+                                        subtitle: stream["subtitle"] as? String ?? subtitleUrl,
+                                        subtitleHeaders: stream["subtitleHeaders"] as? [String: String] ?? subtitleHeaders,
+                                        allSubtitles: tracks,
+                                        audioLanguage: stream["audioLanguage"] as? String,
+                                        subtitleLanguage: stream["subtitleLanguage"] as? String,
+                                        isHardsub: stream["isHardsub"] as? Bool ?? false,
+                                        resolution: stream["resolution"] as? Int,
+                                        expiresAt: (stream["expiresAt"] as? Double).map { Date(timeIntervalSince1970: $0) }))
         }
     } else if let streams = obj["streams"] as? [String] {
         for (i, urlStr) in streams.enumerated() {
@@ -82,7 +104,8 @@ private func parseSubtitleTracks(from value: Any?) -> [SubtitleTrack]? {
             ?? item["name"] as? String
             ?? "Subtitle"
         let headers = item["headers"] as? [String: String] ?? [:]
-        return SubtitleTrack(title: title, url: url, headers: headers)
+        return SubtitleTrack(title: title, url: url, headers: headers,
+                             language: item["lang"] as? String ?? item["language"] as? String)
     }
     return tracks.isEmpty ? nil : tracks
 }

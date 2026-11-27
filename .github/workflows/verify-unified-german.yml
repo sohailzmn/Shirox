@@ -1,16 +1,29 @@
 name: Verify Shirox unified German integration
 on:
   pull_request:
+    paths-ignore: [".github/workflows/**"]
     branches:
       - main
       - feature/smart-playback-recovery-20261021
   workflow_dispatch:
+    inputs:
+      runner_image:
+        description: Standard hosted Mac image
+        type: choice
+        options: [macos-26-intel, macos-26, macos-15, macos-15-intel]
+        default: macos-15-intel
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   build-ios:
-    runs-on: macos-26
+    runs-on: ${{ inputs.runner_image || 'macos-15-intel' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Select compatible Xcode on the fallback image
+        if: startsWith(inputs.runner_image || 'macos-15-intel', 'macos-15')
+        run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
       - name: Build iOS IPA without signing
         run: |
           chmod +x ./buildipa.sh

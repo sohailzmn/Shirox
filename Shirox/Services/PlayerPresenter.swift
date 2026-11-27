@@ -1014,7 +1014,7 @@ private struct ShiroxInstantPlaybackScreen: View {
                             .frame(width: 44, height: 44)
                             .background(.ultraThinMaterial, in: Circle())
                     }
-                    .accessibilityLabel("Close player")
+                    .accessibilityLabel("Wiedergabe schließen")
                     Spacer()
                 }
                 Spacer()
@@ -1030,7 +1030,7 @@ private struct ShiroxInstantPlaybackScreen: View {
                     Text(title)
                         .font(.title2.weight(.bold))
                         .lineLimit(2)
-                    Text("Episode \(episode)")
+                    Text("Folge \(episode)")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.72))
                     if state.failed {
@@ -1039,12 +1039,12 @@ private struct ShiroxInstantPlaybackScreen: View {
                             .multilineTextAlignment(.center)
                             .font(.footnote)
                         HStack {
-                            Button("Retry") {
+                            Button("Erneut versuchen") {
                                 state.failed = false
                                 state.provider = "Retrying…"
                                 state.retryID = UUID()
                             }.buttonStyle(.borderedProminent)
-                            Button("Choose Source", action: onChooseSource)
+                            Button("Andere Quelle", action: onChooseSource)
                                 .buttonStyle(.bordered)
                         }
                     } else {

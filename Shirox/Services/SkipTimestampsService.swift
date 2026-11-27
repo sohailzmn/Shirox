@@ -199,28 +199,33 @@ final class SkipTimestampsService {
               payload.found else { return nil }
         var result = SkipSegments()
         for entry in payload.results {
-            guard let cutLength = entry.episodeLength, cutLength > 0,
-                  abs(cutLength - duration) <= max(4, duration * 0.005),
+            guard PlayerChapterTiming.canOfferManualChapter(entry.episodeLength, playbackDuration: duration),
                   let segment = validSegment(
                     .init(startMs: entry.interval.startTime * 1000,
                           endMs: entry.interval.endTime * 1000),
                     duration: duration
                   ) else { continue }
+            let verified = PlayerChapterTiming.matchesRuntime(entry.episodeLength, playbackDuration: duration)
             switch entry.skipType {
             case "op", "mixed-op":
-                if result.intro == nil { result.intro = segment }
+                if result.intro == nil || verified && !result.autoSkipIntro {
+                    result.intro = segment; result.autoSkipIntro = verified
+                }
             case "ed", "mixed-ed":
-                if result.credits == nil { result.credits = segment }
+                if result.credits == nil || verified && !result.autoNextCredits {
+                    result.credits = segment; result.autoNextCredits = verified
+                }
             case "recap":
-                if result.recap == nil { result.recap = segment }
+                if result.recap == nil || verified && !result.autoSkipRecap {
+                    result.recap = segment; result.autoSkipRecap = verified
+                }
             default: break
             }
         }
         guard result.intro != nil || result.credits != nil || result.recap != nil else { return nil }
-        result.autoSkipIntro = result.intro != nil
-        result.autoSkipRecap = result.recap != nil
-        result.autoNextCredits = result.credits != nil
-        result.isDurationVerified = true
+        // Different language cuts still get manual buttons. Only an exact-cut
+        // marker can authorize automatic seeking or automatic next-episode.
+        result.isDurationVerified = result.autoSkipIntro || result.autoSkipRecap || result.autoNextCredits
         return result
     }
 
@@ -339,4 +344,99 @@ private struct AniSkipResponse: Decodable {
     }
     let found: Bool
     let results: [Item]
+}
+
+
+/// Resolve only source-backed anime. A live-action series must never acquire
+/// unrelated anime skip markers from a similarly named AniList search result.
+@MainActor
+final class SourceAnimeSkipIdentity {
+    static let shared = SourceAnimeSkipIdentity()
+    struct Identity { let aniListID: Int; let malID: Int? }
+    private var cache: [String: Identity] = [:]
+
+    static func canResolve(_ context: PlayerContext) -> Bool {
+        [context.detailHref, context.workingDetailHref, context.episodeHref]
+            .compactMap { $0 }.contains { SourceCatalogRouting.kind(for: $0) == .anime }
+    }
+
+    static func normalized(_ title: String) -> String {
+        title.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init).joined()
+    }
+
+    static func exactMatch(_ candidates: [AniListMedia], title: String) -> AniListMedia? {
+        let expected = normalized(title)
+        guard !expected.isEmpty else { return nil }
+        let matches = candidates.filter { media in
+            ([media.title.english, media.title.romaji, media.title.native].compactMap { $0 } + (media.synonyms ?? []))
+                .contains { normalized($0) == expected }
+        }
+        // Exclude similarly titled films, specials and later seasons when a TV
+        // franchise's original entry is available. No fuzzy first-result fallback.
+        let tv = matches.filter { $0.format == "TV" }
+        let eligible = tv.isEmpty ? matches : tv
+        return eligible.sorted {
+            if $0.seasonYear != $1.seasonYear { return ($0.seasonYear ?? Int.max) < ($1.seasonYear ?? Int.max) }
+            return $0.id < $1.id
+        }.first
+    }
+
+    /// A targeted source-season response starts numbering at one. Recover the
+    /// franchise-global index from the full catalogue before season ID mapping.
+    func globalEpisode(_ context: PlayerContext) async -> Int? {
+        let season = context.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? 1
+        if season == 1 { return context.sourceEpisodeNumber }
+        guard let href = context.episodeHref,
+              let detail = context.workingDetailHref ?? context.detailHref,
+              let module = ModuleManager.shared.modules.first(where: { $0.id == context.moduleId }) ?? BundledUnifiedSource.module else { return nil }
+        return try? await PlaybackDeadline.run(seconds: 12) {
+            let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false
+            try await runner.load(module: module)
+            let episodes = try await runner.fetchEpisodes(url: detail)
+            return episodes.first { PlaybackHistoryIdentity.canonical($0.href) == PlaybackHistoryIdentity.canonical(href) }.map { Int($0.number) }
+        }
+    }
+
+    func resolve(_ context: PlayerContext) async -> Identity? {
+        guard Self.canResolve(context) else { return nil }
+        let key = Self.normalized(context.mediaTitle)
+        if let cached = cache[key] { return cached }
+        if let savedID = AniListMappingManager.shared.getMapping(title: context.mediaTitle) {
+            let identity = Identity(aniListID: savedID, malID: IDMappingService.shared.cachedMalId(forAnilistId: savedID))
+            cache[key] = identity
+            return identity
+        }
+        var queries = [context.mediaTitle]
+        var index = 0
+        while index < min(queries.count, 4), !Task.isCancelled {
+            let query = queries[index]
+            if let candidates = try? await AniListService.shared.search(keyword: query),
+               let match = Self.exactMatch(candidates, title: query) {
+                let identity = Identity(aniListID: match.id, malID: match.idMal)
+                cache[key] = identity
+                return identity
+            }
+            if index == 0, let detail = context.workingDetailHref ?? context.detailHref,
+               let module = ModuleManager.shared.modules.first(where: { $0.id == context.moduleId }) ?? BundledUnifiedSource.module {
+                // Source titles can be German while AniList uses Japanese/English.
+                // Consult the source's own alternative titles before giving up.
+                let metadata = try? await PlaybackDeadline.run(seconds: 6) {
+                    let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false
+                    try await runner.load(module: module)
+                    return try await runner.sourceMetadata(url: detail)
+                }
+                if let aliases = metadata?.aliases {
+                    let variants = [aliases] + aliases.components(separatedBy: CharacterSet(charactersIn: ",;|\n"))
+                    for alias in variants.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+                        where !alias.isEmpty && !queries.contains(where: { Self.normalized($0) == Self.normalized(alias) }) {
+                        queries.append(alias)
+                    }
+                }
+            }
+            index += 1
+        }
+        return nil
+    }
 }

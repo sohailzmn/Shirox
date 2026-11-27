@@ -84,7 +84,7 @@ struct SearchView: View {
         NavigationStack {
             mainContent
                 .background(SearchActivationObserver { vm.clearResults() })
-                .navigationTitle("Search")
+                .navigationTitle("Suche")
                 .toolbar {
                     ToolbarItem(placement: .automatic) {
                         moduleButton
@@ -275,7 +275,7 @@ struct SearchView: View {
 
             // On the subtitle step, allow playing the staged video without one.
             if !needsVideoStep {
-                Button("Play without subtitle") { playStaged(subtitle: nil) }
+                Button("Ohne Untertitel abspielen") { playStaged(subtitle: nil) }
                     .font(.subheadline)
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -339,6 +339,18 @@ struct SearchView: View {
     private var resultsView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 18) {
+                if !vm.catalogResults.isEmpty {
+                    Text("Serien und Filme").font(.title3.bold()).padding(.horizontal, 16)
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(vm.catalogResults) { title in
+                            NavigationLink { CatalogDetailScreen(title: title) } label: { CatalogPoster(title: title) }
+                                .buttonStyle(CardPressStyle())
+                        }
+                    }.padding(.horizontal, 16)
+                }
+                if let message = vm.catalogError {
+                    Text(message).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16)
+                }
                 if let moduleEpisodeHint, usingModule {
                     Label(moduleEpisodeHint, systemImage: "info.circle")
                         .font(.subheadline)
@@ -426,7 +438,7 @@ struct SearchView: View {
                         Button(role: .destructive) {
                             history.remove(query)
                         } label: {
-                            Label("Delete", systemImage: "trash")
+                            Label("Löschen", systemImage: "trash")
                         }
                         .tint(.red)
                     }
@@ -434,9 +446,9 @@ struct SearchView: View {
                 }
             } header: {
                 HStack {
-                    Text("Recent Searches")
+                    Text("Letzte Suchen")
                     Spacer()
-                    Button("Clear All") { history.clear() }
+                    Button("Alles leeren") { history.clear() }
                         .font(.caption)
                         .textCase(nil)
                 }
@@ -567,7 +579,7 @@ private struct ConditionalSearchable: ViewModifier {
     @Binding var text: String
     func body(content: Content) -> some View {
         if enabled {
-            content.searchable(text: $text, prompt: "Search anime…")
+            content.searchable(text: $text, prompt: "Serien, Anime und Filme suchen …")
         } else {
             content
         }
@@ -798,7 +810,7 @@ private struct LiveActionDetailView: View {
                     case .aired:
                         Label("Aired", systemImage: "checkmark.circle")
                     case .upcoming:
-                        Label("Upcoming", systemImage: "calendar")
+                        Label("Demnächst", systemImage: "calendar")
                     case .unknown:
                         Text("Air date unknown")
                     }

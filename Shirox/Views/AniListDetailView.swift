@@ -747,7 +747,7 @@ struct AniListDetailView: View {
 
     private func tapEpisode(_ ep: Int, media: Media) {
         let cwItem = continueWatching.items.first {
-            $0.aniListID == media.id && $0.episodeNumber == ep && !$0.streamUrl.isEmpty
+            $0.aniListID == media.id && $0.episodeNumber == ep && !$0.isPlaceholder
         }
         if let item = cwItem {
             resumeWatching(item: item)
@@ -762,7 +762,7 @@ struct AniListDetailView: View {
         let total = media.airedOrAnnouncedEpisodes ?? 0
         let rawNext = item?.episodeNumber ?? (existingEntry?.progress ?? 0) + 1
         let nextEp = rawNext > total && total > 0 ? 1 : rawNext
-        let label = item != nil && !item!.streamUrl.isEmpty ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)"
+        let label = item != nil && !item!.isPlaceholder ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)"
 
         Button {
             if let item {
@@ -791,7 +791,8 @@ struct AniListDetailView: View {
     }
 
     private func resumeWatching(item: ContinueWatchingItem) {
-        if item.streamUrl.isEmpty {
+        if item.sourceReferenceOnly == true || item.usesSourceResume { AutomaticPlaybackCoordinator.shared.resume(item); return }
+        if item.isPlaceholder {
             vm.watchEpisode(item.episodeNumber)
             return
         }
@@ -1033,7 +1034,7 @@ struct AniListDetailView: View {
             HStack(alignment: .center) {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
-                        Text("Episodes")
+                        Text("Folgen")
                             .font(.title3.weight(.bold))
                         #if os(iOS)
                         if !isSelectionMode {
@@ -1298,11 +1299,11 @@ struct AniListDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.bottom, 32)
         .alert("Reset Progress", isPresented: $showResetConfirmation) {
-            Button("Reset", role: .destructive) {
+            Button("Zurücksetzen", role: .destructive) {
                 ContinueWatchingManager.shared.resetProgress(
                     aniListID: media.id, moduleId: nil, mediaTitle: "")
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Abbrechen", role: .cancel) {}
         } message: {
             Text("This will clear all watched history and progress for \(media.title.displayTitle).")
         }
@@ -1312,7 +1313,7 @@ struct AniListDetailView: View {
     @ViewBuilder
     private var tabSelector: some View {
         Picker("Section", selection: $selectedTab) {
-            Text("Episodes").tag(0)
+            Text("Folgen").tag(0)
             Text("Relations").tag(1)
         }
         .pickerStyle(.segmented)
@@ -1372,7 +1373,7 @@ struct SynopsisSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Text("Synopsis")
+                Text("Beschreibung")
                     .font(.title3.weight(.bold))
             }
             .padding(.horizontal, 16)
@@ -1447,11 +1448,16 @@ private struct AniListEpisodeRowContainer: View {
         #endif
     }
 
+    private var progressDetail: EpisodePlaybackProgress? {
+        continueWatching.episodeRecord(aniListID: mediaId, moduleId: nil, mediaTitle: mediaTitle, episodeNumber: ep)
+    }
+
     private var progress: Double? {
         if continueWatching.isWatched(aniListID: mediaId, moduleId: nil,
                                       mediaTitle: mediaTitle, episodeNumber: ep) {
             return 1.0
         }
+        if let progressDetail { return progressDetail.fraction }
         guard let item = continueWatching.items
             .first(where: { $0.aniListID == mediaId && $0.episodeNumber == ep }),
               item.totalSeconds > 0
@@ -1468,6 +1474,7 @@ private struct AniListEpisodeRowContainer: View {
             airdate: aniMapEpisode?.airdate,
             episodeDescription: aniMapEpisode?.description,
             progress: progress,
+            progressDetail: progressDetail,
             onTap: onTap,
             onMarkWatched: {
                 Task {
@@ -1502,7 +1509,7 @@ private struct AniListEpisodeRowContainer: View {
                 Task { await d.confirm(); pendingDowngrade = nil }
             }
             Button("This device only") { d.localOnly(); pendingDowngrade = nil }
-            Button("Cancel", role: .cancel) { pendingDowngrade = nil }
+            Button("Abbrechen", role: .cancel) { pendingDowngrade = nil }
         } message: { d in
             let parts = [
                 d.anilistFrom.map { "AniList: \($0) → \(d.newProgress)" },
@@ -1564,13 +1571,13 @@ struct AniListStreamResultSheet: View {
                     .softScrollEdges()
                 }
             }
-            .navigationTitle("Episode \(episodeNumber)")
+            .navigationTitle("Folge \(episodeNumber)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onDismiss() }
+                    Button("Abbrechen") { onDismiss() }
                 }
             }
             .tint(.primary)
@@ -1769,7 +1776,7 @@ struct AniListMatchingSearchView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .cancellationAction) {
-                Button("Cancel") { dismiss() }
+                Button("Abbrechen") { dismiss() }
             }
         }
         #if os(iOS)

@@ -1,4 +1,7 @@
 import Combine
+#if os(iOS)
+import UIKit
+#endif
 
 #if os(tvOS)
     import FakeWebKit
@@ -143,6 +146,16 @@ extension JSContext {
                     networkFetchNative(url, finalOptions, function(result) {
                         resolve({
                             url: result.originalUrl,
+                            originalUrl: result.originalUrl,
+                            mediaPageURL: result.mediaPageURL || null,
+                            playerPageURL: result.playerPageURL || null,
+                            playerHTML: result.playerHTML || null,
+                            verificationErrorCode: result.verificationErrorCode || null,
+                            verificationResponsePresent: result.verificationResponsePresent || false,
+                            verifiedContinuationClicked: result.verifiedContinuationClicked || false,
+                            verificationProviderActivated: result.verificationProviderActivated || false,
+                            verificationContextMatches: result.verificationContextMatches || false,
+                            verificationProofState: result.verificationProofState || null,
                             requests: result.requests,
                             html: result.html || null,
                             cookies: result.cookies || null,
@@ -374,14 +387,6 @@ class NetworkFetchSimpleMonitor: NSObject, ObservableObject {
 
         let jsCode = """
         (function() {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            delete window.navigator.__proto__.webdriver;
-
-            window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'permissions', { get: () => undefined });
-
             const originalFetch = window.fetch;
             const originalXHROpen = XMLHttpRequest.prototype.open;
             const originalXHRSend = XMLHttpRequest.prototype.send;
@@ -544,14 +549,22 @@ class NetworkFetchSimpleMonitor: NSObject, ObservableObject {
         #if !os(tvOS)
         webView?.navigationDelegate = self
         #endif
-        webView?.customUserAgent = URLSession.randomUserAgent
     }
 
     private func loadURL(url: URL, headers: [String: String] = [:]) {
         guard let webView = webView else { return }
+        var headers = headers
+        if let host = url.host {
+            let manager = CloudflareBypassManager.shared
+            if let cookie = manager.fullCookieHeader(for: host) {
+                headers = headers.filter { $0.key.lowercased() != "cookie" && $0.key.lowercased() != "user-agent" }
+                headers["Cookie"] = cookie
+                if let ua = manager.bypassUserAgent(for: host) { headers["User-Agent"] = ua }
+            }
+        }
+        webView.customUserAgent = headers.first { $0.key.lowercased() == "user-agent" }?.value
         addRequest(url.absoluteString)
         var request = URLRequest(url: url)
-        request.setValue(URLSession.randomUserAgent, forHTTPHeaderField: "User-Agent")
         request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", forHTTPHeaderField: "Accept")
         request.setValue("en-US,en;q=0.5", forHTTPHeaderField: "Accept-Language")
         request.setValue("gzip, deflate, br", forHTTPHeaderField: "Accept-Encoding")
@@ -702,21 +715,51 @@ class NetworkFetchManager: NSObject, ObservableObject {
     static let shared = NetworkFetchManager()
 
     private var activeMonitors: [String: NetworkFetchMonitor] = [:]
+    private struct PendingCapture {
+        let url: String
+        let options: NetworkFetchOptions
+        let resolve: JSValue
+        let reject: JSValue
+        let expires: Date
+    }
+    private var pending: [PendingCapture] = []
 
     private override init() {
         super.init()
     }
 
     func performNetworkFetch(urlString: String, options: NetworkFetchOptions, resolve: JSValue, reject: JSValue) {
+        guard pending.count < 12 else {
+            reject.call(withArguments: ["Die Quellenprüfung ist ausgelastet."])
+            return
+        }
+        pending.append(PendingCapture(url: urlString, options: options, resolve: resolve, reject: reject,
+                                      expires: Date().addingTimeInterval(Double(max(1, options.timeoutSeconds)))))
+        startPendingCaptures()
+    }
+
+    private func startPendingCaptures() {
+        while activeMonitors.count < 3, !pending.isEmpty {
+            let next = pending.removeFirst()
+            guard next.expires > Date() else {
+                next.reject.call(withArguments: ["Die Quellenprüfung ist abgelaufen."])
+                continue
+            }
+            startCapture(next)
+        }
+    }
+
+    private func startCapture(_ next: PendingCapture) {
         let monitorId = UUID().uuidString
         let monitor = NetworkFetchMonitor()
         activeMonitors[monitorId] = monitor
 
-        monitor.startMonitoring(urlString: urlString, options: options) { [weak self] result in
+        monitor.startMonitoring(urlString: next.url, options: next.options) { [weak self] result in
             self?.activeMonitors.removeValue(forKey: monitorId)
-            if !resolve.isUndefined {
-                resolve.call(withArguments: [result])
+            if !next.resolve.isUndefined {
+                next.resolve.call(withArguments: [result])
             }
+            self?.startPendingCaptures()
         }
     }
 
@@ -741,11 +784,21 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     private var webView: WKWebView?
     private var completionHandler: (([String: Any]) -> Void)?
     private var timer: Timer?
+    private var showsBrowser = false
     private var options: NetworkFetchOptions?
     private var elementsClicked: [String] = []
     private var waitResults: [String: Bool] = [:]
     private var cookies: [String: String] = [:]
     private var originalUrlString: String = ""
+    private var playerPageURL: String?
+    private var playerHTML: String?
+    private var mediaPageURL: String?
+    private var verificationErrorCode: Int?
+    private var verificationResponsePresent = false
+    private var verifiedContinuationClicked = false
+    private var verificationProviderActivated = false
+    private var verificationContextMatches = false
+    private var verificationProofState: String?
 
     @Published private(set) var networkRequests: [String] = []
     @Published private(set) var cutoffTriggered = false
@@ -754,9 +807,19 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     @Published private(set) var htmlCaptured = false
     @Published private(set) var cookiesCaptured = false
 
-    func startMonitoring(urlString: String, options: NetworkFetchOptions, completion: @escaping ([String: Any]) -> Void) {
+    func startMonitoring(urlString: String, options: NetworkFetchOptions, showsBrowser: Bool = false, completion: @escaping ([String: Any]) -> Void) {
+        self.showsBrowser = showsBrowser
         self.options = options
         originalUrlString = urlString
+        mediaPageURL = nil
+        playerPageURL = nil
+        playerHTML = nil
+        verificationErrorCode = nil
+        verificationResponsePresent = false
+        verifiedContinuationClicked = false
+        verificationProviderActivated = false
+        verificationContextMatches = false
+        verificationProofState = nil
         completionHandler = completion
         networkRequests.removeAll()
         cutoffTriggered = false
@@ -903,16 +966,134 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         #endif
         config.mediaTypesRequiringUserActionForPlayback = []
 
+        let autoWaitSelectors = (options?.waitForSelectors ?? []).map { JSEngine.jsStringLiteral($0) }.joined(separator: ",")
+        let autoClickSelectors = (options?.clickSelectors ?? []).map { JSEngine.jsStringLiteral($0) }.joined(separator: ",")
+        let autoMaxWait = options?.maxWaitTime ?? 3
+        let autoCaptureTimeout = options?.timeoutSeconds ?? 10
         let jsCode = """
         (function() {
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-            delete window.navigator.__proto__.webdriver;
+            // Challenge frames (including their initial empty documents) must
+            // retain the browser's original APIs and global scope.
+            if (location.hostname.toLowerCase() === 'challenges.cloudflare.com' ||
+                (location.protocol === 'about:' && /^https:\\/\\/challenges\\.cloudflare\\.com(?:\\/|$)/i.test(document.referrer))) return;
+            const sourceHosts = ['aniworld.to','aniworld.cc','serienstream.to','serienstream.cx','s.to'];
+            const sourceDocument = sourceHosts.includes(location.hostname.toLowerCase().replace(/^www\\./,''));
+            const passiveDocument = sourceDocument || location.hostname.toLowerCase() === 'challenges.cloudflare.com';
+            if (passiveDocument) {
+                try {
+                    new PerformanceObserver(function(list) {
+                        list.getEntries().forEach(function(entry) {
+                            window.webkit.messageHandlers.networkLogger.postMessage({type:'resource',url:entry.name});
+                        });
+                    }).observe({type:'resource',buffered:true});
+                } catch(e) {}
+                document.addEventListener('play', function(event) {
+                    if (event.target instanceof HTMLMediaElement) {
+                        event.target.muted = true;
+                        const url = event.target.currentSrc || event.target.src;
+                        if (url) window.webkit.messageHandlers.networkLogger.postMessage({type:'media',url:url});
+                    }
+                }, true);
+                if (sourceDocument) window.addEventListener('message', function(event) {
+                const data = event.data;
+                if (event.origin !== 'https://challenges.cloudflare.com' || !data ||
+                    data.source !== 'cloudflare-challenge' || data.event !== 'fail') return;
+                const code = Number(data.code);
+                if (Number.isInteger(code) && code > 0 && code < 10000000)
+                    window.webkit.messageHandlers.networkLogger.postMessage({type:'verification-error',code:code});
+            });
+            const ensureSourceProof = async function(form, root) {
+                // The combined tier creates its own widget after frameBridge.
+                // A second field with the same name can replace its valid payload.
+                if (root.dataset.redirectGateTier !== 'turnstile') return;
+                if (form.querySelector('altcha-widget') || form.__shiroxProofLoading) return;
+                const action = new URL(form.action, location.href);
+                const challenge = new URL(root.dataset.altchaChallengeUrl || '', location.href);
+                if (action.origin !== location.origin || action.pathname !== '/r' || form.target !== 'player-iframe' ||
+                    challenge.origin !== location.origin || challenge.pathname !== '/api/inline/verify-init') return;
+                form.__shiroxProofLoading = true;
+                // Use the source's published widget and genuine challenge. The
+                // source accepts this proof as an alternative to Turnstile.
+                if (!customElements.get('altcha-widget')) {
+                    const gate = Array.from(document.scripts).map(function(script) {
+                        try { return new URL(script.src, location.href); } catch(e) { return null; }
+                    }).find(function(url) {
+                        return url && url.origin === location.origin && /^\\/build\\/assets\\/episode-redirect-gate-[a-z0-9_-]+\\.js$/i.test(url.pathname);
+                    });
+                    if (!gate) return;
+                    const controller = new AbortController();
+                    const timer = setTimeout(function() { controller.abort(); }, 4000);
+                    let code;
+                    try {
+                        const response = await fetch(gate.href, {credentials:'same-origin',signal:controller.signal});
+                        if (!response.ok || new URL(response.url).origin !== location.origin) return;
+                        code = await response.text();
+                    } finally { clearTimeout(timer); }
+                    if (code.length > 262144) return;
+                    const asset = code.match(/assets\\/(altcha-[a-z0-9_-]+\\.js)/i);
+                    if (!asset) return;
+                    await import(new URL(asset[1], gate.href).href);
+                }
+                if (!customElements.get('altcha-widget') || !form.isConnected || form.querySelector('altcha-widget')) return;
+                const proof = document.createElement('altcha-widget');
+                proof.setAttribute('challengeurl', challenge.href);
+                proof.setAttribute('name', 'altcha');
+                form.appendChild(proof);
+            };
+            if (sourceDocument) setInterval(function() {
+                    const form = document.getElementById('player-prepare-form');
+                    const response = form && Array.from(form.querySelectorAll('input[name="cf-turnstile-response"]')).find(function(input) { return !!input.value; });
+                    const responsePresent = !!response;
+                    const root = document.getElementById('episode-redirect-gate-root');
+                    if (form && root) ensureSourceProof(form, root).catch(function() {});
+                    const proof = form && form.querySelector('altcha-widget');
+                    // Run the website's own proof-of-work implementation. Never
+                    // manufacture a payload or mark an unverified challenge as solved.
+                    if (proof && !proof.__shiroxProofStarted && typeof proof.verify === 'function') {
+                        try {
+                            const challenge = new URL(proof.getAttribute('challengeurl'), location.href);
+                            const action = new URL(form.action, location.href);
+                            if (challenge.origin === location.origin && action.origin === location.origin &&
+                                action.pathname === '/r' && form.target === 'player-iframe') {
+                                proof.__shiroxProofStarted = true;
+                                Promise.resolve(proof.verify()).catch(function() {});
+                            }
+                        } catch(e) {}
+                    }
+                    const proofVerified = !!proof && typeof proof.getState === 'function' && proof.getState() === 'verified';
+                    const freshResponse = responsePresent && form.__shiroxSubmittedResponse !== response.value;
+                    const freshProof = proofVerified && !proof.__shiroxProofSubmitted;
+                    const context = form && form.querySelector('input[name="t"]');
+                    let continued = false;
+                    // Keep the real site-issued response in its own form/session.
+                    // requestSubmit preserves validation/submit handlers without
+                    // sending the click through third-party advertising handlers.
+                    if ((freshResponse || freshProof) && context && context.value &&
+                        (!window.__shiroxProviderToken || context.value === window.__shiroxProviderToken) &&
+                        window.__shiroxProviderActivated && form.target === 'player-iframe') {
+                        const action = new URL(form.action, location.href);
+                        const button = form.querySelector('button[type="submit"]');
+                        if (action.origin === location.origin && action.pathname === '/r' && button &&
+                            !button.disabled && button.offsetParent !== null &&
+                            typeof form.requestSubmit === 'function') {
+                            if (responsePresent) form.__shiroxSubmittedResponse = response.value;
+                            if (proofVerified) proof.__shiroxProofSubmitted = true;
+                            form.requestSubmit(button);
+                            continued = true;
+                        }
+                    }
+                    window.webkit.messageHandlers.networkLogger.postMessage({type:'verification-state',responsePresent:responsePresent,continued:continued,providerActivated:!!window.__shiroxProviderActivated,contextMatches:!!(context && context.value && (!window.__shiroxProviderToken || context.value === window.__shiroxProviderToken)),proofState:proof && typeof proof.getState === 'function' ? proof.getState() : null});
+                },500);
+            }
+            if (!passiveDocument) {
 
-            window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'permissions', { get: () => undefined });
-
+            // A resolver observes media requests silently. Muted playback also
+            // lets normal HTML players initialise without an extra user tap.
+            const originalMediaPlay = HTMLMediaElement.prototype.play;
+            HTMLMediaElement.prototype.play = function() {
+                this.muted = true;
+                return originalMediaPlay.apply(this, arguments);
+            };
             const originalFetch = window.fetch;
             const originalXHROpen = XMLHttpRequest.prototype.open;
             const originalXHRSend = XMLHttpRequest.prototype.send;
@@ -1032,15 +1213,30 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             };
             aggressiveJWHook();
 
-            window.waitForElementAndClick = function(waitSelectors, clickSelectors, maxWaitTime) {
+            }
+
+            window.waitForElementAndClick = function(waitSelectors, clickSelectors, maxWaitTime, captureTimeout) {
                 return new Promise(function(resolve) {
                     const results = { waitResults: {}, clickResults: [] };
                     waitSelectors.forEach(function(selector) { results.waitResults[selector] = false; });
                     const startTime = Date.now();
+                    const sourceReadyTimeout = Math.max(maxWaitTime, Number(captureTimeout) || maxWaitTime);
                     const checkInterval = 100;
 
                     const checkAndClick = function() {
                         const elapsed = (Date.now() - startTime) / 1000;
+                        // Provider buttons exist before the site's deferred
+                        // handlers are installed. An early click is then lost,
+                        // and the site silently selects its default VOE mirror.
+                        const sourceGate = document.getElementById('episode-redirect-gate-root');
+                        if (sourceGate && sourceGate.dataset.episodeRedirectGateInit !== '1') {
+                            if (elapsed < sourceReadyTimeout) setTimeout(checkAndClick, checkInterval);
+                            else {
+                                window.webkit.messageHandlers.networkLogger.postMessage({ type: 'click-results', results: results });
+                                resolve(results);
+                            }
+                            return;
+                        }
                         let allFound = waitSelectors.length === 0;
                         waitSelectors.forEach(function(selector) {
                             const element = document.querySelector(selector);
@@ -1049,13 +1245,30 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                             }
                         });
                         allFound = waitSelectors.every(function(selector) { return results.waitResults[selector]; });
-                        if (allFound || elapsed >= maxWaitTime) {
+                        // A play button can create the video element. Do not wait for
+                        // that video (or an inherently invisible <source>) first.
+                        const playReady = clickSelectors.some(function(selector) {
+                            return Array.from(document.querySelectorAll(selector)).some(function(element) {
+                                return element.offsetParent !== null && !element.disabled && !element.__shiroxCaptureClicked;
+                            });
+                        });
+                        if (allFound || playReady || elapsed >= maxWaitTime) {
                             clickSelectors.forEach(function(selector) {
                                 try {
                                     const elements = document.querySelectorAll(selector);
                                     let clicked = false;
                                     elements.forEach(function(element) {
-                                        if (element && element.offsetParent !== null) {
+                                        if (element && element.offsetParent !== null && !element.disabled && !element.__shiroxCaptureClicked && !(element.matches('[data-play-url]') && element.__shiroxProviderActivated)) {
+                                            element.__shiroxCaptureClicked = true;
+                                            if (element.matches('[data-play-url]')) {
+                                                element.__shiroxProviderActivated = true;
+                                                window.__shiroxProviderActivated = true;
+                                                try {
+                                                    const target = new URL(element.getAttribute('data-play-url'), location.href);
+                                                    if (target.origin === location.origin && target.pathname === '/r')
+                                                        window.__shiroxProviderToken = target.searchParams.get('t');
+                                                } catch(e) {}
+                                            }
                                             try {
                                                 element.click();
                                                 clicked = true;
@@ -1083,6 +1296,21 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                 });
             };
 
+            const reportPlayerPayload = function() {
+                if (passiveDocument || !/^\\/e\\/[a-z0-9]+\\/?$/i.test(location.pathname) ||
+                    !/VOE.*(?:Content Delivery Network|Video Cloud)/i.test(document.title) ||
+                    !document.querySelector('script[type="application/json"]') || window.__shiroxPlayerReported) return;
+                window.__shiroxPlayerReported = true;
+                const html = document.documentElement.outerHTML;
+                if (html.length <= 1000000) window.webkit.messageHandlers.networkLogger.postMessage({type:'player-page',url:location.href,html:html});
+            };
+            document.addEventListener('DOMContentLoaded', reportPlayerPayload, {once:true});
+            if (document.readyState !== 'loading') reportPlayerPayload();
+
+            document.addEventListener('DOMContentLoaded', function() {
+                window.waitForElementAndClick([\(autoWaitSelectors)], [\(autoClickSelectors)], \(autoMaxWait), \(autoCaptureTimeout));
+            }, { once: true });
+
             const nuclearScan = function() {
                 Object.keys(window).forEach(function(key) {
                     try {
@@ -1103,16 +1331,12 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                         }
                     }
                 });
-                const clickableSelectors = ['button', '.play', '.play-button', '[data-play]', '.video-play', '.jwplayer', '.player', '[id*="player"]', '[class*="play"]', 'div[onclick]', 'span[onclick]', 'a[onclick]'];
-                clickableSelectors.forEach(function(selector) {
-                    document.querySelectorAll(selector).forEach(function(el) {
-                        try { el.click(); } catch(e) {}
-                    });
-                });
             };
-            setTimeout(nuclearScan, 500);
-            setTimeout(nuclearScan, 1500);
-            setTimeout(nuclearScan, 3000);
+            if (!passiveDocument) {
+                setTimeout(nuclearScan, 500);
+                setTimeout(nuclearScan, 1500);
+                setTimeout(nuclearScan, 3000);
+            }
 
             window.captureCookies = function() {
                 const cookies = {};
@@ -1140,10 +1364,24 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         #endif
 
         webView = WKWebView(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080), configuration: config)
+        #if os(iOS)
+        if let webView {
+            let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap { $0.windows }
+            if let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first(where: { !$0.isHidden }) {
+                webView.frame = window.bounds
+                webView.isUserInteractionEnabled = showsBrowser
+                webView.accessibilityElementsHidden = true
+                // WebKit media initialisation depends on belonging to a window.
+                // Keep capture beneath the app without changing its layout.
+                if showsBrowser { window.addSubview(webView) }
+                else { window.insertSubview(webView, at: 0) }
+            }
+        }
+        #endif
         #if !os(tvOS)
         webView?.navigationDelegate = self
+        webView?.uiDelegate = self
         #endif
-        webView?.customUserAgent = URLSession.randomUserAgent
     }
 
     private func loadHTMLContent(_ html: String) {
@@ -1161,16 +1399,20 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
     private func loadURL(url: URL, headers: [String: String]) {
         guard let webView = webView, options != nil else { return }
+        var headers = headers
+        if let host = url.host {
+            let manager = CloudflareBypassManager.shared
+            if let cookie = manager.fullCookieHeader(for: host) {
+                headers = headers.filter { $0.key.lowercased() != "cookie" && $0.key.lowercased() != "user-agent" }
+                headers["Cookie"] = cookie
+                if let ua = manager.bypassUserAgent(for: host) { headers["User-Agent"] = ua }
+            }
+        }
+        webView.customUserAgent = headers.first { $0.key.lowercased() == "user-agent" }?.value
         addRequest(url.absoluteString)
         var request = URLRequest(url: url)
-        request.setValue(URLSession.randomUserAgent, forHTTPHeaderField: "User-Agent")
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8", forHTTPHeaderField: "Accept")
-        request.setValue("en-US,en;q=0.5", forHTTPHeaderField: "Accept-Language")
-        request.setValue("gzip, deflate, br", forHTTPHeaderField: "Accept-Encoding")
-        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-        request.setValue("upgrade-insecure-requests", forHTTPHeaderField: "Upgrade-Insecure-Requests")
-        request.setValue("same-origin", forHTTPHeaderField: "Sec-Fetch-Site")
-        request.setValue("navigate", forHTTPHeaderField: "Sec-Fetch-Mode")
+        // WebKit supplies navigation, compression and fetch-metadata headers.
+        // Keep its real browser context instead of contradictory synthetic values.
 
         // WKWebView ignores Cookie headers set on URLRequest — inject via WKHTTPCookieStore instead
         var cookiesToInject: [HTTPCookie] = []
@@ -1195,10 +1437,6 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             }
         }
 
-        if request.value(forHTTPHeaderField: "Referer") == nil {
-            let randomReferers = ["https://www.google.com/", "https://www.youtube.com/", "https://twitter.com/", "https://www.reddit.com/", "https://www.facebook.com/"]
-            request.setValue(randomReferers.randomElement() ?? "https://www.google.com/", forHTTPHeaderField: "Referer")
-        }
 
         func doLoad() {
             webView.load(request)
@@ -1234,9 +1472,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
     private func performCustomInteractions() {
         guard let webView = webView, let options = options else { return }
         if !options.waitForSelectors.isEmpty || !options.clickSelectors.isEmpty {
-            let waitSels = options.waitForSelectors.map { "'\($0)'" }.joined(separator: ", ")
-            let clickSels = options.clickSelectors.map { "'\($0)'" }.joined(separator: ", ")
-            let js = "if (typeof window.waitForElementAndClick === 'function') { window.waitForElementAndClick([\(waitSels)], [\(clickSels)], \(options.maxWaitTime)); }"
+            let waitSels = options.waitForSelectors.map { JSEngine.jsStringLiteral($0) }.joined(separator: ", ")
+            let clickSels = options.clickSelectors.map { JSEngine.jsStringLiteral($0) }.joined(separator: ", ")
+            let js = "if (typeof window.waitForElementAndClick === 'function') { window.waitForElementAndClick([\(waitSels)], [\(clickSels)], \(options.maxWaitTime), \(options.timeoutSeconds)); }"
             webView.evaluateJavaScript(js, completionHandler: nil)
         } else {
             simulateUserInteraction()
@@ -1289,7 +1527,6 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         #if !os(tvOS)
         guard let webView = webView, let host = webView.url?.host else { return }
         // cf_clearance is UA-bound — capture the UA this webView solved under so reuse replays it.
-        let solvedUA = webView.customUserAgent ?? ""
         let cookieStore = webView.configuration.websiteDataStore.httpCookieStore
         cookieStore.getAllCookies { cookies in
             guard let cf = cookies.first(where: {
@@ -1303,6 +1540,10 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
             }
             let fullHeader = hostCookies.map { "\($0.name)=\($0.value)" }.joined(separator: "; ")
             Task { @MainActor in
+                guard let solvedUA = try? await webView.evaluateJavaScript("navigator.userAgent") as? String,
+                      !solvedUA.isEmpty,
+                      let page = try? await webView.evaluateJavaScript("document.documentElement.outerHTML") as? String,
+                      !JSEngine.isTurnstileResponse(status: 200, body: page) else { return }
                 CloudflareBypassManager.shared.store(cookie: cf.value, cookieHeader: fullHeader, userAgent: solvedUA, for: host)
             }
         }
@@ -1314,6 +1555,9 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
         timer = nil
 
         webView?.stopLoading()
+        #if os(iOS)
+        webView?.removeFromSuperview()
+        #endif
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: "networkLogger")
 
         let originalUrl = options?.htmlContent != nil
@@ -1322,6 +1566,15 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
         let result: [String: Any] = [
             "originalUrl": originalUrl,
+            "mediaPageURL": mediaPageURL as Any? ?? NSNull(),
+            "playerPageURL": playerPageURL as Any? ?? NSNull(),
+            "playerHTML": playerHTML as Any? ?? NSNull(),
+            "verificationErrorCode": verificationErrorCode as Any? ?? NSNull(),
+            "verificationResponsePresent": verificationResponsePresent,
+            "verifiedContinuationClicked": verifiedContinuationClicked,
+            "verificationProviderActivated": verificationProviderActivated,
+            "verificationContextMatches": verificationContextMatches,
+            "verificationProofState": verificationProofState as Any? ?? NSNull(),
             "requests": networkRequests,
             "html": htmlContent as Any? ?? NSNull(),
             "cookies": cookies.isEmpty ? NSNull() as Any : cookies as Any,
@@ -1348,7 +1601,8 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
                !cutoffTriggered {
                 cutoffTriggered = true
                 cutoffUrl = urlString
-                stopMonitoring(reason: "cutoff")
+                if options?.returnHTML == true { captureDataThenComplete() }
+                else { stopMonitoring(reason: "cutoff") }
             }
         }
     }
@@ -1356,7 +1610,7 @@ class NetworkFetchMonitor: NSObject, ObservableObject {
 
 #if !os(tvOS)
 extension NetworkFetchMonitor: WKNavigationDelegate {
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {}
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { performCustomInteractions() }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {}
     @available(iOS 15.0, macOS 13.0, *)
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
@@ -1365,6 +1619,21 @@ extension NetworkFetchMonitor: WKNavigationDelegate {
             addRequest(url.absoluteString)
         }
         return .allow
+    }
+}
+
+extension NetworkFetchMonitor: WKUIDelegate {
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
+                 for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        guard navigationAction.targetFrame == nil, let target = navigationAction.request.url else { return nil }
+        addRequest(target.absoluteString)
+        // Provider launch links may use window.open. Reuse the capture view;
+        // never follow advertising popups opened by a third-party hoster.
+        if SourceCatalogRouting.canFollowPlayerWindow(from: navigationAction.sourceFrame.request.url ?? webView.url ?? URL(string: originalUrlString), to: target),
+           !HostBlocklist.shared.isBlocked(target) {
+            webView.load(navigationAction.request)
+        }
+        return nil
     }
 }
 #endif
@@ -1376,9 +1645,23 @@ extension NetworkFetchMonitor: WKScriptMessageHandler {
               let body = message.body as? [String: Any] else { return }
 
         if let url = body["url"] as? String {
+            if let media = URL(string: url), ["m3u8", "mp4"].contains(media.pathExtension.lowercased()),
+               let page = message.frameInfo.request.url, StreamPreflight.validRemoteURL(page) {
+                mediaPageURL = page.absoluteString
+            }
             addRequest(url)
         }
 
+        if body["type"] as? String == "player-page", playerHTML == nil,
+           let html = body["html"] as? String, html.utf8.count <= 1_000_000,
+           let href = body["url"] as? String, let page = URL(string: href),
+           StreamPreflight.validRemoteURL(page), message.frameInfo.request.url == page,
+           page.path.range(of: #"^/e/[a-zA-Z0-9]+/?$"#, options: .regularExpression) != nil {
+            playerPageURL = href
+            playerHTML = html
+            if options?.returnHTML == true { captureDataThenComplete() }
+            return
+        }
         if let type = body["type"] as? String {
             if type == "click-results", let results = body["results"] as? [String: Any] {
                 if let waitRes = results["waitResults"] as? [String: Bool] {
@@ -1391,6 +1674,16 @@ extension NetworkFetchMonitor: WKScriptMessageHandler {
                             elementsClicked.append(sel)
                         }
                     }
+                }
+            } else if type == "verification-error", let code = body["code"] as? Int, (1..<10_000_000).contains(code) {
+                verificationErrorCode = code
+            } else if type == "verification-state" {
+                verificationResponsePresent = verificationResponsePresent || (body["responsePresent"] as? Bool == true)
+                verifiedContinuationClicked = verifiedContinuationClicked || (body["continued"] as? Bool == true)
+                verificationProviderActivated = verificationProviderActivated || (body["providerActivated"] as? Bool == true)
+                verificationContextMatches = verificationContextMatches || (body["contextMatches"] as? Bool == true)
+                if let state = body["proofState"] as? String, ["unverified","verifying","verified","error","expired"].contains(state) {
+                    verificationProofState = state
                 }
             } else if type == "cookies", let cookiesData = body["cookies"] as? [String: String] {
                 for (key, value) in cookiesData {

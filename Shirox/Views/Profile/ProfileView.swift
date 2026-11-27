@@ -102,7 +102,7 @@ struct ProfileView: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Fertig") { dismiss() }
                 }
             }
         }
@@ -127,7 +127,7 @@ struct ProfileView: View {
                 }
                 dismiss()
             }
-            Button("Cancel", role: .cancel) { }
+            Button("Abbrechen", role: .cancel) { }
         }
     }
 
@@ -182,7 +182,7 @@ struct ProfileView: View {
             Button {
                 Task { await vm.loadProfile(userId: userId) }
             } label: {
-                Text("Retry")
+                Text("Erneut versuchen")
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 18).padding(.vertical, 8)
                     .background(Color.accentColor)

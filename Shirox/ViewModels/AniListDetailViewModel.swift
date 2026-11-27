@@ -160,7 +160,7 @@ final class AniListDetailViewModel: ObservableObject {
             isAiring: media.status == "RELEASING",
             resumeFrom: resumeEpisodeNumber == currentEpNum
                 ? resumeWatchedSeconds
-                : ContinueWatchingManager.shared.items.first(where: { $0.aniListID == media.id && $0.episodeNumber == currentEpNum })?.watchedSeconds,
+                : ContinueWatchingManager.shared.episodeRecord(aniListID: media.id, moduleId: nil, mediaTitle: media.title.english ?? media.title.romaji ?? "", episodeNumber: currentEpNum)?.resumeSeconds,
             detailHref: searchResultHref,
             episodeHref: episodeActualHref,
             streamTitle: stream.title,

@@ -32,7 +32,7 @@ struct PlayerSequelPickerSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button("Abbrechen") { dismiss() }
                 }
             }
         }

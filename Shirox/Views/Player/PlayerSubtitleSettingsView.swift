@@ -47,7 +47,7 @@ struct PlayerSubtitleSettingsView: View {
 
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Font Size")
+                            Text("Schriftgröße")
                             Spacer()
                             Text("\(Int(settings.fontSize))")
                                 .foregroundStyle(.secondary)
@@ -66,7 +66,7 @@ struct PlayerSubtitleSettingsView: View {
                     }
                     #endif
 
-                    Toggle("Background", isOn: $settings.backgroundEnabled)
+                    Toggle("Hintergrund", isOn: $settings.backgroundEnabled)
                         .tint(.secondary)
                 }
 
@@ -88,11 +88,11 @@ struct PlayerSubtitleSettingsView: View {
                     #if !os(tvOS)
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Delay")
+                            Text("Zeitversatz")
                             Spacer()
                             Text(String(format: "%.1fs", settings.delaySeconds))
                                 .foregroundStyle(.secondary)
-                            Button("Reset") {
+                            Button("Zurücksetzen") {
                                 settings.delaySeconds = 0
                             }
                             .buttonStyle(.bordered)
@@ -105,10 +105,10 @@ struct PlayerSubtitleSettingsView: View {
                 }
             }
             .softScrollEdges()
-            .navigationTitle("Subtitle Settings")
+            .navigationTitle("Untertitel-Einstellungen")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
+                    Button("Fertig") { dismiss() }
                 }
             }
             .fileImporter(isPresented: $showImporter,

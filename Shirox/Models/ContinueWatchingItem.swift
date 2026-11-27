@@ -51,6 +51,13 @@ struct ContinueWatchingItem: Identifiable, Codable, Hashable {
     var localImportName: String?
     /// Filename of an up-front subtitle copied alongside the video, so resume reloads it.
     var localSubtitleImportName: String?
+    var sourceReferenceOnly: Bool? = nil
+    var sourceSeason: Int? = nil
+    var sourceEpisode: Int? = nil
+    var audioLanguage: String? = nil
+    var subtitleLanguage: String? = nil
+    var isHardsub: Bool? = nil
+    var isPlaceholder: Bool { streamUrl.isEmpty && (sourceReferenceOnly != true || totalSeconds == 0) }
 }
 
 extension ContinueWatchingItem {
@@ -91,8 +98,91 @@ extension ContinueWatchingItem {
     func matchesEpisode(number: Int, href: String?) -> Bool {
         if let itemHref = episodeHref, !itemHref.isEmpty,
            let href, !href.isEmpty {
-            return itemHref == href
+            return PlaybackHistoryIdentity.canonical(itemHref) == PlaybackHistoryIdentity.canonical(href)
         }
         return episodeNumber == number
+    }
+}
+
+enum PlaybackHistoryIdentity {
+    static func canonical(_ href: String) -> String {
+        guard var url = URLComponents(string: href), let host = url.host?.lowercased() else { return href }
+        switch host.replacingOccurrences(of: "www.", with: "") {
+        case "s.to", "serienstream.to", "serienstream.cx": url.host = "serienstream.to"
+        case "aniworld.to", "aniworld.cc": url.host = "aniworld.to"
+        default: url.host = host
+        }
+        url.scheme = "https"; url.query = nil; url.fragment = nil
+        url.path = url.path.replacingOccurrences(of: "/serie/stream/", with: "/serie/")
+        while url.path.hasSuffix("/") { url.path.removeLast() }
+        return url.string ?? href
+    }
+
+    static func show(_ href: String) -> String {
+        let value = canonical(href)
+        if let url = URL(string: value), url.host == "southpark.de" || url.host == "www.southpark.de" {
+            return "https://www.southpark.de/seasons/south-park"
+        }
+        return value.components(separatedBy: "/staffel-").first ?? value
+    }
+
+    static func matches(aniListID: Int?, moduleID: String?, title: String, detailHref: String?,
+                        otherID: Int?, otherModule: String?, otherTitle: String, otherHref: String?) -> Bool {
+        if let aniListID, let otherID { return aniListID == otherID }
+        if let detailHref, !detailHref.isEmpty, let otherHref, !otherHref.isEmpty {
+            return show(detailHref) == show(otherHref)
+        }
+        if let moduleID, let otherModule, moduleID != otherModule { return false }
+        return !title.isEmpty && title.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+            == otherTitle.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
+    }
+}
+
+/// Durable episode position, independent of the single Continue Watching card.
+/// Contains source identities only, never expiring media URLs or request headers.
+struct EpisodePlaybackProgress: Codable, Equatable {
+    let mediaTitle: String
+    let streamTitle: String?
+    let aniListID: Int?
+    let moduleID: String?
+    let detailHref: String?
+    let episodeHref: String?
+    let episodeNumber: Int
+    let sourceSeason: Int?
+    let sourceEpisode: Int?
+    let watchedSeconds: Double
+    let totalSeconds: Double
+    let updatedAt: Date
+
+    init(_ item: ContinueWatchingItem) {
+        mediaTitle = item.mediaTitle; streamTitle = item.streamTitle; aniListID = item.aniListID; moduleID = item.moduleId
+        detailHref = item.detailHref; episodeHref = item.episodeHref; episodeNumber = item.episodeNumber
+        sourceSeason = item.sourceSeason ?? item.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) }
+        sourceEpisode = item.sourceEpisode ?? item.episodeHref.flatMap { ModuleSeasonRouting.episodeNumber(for: $0) }
+        watchedSeconds = item.watchedSeconds; totalSeconds = item.totalSeconds; updatedAt = item.lastWatchedAt
+    }
+
+    var key: String {
+        if let episodeHref, !episodeHref.isEmpty { return "href:" + PlaybackHistoryIdentity.canonical(episodeHref) }
+        if let aniListID { return "anime:\(aniListID):\(episodeNumber)" }
+        return "module:\(moduleID ?? ""):\(mediaTitle):\(sourceSeason ?? 0):\(episodeNumber)"
+    }
+    var fraction: Double { totalSeconds.isFinite && watchedSeconds.isFinite && totalSeconds > 0 ? min(max(watchedSeconds / totalSeconds, 0), 1) : 0 }
+    var resumeSeconds: Double? { watchedSeconds.isFinite && totalSeconds.isFinite && totalSeconds > 0 && watchedSeconds > 0 && fraction < 0.95 ? watchedSeconds : nil }
+    var label: String { "\(Self.time(watchedSeconds)) von \(Self.time(totalSeconds)) · \(Int(fraction * 100)) %" }
+    static func time(_ seconds: Double) -> String {
+        guard seconds.isFinite, seconds >= 0 else { return "0:00" }
+        let value = Int(min(seconds, 31_536_000))
+        return value >= 3600 ? String(format: "%d:%02d:%02d", value / 3600, value / 60 % 60, value % 60)
+            : String(format: "%d:%02d", value / 60, value % 60)
+    }
+}
+
+extension ContinueWatchingItem {
+    var usesSourceResume: Bool {
+        localImportName == nil && bookmarkData == nil && URL(string: streamUrl)?.isFileURL != true &&
+        [episodeHref, detailHref].compactMap { $0 }.contains {
+            SourceCatalogRouting.accepts($0, kind: .anime) || SourceCatalogRouting.accepts($0, kind: .series)
+        }
     }
 }

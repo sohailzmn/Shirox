@@ -432,13 +432,13 @@ struct ModuleStreamPickerView: View {
             .listStyle(.inset)
             #endif
 
-            .navigationTitle("Watch Episode \(episodeNumber)")
+            .navigationTitle("Watch Folge \(episodeNumber)")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onDismiss() }
+                    Button("Abbrechen") { onDismiss() }
                 }
             }
                     .tint(.primary)
@@ -473,265 +473,33 @@ struct ModuleStreamPickerView: View {
         guard !autoPlayLoading else { return }
         autoPlayLoading = true
         autoPlayMessage = nil
-        // Avoid running the per-row searches in parallel with this targeted path.
         for row in vmStore.viewModels.values { row.cancelIfSearching() }
-
-        // Independent watchdog: the underlying JS promise bridge can wait 120s,
-        // and Smart Play may try multiple titles/providers. Never leave the user
-        // staring at "Connecting…" indefinitely when a provider is unresponsive.
-        autoPlayDeadlineTask?.cancel()
-        autoPlayDeadlineTask = Task { @MainActor in
-            do { try await Task.sleep(nanoseconds: 55_000_000_000) }
-            catch { return }
-            guard !Task.isCancelled, autoPlayLoading else { return }
-            Logger.shared.log("[SmartPlay] Timed out after 55s; canceling provider lookups", type: "Error")
-            autoPlayTask?.cancel()
-            autoPlayLoading = false
-            autoPlayMessage = FastSourceDecision.error(
-                foundSeries: false, foundEpisodes: false, foundStream: false, timedOut: true)
-            if headless { PlaybackPerformance.shared.failed() }
-            onFailure?(autoPlayMessage ?? "Verbindung zur Quelle fehlgeschlagen.")
-        }
+        autoPlayTask?.cancel()
         autoPlayTask = Task { @MainActor in
-            defer {
-                autoPlayLoading = false
-                autoPlayDeadlineTask?.cancel()
-                autoPlayDeadlineTask = nil
-            }
-            // First-launch auto-install is asynchronous. If Watch is tapped
-            // immediately, wait for it before taking the Smart Play snapshot.
-            // An offline failure still leaves existing modules available.
-            await moduleManager.ensureUnifiedGermanSource()
-            guard !Task.isCancelled else { return }
-            let last = UserDefaults.standard.string(forKey: "lastUsedModuleId")
-            let active = moduleManager.activeModule?.id
-            let candidates: [ModuleDefinition]
-            if useDefaultExtension, let selected = moduleManager.activeModule {
-                candidates = [selected]
-            } else {
-                candidates = moduleManager.modules.filter { !$0.isManga }
-            }
-            let modules = candidates.sorted { left, right in
-                func priority(_ module: ModuleDefinition) -> Int {
-                    if module.id == last { return 0 }
-                    if module.id == active { return 1 }
-                    return 2
+            defer { autoPlayLoading = false }
+            do {
+                let intent = ModuleSeasonFallback.mediaIntent(for: animeTitle)
+                let request = AutomaticPlaybackRequest(
+                    catalogID: mediaId.map { "anilist-\($0)" }, title: intent.seriesTitle,
+                    aliases: alternateTitles, kind: .anime,
+                    animeID: mediaId, seasonIsExplicit: intent.seasonNumber != nil,
+                    season: intent.seasonNumber ?? 1,
+                    episode: ModuleSeasonFallback.sourceEpisodeNumber(for: animeTitle, fallback: episodeNumber))
+                let result = try await AutomaticPlaybackCoordinator.shared.resolve(request) { value in
+                    autoPlayMessage = value
+                    onStatus?(value)
                 }
-                return priority(left) < priority(right)
-            }
-
-            // Calculate franchise offset concurrently with source lookup.
-            // This otherwise blocked network search before it could even begin.
-            let offsetTask = Task<Int, Never> {
-                guard let mediaId else { return 0 }
-                return await SeasonChainMapper.shared.resolveOffset(
-                    anchorAniListID: mediaId, anchorMALID: nil) ?? 0
-            }
-            defer { offsetTask.cancel() }
-
-            var foundSeries = false
-            var foundEpisode = false
-            var foundStreams = false
-            var verificationRequired = false
-            let sourceEpisode = ModuleSeasonFallback.sourceEpisodeNumber(
-                for: animeTitle, fallback: episodeNumber)
-            for module in modules {
-                guard !Task.isCancelled else { return }
-                autoPlayMessage = "Checking \(module.sourceName)…"
-                onStatus?(module.sourceName)
-                if headless {
-                    PlaybackPerformance.shared.sourceSearch(provider: module.sourceName)
-                }
-                let runner = ModuleJSRunner()
-                do {
-                    try await runner.load(module: module)
-
-                    var hrefs: [String] = []
-                    if let previous = ModuleSearchAliasManager.shared.getLastSearchResultHref(
-                        mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id) {
-                        hrefs.append(previous)
-                    }
-
-                    // Fast path: with an explicit season and episode, check a few
-                    // trusted public episode URL patterns before expensive
-                    // full-catalogue search + all-season enumeration.
-                    // A valid page needs a matching actual title and hoster markup.
-                    // Blocked pages fail silently here; normal recovery still works.
-                    if hrefs.isEmpty {
-                        let directCandidates = ModuleSeasonFallback.directEpisodeCandidates(
-                            for: animeTitle, alternatives: alternateTitles,
-                            episodeNumber: sourceEpisode, module: module)
-                        if let direct = await VerifiedDirectEpisode.firstVerified(directCandidates),
-                           !Task.isCancelled {
-                            foundSeries = true
-                            foundEpisode = true
-                            if headless {
-                                PlaybackPerformance.shared.moduleResolved()
-                                PlaybackPerformance.shared.episodeResolved()
-                            }
-                            var directStreams: [StreamResult] = []
-                            do {
-                                directStreams = try await runner.fetchStreams(
-                                    episodeUrl: direct.episodeHref)
-                            } catch {
-                                if error is ModuleStreamResolutionError ||
-                                   runner.lastTurnstileURL != nil {
-                                    verificationRequired = true
-                                }
-                            }
-                            if !directStreams.isEmpty && !Task.isCancelled {
-                                foundStreams = true
-                                let savedTitle = ModuleSearchAliasManager.shared.getLastStreamTitle(
-                                    moduleId: module.id)
-                                let winner: StreamResult
-                                if let saved = directStreams.first(where: { $0.title == savedTitle }) {
-                                    winner = saved
-                                } else if headless {
-                                    winner = directStreams.first(where: {
-                                        $0.title.localizedCaseInsensitiveContains("480p")
-                                    }) ?? directStreams[0]
-                                } else {
-                                    winner = await Self.fastestResponsiveStream(in: directStreams)
-                                }
-                                guard !Task.isCancelled else { return }
-                                ModuleSearchAliasManager.shared.setLastSearchResultHref(
-                                    mediaId: mediaId, animeTitle: animeTitle,
-                                    moduleId: module.id, href: direct.seriesHref)
-                                ModuleSearchAliasManager.shared.setLastStreamTitle(
-                                    moduleId: module.id, title: winner.title)
-                                UserDefaults.standard.set(module.id, forKey: "lastUsedModuleId")
-                                moduleManager.selectModule(module)
-                                if headless { PlaybackPerformance.shared.streamResolved() }
-                                if !headless { onDismiss() }
-                                onStreamsLoaded(directStreams, winner, direct.seriesHref,
-                                                nil, direct.episodeHref)
-                                return
-                            }
-                        }
-                    }
-
-                    // Pass 0: reuse a known result. Search the AniList title, then
-                    // retry a seasonless title (e.g. "Blue Lock" for "Blue Lock Season 2").
-                    let alias = ModuleSearchAliasManager.shared.getAlias(
-                        mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id)
-                    let allQueries = ModuleSeasonFallback.queries(
-                        for: alias ?? animeTitle, alternatives: alternateTitles + [animeTitle])
-                    // The unified module searches two sites per query. Limit its
-                    // title retries and don't revisit identical series URLs.
-                    var queries = module.sourceName.contains("Unified GER")
-                        ? Array(allQueries.prefix(4)) : allQueries
-                    var visitedHrefs = Set<String>()
-                    var hasConsultedJev = false
-                    for searchPass in 0...queries.count {
-                        guard !Task.isCancelled else { return }
-                        if searchPass == 0 && hrefs.isEmpty { continue }
-                        if searchPass > 0 {
-                            let query = queries[searchPass - 1]
-                            let results = (try? await runner.search(keyword: query)) ?? []
-                            let ranked = SearchResultMatcher.ranked(
-                                query: query, items: results, title: { $0.title })
-                            // Jev only reranks real results, never returns an unverified URL.
-                            let enhanced = await JevDecisionEngine.shared.rankCandidates(
-                                ranked, query: animeTitle,
-                                season: ModuleSeasonFallback.mediaIntent(for: animeTitle).seasonNumber)
-                            hrefs = Array(enhanced.prefix(3).map { $0.href })
-                            // No result? One optional Jev decision reprioritizes
-                            // the existing retries; the normal search still works offline.
-                            if hrefs.isEmpty && searchPass == 1 && !hasConsultedJev {
-                                hasConsultedJev = true
-                                let first = queries[0]
-                                let retry = await JevDecisionEngine.shared.prioritizeRetryQueries(
-                                    Array(queries.dropFirst()), originalTitle: animeTitle)
-                                queries = [first] + retry
-                            }
-                        }
-                        if !hrefs.isEmpty { foundSeries = true }
-                        for href in hrefs where visitedHrefs.insert(href).inserted {
-                        guard !Task.isCancelled else { return }
-                        if headless { PlaybackPerformance.shared.moduleResolved() }
-                        let episodes: [EpisodeLink]
-                        do { episodes = try await runner.fetchEpisodes(url: href) }
-                        catch {
-                            if runner.lastTurnstileURL != nil { verificationRequired = true }
-                            continue
-                        }
-                        if !episodes.isEmpty { foundSeries = true }
-                        let seasonMatch = ModuleSeasonFallback.aniWorldEpisode(
-                            from: episodes, title: animeTitle, module: module, number: sourceEpisode)
-                        let offset = await offsetTask.value
-                        let absoluteIndex = offset + sourceEpisode - 1
-                        let episode: EpisodeLink?
-                        if seasonMatch.handled {
-                            episode = seasonMatch.episode
-                        } else if offset > 0 && episodes.indices.contains(absoluteIndex),
-                                  Int(episodes[absoluteIndex].number) == offset + sourceEpisode {
-                            episode = episodes[absoluteIndex]
-                        } else {
-                            episode = episodes.first { Int($0.number) == sourceEpisode }
-                        }
-                        guard let episode else { continue }
-                        foundEpisode = true
-                        if headless { PlaybackPerformance.shared.episodeResolved() }
-
-                        let streams: [StreamResult]
-                        do { streams = try await runner.fetchStreams(episodeUrl: episode.href) }
-                        catch {
-                            if error is ModuleStreamResolutionError ||
-                               runner.lastTurnstileURL != nil {
-                                verificationRequired = true
-                            }
-                            continue
-                        }
-                        guard !streams.isEmpty else { continue }
-                        foundStreams = true
-
-                        let savedTitle = ModuleSearchAliasManager.shared.getLastStreamTitle(
-                            moduleId: module.id)
-                        // A fresh resolver result is already an actual stream.
-                        // Reuse the user's last working choice immediately;
-                        // network races are only for unfamiliar hosts.
-                        let winner: StreamResult
-                        if let saved = streams.first(where: { $0.title == savedTitle }) {
-                            winner = saved
-                        } else if headless {
-                            // The module has already extracted working stream URLs.
-                            // Don't delay fullscreen playback with a duplicate HTTP
-                            // probe. Prefer a lighter rendition if it is offered.
-                            winner = streams.first(where: {
-                                $0.title.localizedCaseInsensitiveContains("480p")
-                            }) ?? streams[0]
-                        } else {
-                            winner = await Self.fastestResponsiveStream(in: streams)
-                        }
-                        guard !Task.isCancelled else { return }
-                        ModuleSearchAliasManager.shared.setLastSearchResultHref(
-                            mediaId: mediaId, animeTitle: animeTitle, moduleId: module.id, href: href)
-                        ModuleSearchAliasManager.shared.setLastStreamTitle(
-                            moduleId: module.id, title: winner.title)
-                        UserDefaults.standard.set(module.id, forKey: "lastUsedModuleId")
-                        moduleManager.selectModule(module)
-                        if headless { PlaybackPerformance.shared.streamResolved() }
-                        if !headless { onDismiss() }
-                        onStreamsLoaded(streams, winner, href, episodes.count, episode.href)
-                        return
-                        }
-                    }
-                } catch {
-                    // A broken provider must not block playback from the next module.
-                    if error is ModuleStreamResolutionError ||
-                       runner.lastTurnstileURL != nil {
-                        verificationRequired = true
-                    }
-                    Logger.shared.log("[SmartPlay] \(module.sourceName): \(error.localizedDescription)", type: "Error")
-                }
-                if runner.lastTurnstileURL != nil { verificationRequired = true }
-            }
-            if !Task.isCancelled {
-                autoPlayMessage = FastSourceDecision.error(
-                    foundSeries: foundSeries, foundEpisodes: foundEpisode,
-                    foundStream: foundStreams, websiteVerificationRequired: verificationRequired)
-                if headless { PlaybackPerformance.shared.failed() }
-                onFailure?(autoPlayMessage ?? "Keine abspielbare Quelle gefunden.")
+                try Task.checkCancellation()
+                moduleManager.selectModule(result.module)
+                PlaybackPerformance.shared.streamResolved()
+                if !headless { onDismiss() }
+                onStreamsLoaded(result.streams, result.selected, result.detailHref,
+                                result.episodes.count, result.episode.href)
+            } catch is CancellationError { return }
+            catch {
+                autoPlayMessage = error.localizedDescription
+                PlaybackPerformance.shared.failed()
+                onFailure?(error.localizedDescription)
             }
         }
     }
@@ -1250,7 +1018,7 @@ private struct ModuleStreamRow: View {
             .buttonStyle(.plain)
 
         case .searchResults, .selectingEpisode, .notFound, .error:
-            Button("Retry") { rowVm.reset(); rowVm.startFind() }
+            Button("Erneut versuchen") { rowVm.reset(); rowVm.startFind() }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
                 .foregroundStyle(.primary)
@@ -1282,7 +1050,7 @@ private struct ModuleStreamRow: View {
         case .loadingStreams:
             HStack(spacing: 6) {
                 ProgressView().scaleEffect(0.7)
-                Text("Fetching streams…")
+                Text("Videos werden geprüft …")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -1495,7 +1263,7 @@ private struct ModuleStreamSelectionView: View {
                     ContentUnavailableView(
                         "No Streams Found",
                         systemImage: "antenna.radiowaves.left.and.right.slash",
-                        description: Text("Could not find any playable streams for this episode.")
+                        description: Text("Für diese Folge wurde kein abspielbares Video gefunden.")
                     )
                 } else {
                     List(streams, id: \.url) { stream in
@@ -1529,13 +1297,13 @@ private struct ModuleStreamSelectionView: View {
                     #endif
                 }
             }
-            .navigationTitle("Select Stream")
+            .navigationTitle("Video auswählen")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onDismiss)
+                    Button("Abbrechen", action: onDismiss)
                 }
             }
         }

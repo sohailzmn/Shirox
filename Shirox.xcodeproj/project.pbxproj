@@ -702,6 +702,18 @@
 		FCE3980671F64CF38B707BFA /* LocalPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E548862288E04B9EA60BBCF3 /* LocalPlaybackCoordinator.swift */; };
 		FE62CB6A1976842B35891D6B /* LibraryWriteSink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CF6D00FF0F0489890FAF52D /* LibraryWriteSink.swift */; };
 		FF0C14E2BFB7E229AC061F3D /* FreshInstallKeychainPurge.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF9A299B7B1F54AA1675478F /* FreshInstallKeychainPurge.swift */; };
+		3F8E9B03C18DE99F70927930 /* AutomaticPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DD8DAC55E6C287FED26B2A /* AutomaticPlaybackCoordinator.swift */; };
+		7B23BBD3932B911541FD8CB6 /* AutomaticPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DD8DAC55E6C287FED26B2A /* AutomaticPlaybackCoordinator.swift */; };
+		B15BE21960F3CE9DF83AE1F0 /* AutomaticPlaybackCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8DD8DAC55E6C287FED26B2A /* AutomaticPlaybackCoordinator.swift */; };
+		B9279493B75037279BC5D7B2 /* BundledUnifiedSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CCE6DA1DD1F6D9527DEF8A /* BundledUnifiedSource.swift */; };
+		6AD80FCAA64432BE5A28FB1C /* BundledUnifiedSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CCE6DA1DD1F6D9527DEF8A /* BundledUnifiedSource.swift */; };
+		D6D70FDF4886028305F5468C /* BundledUnifiedSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7CCE6DA1DD1F6D9527DEF8A /* BundledUnifiedSource.swift */; };
+		787F161BF4FC3409EE4D35F6 /* UnifiedCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 129F0CAF573262CCF327F489 /* UnifiedCatalog.swift */; };
+		B5D065B89D51D0D2685B523B /* UnifiedCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 129F0CAF573262CCF327F489 /* UnifiedCatalog.swift */; };
+		F9F9209A7EE799FAF88B9BAD /* UnifiedCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 129F0CAF573262CCF327F489 /* UnifiedCatalog.swift */; };
+		EF947966B5D4814492286CA9 /* UnifiedCatalogViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C79817DF2E7AA7A86DFDD5 /* UnifiedCatalogViews.swift */; };
+		A094018C61A214BFFB1C0CAC /* UnifiedCatalogViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C79817DF2E7AA7A86DFDD5 /* UnifiedCatalogViews.swift */; };
+		69B377F7EB46F234589658B3 /* UnifiedCatalogViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61C79817DF2E7AA7A86DFDD5 /* UnifiedCatalogViews.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -996,6 +1008,10 @@
 		F6AB4FB215071F688F19B394 /* JellyfinConnectView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JellyfinConnectView.swift; sourceTree = "<group>"; };
 		FB32994B31FB72D2DAA8327A /* NSFWContentFilter.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NSFWContentFilter.swift; sourceTree = "<group>"; };
 		FF4C00BAA407FF400B069044 /* JellyfinEntryView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JellyfinEntryView.swift; sourceTree = "<group>"; };
+		E8DD8DAC55E6C287FED26B2A /* AutomaticPlaybackCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomaticPlaybackCoordinator.swift; sourceTree = "<group>"; };
+		F7CCE6DA1DD1F6D9527DEF8A /* BundledUnifiedSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BundledUnifiedSource.swift; sourceTree = "<group>"; };
+		129F0CAF573262CCF327F489 /* UnifiedCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedCatalog.swift; sourceTree = "<group>"; };
+		61C79817DF2E7AA7A86DFDD5 /* UnifiedCatalogViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnifiedCatalogViews.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -1111,6 +1127,9 @@
 		1279E49F2FCA397700C9BA56 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				129F0CAF573262CCF327F489 /* UnifiedCatalog.swift */,
+				F7CCE6DA1DD1F6D9527DEF8A /* BundledUnifiedSource.swift */,
+				E8DD8DAC55E6C287FED26B2A /* AutomaticPlaybackCoordinator.swift */,
 				1279E47B2FCA397700C9BA56 /* AniListAuthManager.swift */,
 				1279E47C2FCA397700C9BA56 /* AniListLibraryService.swift */,
 				1659CAEADDD8118DA5FF4FFF /* LibraryDataSource.swift */,
@@ -1299,6 +1318,7 @@
 		1279E4E72FCA397700C9BA56 /* Views */ = {
 			isa = PBXGroup;
 			children = (
+				61C79817DF2E7AA7A86DFDD5 /* UnifiedCatalogViews.swift */,
 				1279E4AE2FCA397700C9BA56 /* Downloads */,
 				1279E4B02FCA397700C9BA56 /* Library */,
 				1279E4C12FCA397700C9BA56 /* Player */,
@@ -1746,6 +1766,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				69B377F7EB46F234589658B3 /* UnifiedCatalogViews.swift in Sources */,
+				F9F9209A7EE799FAF88B9BAD /* UnifiedCatalog.swift in Sources */,
+				D6D70FDF4886028305F5468C /* BundledUnifiedSource.swift in Sources */,
+				B15BE21960F3CE9DF83AE1F0 /* AutomaticPlaybackCoordinator.swift in Sources */,
 				121D9B462FCA5603000FF9B4 /* EpisodeLink.swift in Sources */,
 				121D9B5A2FCA5612000FF9B4 /* CastProxyServer.swift in Sources */,
 				BAEE9A1A2FCB000000000002 /* BackgroundKeepAlive.swift in Sources */,
@@ -1957,6 +1981,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A094018C61A214BFFB1C0CAC /* UnifiedCatalogViews.swift in Sources */,
+				B5D065B89D51D0D2685B523B /* UnifiedCatalog.swift in Sources */,
+				6AD80FCAA64432BE5A28FB1C /* BundledUnifiedSource.swift in Sources */,
+				7B23BBD3932B911541FD8CB6 /* AutomaticPlaybackCoordinator.swift in Sources */,
 				2FFDB0F7AE21B9B527B83D18 /* ShiroxApp.swift in Sources */,
 				1279E4E82FCA397700C9BA56 /* PlayerPresenter.swift in Sources */,
 				1279E4E92FCA397700C9BA56 /* DownloadManager.swift in Sources */,
@@ -2169,6 +2197,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				EF947966B5D4814492286CA9 /* UnifiedCatalogViews.swift in Sources */,
+				787F161BF4FC3409EE4D35F6 /* UnifiedCatalog.swift in Sources */,
+				B9279493B75037279BC5D7B2 /* BundledUnifiedSource.swift in Sources */,
+				3F8E9B03C18DE99F70927930 /* AutomaticPlaybackCoordinator.swift in Sources */,
 				3A42CE0D50F5B4711F556C97 /* ShiroxApp.swift in Sources */,
 				1279E5612FCA397700C9BA56 /* PlayerPresenter.swift in Sources */,
 				1279E5622FCA397700C9BA56 /* DownloadManager.swift in Sources */,
@@ -2396,7 +2428,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 113;
+				CURRENT_PROJECT_VERSION = 123;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -2413,7 +2445,7 @@
 					"@executable_path/Frameworks",
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.0.6;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.shirox.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = appletvos;
@@ -2434,7 +2466,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 113;
+				CURRENT_PROJECT_VERSION = 123;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
@@ -2447,7 +2479,7 @@
 					"@executable_path/Frameworks",
 				);
 				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MARKETING_VERSION = 1.0.6;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.shirox.app;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = appletvos;
@@ -2554,7 +2586,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 113;
+				CURRENT_PROJECT_VERSION = 123;
 				DEVELOPMENT_TEAM = JRMTH65Z3H;
 				ENABLE_TESTABILITY = YES;
 				INFOPLIST_FILE = Shirox/Info.plist;
@@ -2563,7 +2595,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.6;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_NAME = Shirox;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
@@ -2599,7 +2631,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "shirox-icon";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 113;
+				CURRENT_PROJECT_VERSION = 123;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Shirox/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
@@ -2608,7 +2640,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0.6;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_NAME = Shirox;
 				SDKROOT = macosx;
 				SUPPORTS_MACCATALYST = NO;
@@ -2625,7 +2657,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 113;
+				CURRENT_PROJECT_VERSION = 123;
 				DEVELOPMENT_TEAM = JRMTH65Z3H;
 				INFOPLIST_FILE = Shirox/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
@@ -2633,7 +2665,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0.6;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_NAME = Shirox;
 				PROVISIONING_PROFILE_SPECIFIER = "";
 				SDKROOT = iphoneos;
@@ -2714,7 +2746,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = "shirox-icon";
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 113;
+				CURRENT_PROJECT_VERSION = 123;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Shirox/Info.plist;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.entertainment";
@@ -2723,7 +2755,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				MARKETING_VERSION = 1.0.6;
+				MARKETING_VERSION = 1.3.0;
 				PRODUCT_NAME = Shirox;
 				SDKROOT = macosx;
 				SUPPORTS_MACCATALYST = NO;

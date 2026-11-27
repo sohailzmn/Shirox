@@ -8,7 +8,7 @@ import XCTest
 final class BackupProgressSectionTests: XCTestCase {
 
     private let touchedKeys = ["continueWatchingItems", "watchedEpisodeKeys",
-                               "watchedEpisodeHrefKeys", "cwDataVersion",
+                               "watchedEpisodeHrefKeys", "cwDataVersion", "episodePlaybackProgressV1",
                                "continueReadingItems", "readMangaChapters", "watchHistory"]
     private var savedDefaults: [String: Any] = [:]
 

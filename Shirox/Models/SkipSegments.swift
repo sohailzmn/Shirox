@@ -5,10 +5,10 @@ enum SkipSegmentType: String, CaseIterable, Hashable {
 
     var label: String {
         switch self {
-        case .intro:   return "Skip Intro"
-        case .recap:   return "Skip Recap"
-        case .credits: return "Skip Credits"
-        case .preview: return "Skip Preview"
+        case .intro:   return "Intro überspringen"
+        case .recap:   return "Rückblick überspringen"
+        case .credits: return "Abspann überspringen"
+        case .preview: return "Vorschau überspringen"
         }
     }
 }
@@ -48,6 +48,19 @@ struct SkipSegments {
 /// A duration-matched marker permits automatic actions; other metadata only
 /// controls a manually tappable button.
 enum PlayerChapterTiming {
+    static func matchesRuntime(_ metadataDuration: Double?, playbackDuration: Double) -> Bool {
+        guard let metadataDuration, metadataDuration.isFinite, metadataDuration > 0,
+              playbackDuration.isFinite, playbackDuration > 0 else { return false }
+        return abs(metadataDuration - playbackDuration) <= max(4, playbackDuration * 0.005)
+    }
+
+    static func canOfferManualChapter(_ metadataDuration: Double?, playbackDuration: Double) -> Bool {
+        guard playbackDuration.isFinite, playbackDuration >= 60 else { return false }
+        guard let metadataDuration else { return true }
+        guard metadataDuration.isFinite, metadataDuration > 0 else { return false }
+        return abs(metadataDuration - playbackDuration) <= max(120, playbackDuration * 0.1)
+    }
+
     static func activeSegment(at seconds: Double, segments: SkipSegments) -> SkipSegmentType? {
         guard seconds.isFinite, seconds >= 0 else { return nil }
         let ms = seconds * 1_000

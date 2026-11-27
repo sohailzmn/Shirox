@@ -5,4 +5,6 @@ struct SearchItem: Identifiable {
     let title: String
     let image: String
     let href: String
+    var description: String? = nil
+    var backdrop: String? = nil
 }

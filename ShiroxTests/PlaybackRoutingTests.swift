@@ -1,4 +1,9 @@
 import XCTest
+import AVFoundation
+#if os(iOS)
+import SwiftUI
+import UIKit
+#endif
 @testable import Shirox
 
 /// Tests for where a transport command actually goes, and what the system player controls
@@ -17,6 +22,433 @@ import XCTest
 ///    Now Playing had the same problem in reverse — it published the local player's rate and
 ///    clock, so Control Center showed "paused, 0:00" over a movie the TV was happily playing.
 final class PlaybackRoutingTests: XCTestCase {
+    @MainActor func testSourceLookupPreservesVerificationAndNetworkErrors() throws {
+        XCTAssertThrowsError(try ModuleJSRunner.decodeSourceRows("{\"items\":[],\"blockedReason\":\"website_verification_required\"}")) { error in
+            XCTAssertTrue(error is ModuleStreamResolutionError)
+        }
+        XCTAssertThrowsError(try ModuleJSRunner.decodeSourceRows("{\"items\":[],\"errorCode\":\"source_unavailable\"}")) { error in
+            XCTAssertTrue(error is SourceRequestError)
+        }
+        XCTAssertTrue(try ModuleJSRunner.decodeSourceRows("[]").isEmpty)
+    }
+    func testRemoteDemoClipsCannotStandInForAnEpisode() {
+        XCTAssertTrue(StreamPreflight.isPreviewURL(URL(string:"https://test-videos.co.uk/bigbuckbunny/mp4-h264.mp4")!))
+        XCTAssertFalse(StreamPreflight.isEpisodeLength(10))
+        XCTAssertFalse(StreamPreflight.isEpisodeLength(.nan))
+        XCTAssertTrue(StreamPreflight.isEpisodeLength(1200))
+    }
+    func testProviderNewTabReusesCaptureButHosterPopupsAreNotFollowed() {
+        let player = URL(string:"https://voe.sx/e/example")!
+        XCTAssertTrue(SourceCatalogRouting.canFollowPlayerWindow(from: URL(string:"https://serienstream.to/r?t=opaque"), to: player))
+        XCTAssertFalse(SourceCatalogRouting.canFollowPlayerWindow(from: URL(string:"https://serienstream.to/serie/dexter"), to: URL(string:"https://ads.example/popup")!))
+        XCTAssertFalse(SourceCatalogRouting.canFollowPlayerWindow(from: player, to: URL(string:"https://ads.example/popup")!))
+        XCTAssertFalse(SourceCatalogRouting.canFollowPlayerWindow(from: URL(string:"https://serienstream.to/r"), to: URL(string:"https://127.0.0.1/private")!))
+    }
+    func testAnimeAndSeriesNeverUseEachOthersCatalogue() {
+        XCTAssertTrue(SourceCatalogRouting.accepts("https://aniworld.to/anime/stream/spy-x-family", kind: .anime))
+        XCTAssertFalse(SourceCatalogRouting.accepts("https://aniworld.to/anime/stream/spy-x-family", kind: .series))
+        XCTAssertTrue(SourceCatalogRouting.accepts("https://serienstream.cx/serie/dexter", kind: .series))
+        XCTAssertFalse(SourceCatalogRouting.accepts("https://serienstream.to/serie/dexter", kind: .anime))
+        XCTAssertTrue(DetailViewModel.isSeriesSource("https://serienstream.cx/serie/dexter"))
+        XCTAssertFalse(SourceCatalogRouting.accepts("https://aniworld.to.evil.example/anime/stream/test", kind: .anime))
+    }
+
+    @MainActor func testLiveAniWorldPlaybackProbe() async throws {
+        guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else {
+            throw XCTSkip("Live provider probe is opt-in; fixture tests are not evidence of live playback.")
+        }
+        let started = Date()
+        let module = try XCTUnwrap(BundledUnifiedSource.module)
+        let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
+        let streams = try await PlaybackDeadline.run(seconds: 90) {
+            try await runner.fetchStreams(episodeUrl: "https://aniworld.to/anime/stream/spy-x-family/staffel-1/episode-1")
+        }
+        XCTAssertFalse(streams.isEmpty, "The real source did not return a preflight-verified stream.")
+        XCTAssertTrue(streams.contains { PlaybackLanguagePolicy.priority($0) == 0 }, "Known German episode must keep German audio before subtitle fallbacks.")
+        print("LIVE_ANIWORLD_PREFLIGHT streams=\(streams.count) german=\(streams.contains { PlaybackLanguagePolicy.priority($0) == 0 })")
+        try await verifyLivePlayer(streams, source: "ANIWORLD")
+        print("LIVE_ANIWORLD_TOTAL_SECONDS=\(Date().timeIntervalSince(started))")
+    }
+    @MainActor func testLiveSerienStreamVerificationDeadlineDiagnostic() async throws {
+        guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else { throw XCTSkip("Live source diagnostic") }
+        let monitor = NetworkFetchMonitor()
+        let started = Date()
+        #if os(iOS)
+        let snapshotTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled,
+                  let window = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+                    .flatMap({ $0.windows }).first(where: { $0.isKeyWindow }) else { return }
+            let image = UIGraphicsImageRenderer(bounds: window.bounds).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+            if let data = image.pngData(), let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first {
+                try? data.write(to: directory.appendingPathComponent("website-gate-ios.png"))
+            }
+        }
+        defer { snapshotTask.cancel() }
+        #endif
+        let result: [String: Any] = await withCheckedContinuation { continuation in
+            monitor.startMonitoring(urlString: "https://serienstream.to/serie/dexter-wiedererwachen/staffel-1/episode-1",
+                options: NetworkFetchOptions(timeoutSeconds: 45, returnHTML: true,
+                    clickSelectors: ["[data-provider-name=\"VOE\"][data-language-id=\"1\"]"],
+                    waitForSelectors: ["[data-provider-name=\"VOE\"][data-language-id=\"1\"]"], maxWaitTime: 3), showsBrowser: true) { value in
+                continuation.resume(returning: value)
+            }
+        }
+        print("LIVE_SERIENSTREAM_VISIBLE_GATE seconds=\(Date().timeIntervalSince(started)) response=\(result["verificationResponsePresent"] ?? false) continued=\(result["verifiedContinuationClicked"] ?? false) errorCode=\(result["verificationErrorCode"] ?? "none") playerPayload=\((result["playerHTML"] as? String)?.isEmpty == false)")
+    }
+
+    @MainActor func testLiveSerienStreamPlaybackProbe() async throws {
+        guard ProcessInfo.processInfo.environment["SHIROX_LIVE_SOURCE_PROBE"] == "1" else {
+            throw XCTSkip("Live provider probe is opt-in.")
+        }
+        let module = try XCTUnwrap(BundledUnifiedSource.module)
+        let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
+        do {
+            let rows = try await PlaybackDeadline.run(seconds: 15) { try await runner.sourceCatalog(kind: .series) }
+            print("LIVE_SERIENSTREAM_HOME titles=\(rows.count)")
+        } catch { print("LIVE_SERIENSTREAM_HOME error=\(error.localizedDescription)") }
+
+        let streams: [StreamResult] = try await PlaybackDeadline.run(seconds: 100) {
+            let matches = try await runner.search(keyword: "Dexter: Resurrection", kind: .series)
+            let match = try XCTUnwrap(matches.first { CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: "Dexter: Resurrection") || CatalogModuleTitleMatch.matches(candidateTitle: $0.title, requestedTitle: "Dexter: Wiedererwachen") })
+            XCTAssertTrue(SourceCatalogRouting.accepts(match.href, kind: .series))
+            let episodes = try await runner.fetchEpisodes(url: match.href, season: 1)
+            let episode = try XCTUnwrap(ModuleSeasonRouting.exactEpisode(episodes, season: 1, episode: 1))
+            return try await runner.fetchStreams(episodeUrl: episode.href)
+        }
+        try await verifyLivePlayer(streams, source: "SERIENSTREAM")
+    }
+
+    @MainActor private func verifyLivePlayer(_ streams: [StreamResult], source: String) async throws {
+        XCTAssertFalse(streams.isEmpty)
+        var diagnostics: [String] = []
+        for stream in streams.prefix(3) {
+            let asset = AVURLAsset(url: stream.url, options: ["AVURLAssetHTTPHeaderFieldsKey": stream.headers])
+            let item = AVPlayerItem(asset: asset)
+            item.preferredForwardBufferDuration = 0
+            let player = AVPlayer(playerItem: item)
+            // Match the app: remote HLS waits for a buffer instead of pausing
+            // permanently if play() precedes the first downloaded segment.
+            player.automaticallyWaitsToMinimizeStalling = true
+            let layer = AVPlayerLayer(player: player)
+            #if os(iOS)
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+            try? AVAudioSession.sharedInstance().setActive(true)
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.frame = scene.coordinateSpace.bounds
+            let controller = UIViewController(); window.rootViewController = controller
+            layer.frame = window.bounds; controller.view.layer.addSublayer(layer)
+            window.makeKeyAndVisible()
+            defer { window.isHidden = true; window.rootViewController = nil }
+            #endif
+            defer { player.pause(); player.replaceCurrentItem(with:nil); layer.removeFromSuperlayer() }
+            player.play()
+            let deadline = Date().addingTimeInterval(45)
+            while Date() < deadline {
+                if item.status == .failed { break }
+                if player.currentTime().seconds >= 2 && layer.isReadyForDisplay && item.duration.seconds >= 600 && item.duration.seconds.isFinite {
+                    let audio = item.tracks.filter { $0.assetTrack?.mediaType == .audio }.count
+                    XCTAssertGreaterThan(audio,0,"Playing media must include an audio track.")
+                    print("LIVE_\(source)_PLAYBACK seconds=\(player.currentTime().seconds) duration=\(item.duration.seconds) videoReady=\(layer.isReadyForDisplay) audioTracks=\(audio)")
+                    return
+                }
+                try await Task.sleep(nanoseconds: 200_000_000)
+            }
+            let errorCodes = item.errorLog()?.events.map { "\($0.errorDomain):\($0.errorStatusCode)" }.joined(separator:",") ?? "none"
+            let entry = "candidate=\(stream.title) host=\(stream.url.host ?? "unknown") status=\(item.status.rawValue) control=\(player.timeControlStatus.rawValue) waiting=\(player.reasonForWaitingToPlay?.rawValue ?? "none") seconds=\(player.currentTime().seconds) duration=\(item.duration.seconds) videoReady=\(layer.isReadyForDisplay) errors=\(errorCodes)"
+            diagnostics.append(entry); print("LIVE_\(source)_DIAGNOSTIC \(entry)")
+        }
+        XCTFail("No candidate rendered video and advanced: " + diagnostics.joined(separator:"; "))
+    }
+
+    func testRemoteResumeKeepsEpisodeAndPositionWithoutPersistingSignedMedia() throws {
+        var item = ContinueWatchingItem(id:UUID(), mediaTitle:"Dexter", episodeNumber:6,
+            episodeTitle:nil, imageUrl:"", streamUrl:"", headers:nil, subtitle:nil,
+            streamTitle:nil, aniListID:nil, malID:nil, moduleId:"fixture-module",
+            detailHref:"https://serienstream.to/serie/dexter", episodeHref:"https://serienstream.to/serie/dexter/staffel-2/episode-6",
+            watchedSeconds:45, totalSeconds:1200, totalEpisodes:10, availableEpisodes:6, isAiring:true,
+            lastWatchedAt:Date(), thumbnailUrl:nil)
+        item.sourceReferenceOnly=true; item.sourceSeason=2; item.sourceEpisode=6
+        let data=try JSONEncoder().encode(item)
+        let restored=try JSONDecoder().decode(ContinueWatchingItem.self,from:data)
+        XCTAssertFalse(restored.isPlaceholder)
+        XCTAssertEqual(restored.watchedSeconds,45)
+        XCTAssertEqual(restored.sourceSeason,2)
+        XCTAssertEqual(restored.sourceEpisode,6)
+        XCTAssertEqual(restored.streamUrl,"")
+        XCTAssertNil(restored.headers)
+        XCTAssertFalse(String(decoding:data,as:UTF8.self).contains(".m3u8"))
+    }
+    func testHLSPreflightRequiresMediaAndReachableSubtitle() async throws {
+        let stream = StreamResult(title: "Fixture", url: URL(string: "https://media.example/master.m3u8")!, headers: [:],
+                                  subtitle: "https://media.example/de.vtt", audioLanguage: "ja", subtitleLanguage: "de")
+        let reader: StreamPreflight.Reader = { url, _ in
+            let content: Data
+            switch url.lastPathComponent {
+            case "master.m3u8": content = Data("#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=900000\nmedia.m3u8\n".utf8)
+            case "media.m3u8": content = Data("#EXTM3U\n#EXTINF:10,\nsegment.ts\n".utf8)
+            case "de.vtt": content = Data("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHallo".utf8)
+            default: content = Data(repeating: 0x47, count: 188)
+            }
+            return (content, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let valid = try await StreamPreflight.check(stream, reader: reader)
+        XCTAssertTrue(valid)
+        let failedSubtitle: StreamPreflight.Reader = { url, headers in
+            if url.pathExtension == "vtt" {
+                return (Data("Forbidden".utf8), HTTPURLResponse(url: url, statusCode: 403, httpVersion: nil, headerFields: nil)!)
+            }
+            return try await reader(url, headers)
+        }
+        let invalid = try await StreamPreflight.check(stream, reader: failedSubtitle)
+        XCTAssertFalse(invalid)
+    }
+
+    func testCrossHostPlaylistDoesNotForwardCredentials() {
+        let original = URL(string: "https://a.example/master.m3u8")!
+        let other = URL(string: "https://b.example/video.ts")!
+        let headers = StreamPreflight.scopedHeaders(["Cookie":"private", "Authorization":"private", "Referer":"https://source.example/"], from: original, to: other)
+        XCTAssertNil(headers["Cookie"])
+        XCTAssertNil(headers["Authorization"])
+        XCTAssertEqual(headers["Referer"], "https://source.example/")
+    }
+
+    func testEnglishSubtitleCanReplaceAnUnreachableGermanTrack() {
+        let url = URL(string: "https://media.example/video.m3u8")!
+        let german = SubtitleTrack(title: "Deutsch", url: URL(string:"https://media.example/de.vtt")!, headers:[:], language:"de")
+        let english = SubtitleTrack(title: "English", url: URL(string:"https://media.example/en.vtt")!, headers:[:], language:"en")
+        let stream = StreamResult(title:"Fixture", url:url, headers:[:], allSubtitles:[german,english], audioLanguage:"ja")
+        let fallback = PlaybackLanguagePolicy.prepare(stream, preferredSubtitleLanguage:"en")
+        XCTAssertEqual(fallback.subtitleLanguage,"en")
+        XCTAssertEqual(PlaybackLanguagePolicy.prepare(fallback).subtitleLanguage,"en")
+    }
+
+    #if os(iOS)
+    @MainActor func testCatalogueDetailVisualSnapshot() async throws {
+        let title = CatalogTitle(id:"fixture-series", remoteID:1, kind:.series, name:"Serienvorschau", synopsis:"Deutsche Beschreibung für die visuelle Prüfung der neuen Detailseite.", year:"2026")
+        let manager = ContinueWatchingManager.shared
+        let original = try XCTUnwrap(ProgressBackupSection().export())
+        defer { manager.restore(items: original.continueWatching, watchedKeys: original.watchedKeys,
+            watchedHrefKeys: original.watchedHrefKeys, episodeProgress: original.episodeProgress ?? [:]) }
+        var saved = ContinueWatchingItem(id: UUID(), mediaTitle: title.name, episodeNumber: 13, episodeTitle: nil,
+            imageUrl: "", streamUrl: "", headers: nil, subtitle: nil, streamTitle: "VOE",
+            aniListID: nil, malID: nil, moduleId: "fixture", detailHref: "https://serienstream.to/serie/preview",
+            episodeHref: "https://serienstream.to/serie/preview/staffel-2/episode-3",
+            watchedSeconds: 840, totalSeconds: 3600, lastWatchedAt: .now)
+        saved.sourceReferenceOnly = true; saved.sourceSeason = 2; saved.sourceEpisode = 3
+        manager.save(saved)
+        for size in [CGSize(width:390,height:844), CGSize(width:500,height:768), CGSize(width:1024,height:768)] {
+            let controller = UIHostingController(rootView: NavigationStack { CatalogDetailScreen(title:title) }
+                .environment(\.horizontalSizeClass, size.width < 600 ? .compact : .regular).preferredColorScheme(.dark))
+            let window = UIWindow(frame:CGRect(origin:.zero,size:size))
+            window.rootViewController=controller
+            window.isHidden=false
+            controller.view.frame=window.bounds
+            controller.view.layoutIfNeeded()
+            try await Task.sleep(nanoseconds:100_000_000)
+            let image = UIGraphicsImageRenderer(size:size).image { _ in
+                controller.view.drawHierarchy(in:controller.view.bounds,afterScreenUpdates:true)
+            }
+            XCTAssertEqual(image.size.width,size.width)
+            let data = try XCTUnwrap(image.pngData())
+            let name = size.width == 1024 ? "catalog-detail-ipad.png" : "catalog-detail-\(Int(size.width)).png"
+            let path = FileManager.default.urls(for:.cachesDirectory,in:.userDomainMask)[0].appendingPathComponent(name)
+            try data.write(to:path)
+            let attachment=XCTAttachment(image:image); attachment.name=name; attachment.lifetime = .keepAlways; add(attachment)
+            window.isHidden=true; window.rootViewController=nil
+        }
+    }
+
+    @MainActor func testEpisodeProgressVisualSnapshot() async throws {
+        let saved = ContinueWatchingItem(id: UUID(), mediaTitle: "Serienvorschau", episodeNumber: 3,
+            episodeTitle: nil, imageUrl: "", streamUrl: "https://media.example/unused", headers: nil,
+            subtitle: nil, streamTitle: "VOE", aniListID: nil, malID: nil, moduleId: "fixture",
+            detailHref: nil, watchedSeconds: 840, totalSeconds: 3600, lastWatchedAt: .now)
+        let record = EpisodePlaybackProgress(saved)
+        for width in [CGFloat(390), CGFloat(1024)] {
+            let size = CGSize(width: width, height: 500)
+            let root = VStack(alignment: .leading, spacing: 20) {
+                Text("Staffel 2 · Folge 3").font(.title.bold())
+                EpisodeProgressIndicator(record: record)
+                EpisodeRowView(episode: EpisodeLink(number: 3, href: "fixture/episode-3"),
+                    progress: record.fraction, progressDetail: record, onTap: {})
+                ThumbnailEpisodeRow(number: 4, title: "Bereits angesehen", progress: 1, onTap: {})
+            }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).preferredColorScheme(.dark)
+            let controller = UIHostingController(rootView: root)
+            let window = UIWindow(frame: CGRect(origin: .zero, size: size))
+            window.rootViewController = controller; window.isHidden = false
+            controller.view.frame = window.bounds; controller.view.layoutIfNeeded()
+            try await Task.sleep(nanoseconds: 100_000_000)
+            let image = UIGraphicsImageRenderer(size: size).image { _ in controller.view.drawHierarchy(in: controller.view.bounds, afterScreenUpdates: true) }
+            let name = "catalog-detail-progress-\(Int(width)).png"
+            let path = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(name)
+            try XCTUnwrap(image.pngData()).write(to: path)
+            let attachment = XCTAttachment(image: image); attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
+            window.isHidden = true; window.rootViewController = nil
+        }
+    }
+    #endif
+    func testLanguageOrderAndUnknownAudio() {
+        let url = URL(string: "https://media.example/video.m3u8")!
+        let german = StreamResult(title: "Hoster", url: url, headers: [:], audioLanguage: "de")
+        let germanSub = StreamResult(title: "Hoster", url: url, headers: [:], subtitleLanguage: "de", isHardsub: true)
+        let englishSub = StreamResult(title: "Hoster", url: url, headers: [:], subtitleLanguage: "en", isHardsub: true)
+        XCTAssertEqual(PlaybackLanguagePolicy.priority(german), 0)
+        XCTAssertEqual(PlaybackLanguagePolicy.priority(germanSub), 1)
+        XCTAssertEqual(PlaybackLanguagePolicy.priority(englishSub), 2)
+        XCTAssertNil(PlaybackLanguagePolicy.priority(StreamResult(title: "Hoster", url: url, headers: [:])))
+    }
+
+    func testPerStreamSubtitleMetadataAndAutomaticSelection() throws {
+        let streams = parseStreamResults(from: ["streams": [[
+            "streamUrl": "https://media.example/video.m3u8", "audioLanguage": "ja",
+            "allSubtitles": [
+                ["url": "https://media.example/en.vtt", "lang": "en", "label": "English"],
+                ["url": "https://media.example/de.vtt", "lang": "de", "label": "Deutsch"]
+            ]
+        ]]])
+        let selected = PlaybackLanguagePolicy.prepare(try XCTUnwrap(streams.first))
+        XCTAssertEqual(selected.subtitleLanguage, "de")
+        XCTAssertEqual(selected.subtitleURL?.lastPathComponent, "de.vtt")
+        XCTAssertEqual(PlaybackLanguagePolicy.priority(selected), 1)
+    }
+
+    func testSubtitleLanguageRoundTripsAndLegacyBackupDecodes() throws {
+        let legacy = Data(#"{"id":"A52B0712-0413-4E90-B8B8-897CE7CC7197","title":"English","url":"https://media.example/en.vtt","headers":{}}"#.utf8)
+        let track = try JSONDecoder().decode(SubtitleTrack.self, from: legacy)
+        XCTAssertNil(track.language)
+        XCTAssertEqual(PlaybackLanguagePolicy.code(track.title), "en")
+    }
+
+    func testPreflightRejectsHTMLAndPrivateURLs() {
+        XCTAssertFalse(StreamPreflight.mediaBytes(Data("<html>Not a video</html>".utf8)))
+        XCTAssertFalse(StreamPreflight.isPlaylist(Data("<html>#EXTM3U</html>".utf8)))
+        XCTAssertTrue(StreamPreflight.isPlaylist(Data("#EXTM3U\n#EXTINF:10,\nsegment.ts".utf8)))
+        XCTAssertFalse(StreamPreflight.validRemoteURL(URL(string: "https://127.0.0.1/video.mp4")!))
+        XCTAssertFalse(StreamPreflight.validRemoteURL(URL(string: "https://user:secret@media.example/video.mp4")!))
+        XCTAssertTrue(StreamPreflight.validRemoteURL(URL(string: "https://media.example/video.m3u8?token=opaque")!))
+    }
+
+    @MainActor func testDeadlineReturnsWithoutWaitingForSlowOperation() async {
+        do {
+            let _: String = try await PlaybackDeadline.run(seconds: 0.01) {
+                try await Task.sleep(nanoseconds: 1_000_000_000)
+                return "late"
+            }
+            XCTFail("Slow operation must time out")
+        } catch { XCTAssertTrue(error is AutomaticPlaybackError) }
+    }
+
+    @MainActor func testAvailabilityRankingPreservesChartOrderAndRequiresFirstFrameForPlayed() {
+        let a = CatalogTitle(id: UUID().uuidString, remoteID: 1, kind: .series, name: "A")
+        let b = CatalogTitle(id: UUID().uuidString, remoteID: 2, kind: .series, name: "B")
+        let c = CatalogTitle(id: UUID().uuidString, remoteID: 3, kind: .anime, name: "C")
+        let store = CatalogAvailabilityStore.shared
+        store.set(id: c.id, state: .reachable)
+        XCTAssertEqual(store.rank([a,b,c]).map(\.id), [c.id,a.id,b.id])
+        XCTAssertEqual(store.state(c.id), .reachable)
+        XCTAssertNotEqual(store.state(c.id), .played)
+    }
+
+    func testTMDBAndAnimeIDsCannotCollide() throws {
+        let data = Data(#"{"id":42,"name":"Titel","original_name":"Title","overview":"Deutsche Beschreibung"}"#.utf8)
+        let title = try JSONDecoder().decode(UnifiedCatalog.TMDBTitle.self, from: data)
+        XCTAssertEqual(title.mapped(kind: .series).id, "tmdb-tv-42")
+        XCTAssertEqual(title.mapped(kind: .movie).id, "tmdb-movie-42")
+        XCTAssertNotEqual(title.mapped(kind: .series).id, "anilist-42")
+    }
+
+    func testBundledResolverMatchesAppLanguageContract() throws {
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        XCTAssertEqual(bundled.version, "2.2.2")
+        XCTAssertTrue(bundled.scriptContent?.contains("__SHIROX_LANGUAGE_CONTRACT_V2") == true)
+    }
+
+    private func sourceRevision(_ version: String, scriptURL: String? = nil) throws -> ModuleDefinition {
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(bundled)) as? [String: Any])
+        json["version"] = version
+        json["sourceName"] = "Shirox Unified GER (AniWorld + S.to)"
+        json["scriptContent"] = "old cached resolver"
+        if let scriptURL { json["scriptUrl"] = scriptURL }
+        return try JSONDecoder().decode(ModuleDefinition.self, from: JSONSerialization.data(withJSONObject: json))
+    }
+
+    func testLaunchUpdateCannotDowngradeBundledResolverToPublicMain() throws {
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        let publicMain = try sourceRevision("1.1.1")
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(publicMain, replacing: bundled))
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(publicMain, replacing: publicMain))
+        let loaded = SourceModuleRevision.effective(publicMain)
+        XCTAssertEqual(loaded.version, bundled.version)
+        XCTAssertEqual(loaded.scriptContent, bundled.scriptContent)
+        XCTAssertEqual(loaded.id, publicMain.id)
+    }
+
+    func testDetailSnapshotCannotRunOldOrMismatchedCachedSource() throws {
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        for version in ["1.1.1", bundled.version] {
+            let stale = try sourceRevision(version)
+            XCTAssertEqual(SourceModuleRevision.effective(stale).scriptContent, bundled.scriptContent)
+        }
+    }
+
+    func testNewerUnifiedResolverIsPreservedAndComparedNumerically() throws {
+        let newer = try sourceRevision("2.10.0")
+        let bundled = try XCTUnwrap(BundledUnifiedSource.module)
+        XCTAssertTrue(SourceModuleRevision.acceptsRemote(newer, replacing: bundled))
+        XCTAssertEqual(SourceModuleRevision.effective(newer), newer)
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(bundled, replacing: newer))
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(newer, replacing: newer))
+    }
+
+    func testResolverFloorDoesNotReplaceUnrelatedModules() throws {
+        let unrelated = try sourceRevision("1.0", scriptURL: "https://example.com/UnifiedGerman_v1.js")
+        XCTAssertEqual(SourceModuleRevision.effective(unrelated), unrelated)
+        XCTAssertFalse(SourceModuleRevision.acceptsRemote(try XCTUnwrap(BundledUnifiedSource.module), replacing: unrelated))
+    }
+    func testWebsiteChallengeIsNotAnEmptyVideoResult() {
+        XCTAssertThrowsError(try parseResolvedStreamResults(from: [
+            "streams": [], "blockedReason": "website_verification_required"
+        ])) { error in
+            guard case ModuleStreamResolutionError.websiteVerificationRequired = error else {
+                return XCTFail("Expected a website verification error, got \(error)")
+            }
+        }
+    }
+
+    func testPlayableMirrorWinsOverBlockedMirror() throws {
+        let streams = try parseResolvedStreamResults(from: [
+            "streams": [["streamUrl": "https://media.example/video.m3u8"]],
+            "blockedReason": "website_verification_required"
+        ])
+        XCTAssertEqual(streams.count, 1)
+    }
+
+    func testOrdinaryEmptyResultDoesNotClaimWebsiteVerification() throws {
+        XCTAssertTrue(try parseResolvedStreamResults(from: ["streams": []]).isEmpty)
+    }
+
+    func testSeriesSourceDoesNotUseAnimeMetadataMatching() {
+        XCTAssertTrue(DetailViewModel.isSeriesSource("https://serienstream.to/serie/dexter"))
+        XCTAssertTrue(DetailViewModel.isSeriesSource("https://s.to/serie/stream/dexter"))
+        XCTAssertFalse(DetailViewModel.isSeriesSource("https://aniworld.to/anime/stream/naruto"))
+        XCTAssertFalse(DetailViewModel.isSeriesSource("https://serienstream.to.evil.example/serie/dexter"))
+    }
+
+    func testDexterSourceEpisodeNumberPreservesProgressIdentity() {
+        let context = PlayerContext(
+            mediaTitle: "Dexter", episodeNumber: 12, episodeTitle: nil, imageUrl: "",
+            aniListID: nil, malID: nil, moduleId: nil, totalEpisodes: nil,
+            availableEpisodes: nil, isAiring: nil, resumeFrom: nil, detailHref: nil,
+            episodeHref: "https://serienstream.to/serie/dexter/staffel-2/episode-6",
+            streamTitle: nil, workingDetailHref: nil, thumbnailUrl: nil)
+        XCTAssertEqual(context.sourceEpisodeNumber, 6)
+        XCTAssertEqual(context.episodeNumber, 12)
+    }
     // MARK: - Premature end-of-item (the interrupted-playback data loss)
 
     /// THE BUG: a stream that died mid-episode posted `didPlayToEndTime`, the player took it
@@ -201,6 +633,60 @@ final class PlaybackRoutingTests: XCTestCase {
             duration: 5, hasEpisodeContext: false, isLocalPlayback: false))
         XCTAssertFalse(PlaybackRouting.isClearlyTruncatedEpisode(
             duration: 1440, hasEpisodeContext: true, isLocalPlayback: false))
+    }
+
+    @MainActor
+    func testSourceAnimeSkipIdentityRequiresAnExactTitleOrAlias() throws {
+        let data = Data(#"[{"id":1,"idMal":11,"title":{"english":"Naruto"},"coverImage":{},"format":"TV","seasonYear":2002},{"id":2,"idMal":22,"title":{"english":"Naruto Shippuden"},"coverImage":{},"format":"TV","seasonYear":2007},{"id":3,"idMal":33,"title":{"romaji":"Detective Conan"},"synonyms":["Detektiv Conan"],"coverImage":{},"format":"TV","seasonYear":1996}]"#.utf8)
+        let candidates = try JSONDecoder().decode([AniListMedia].self, from: data)
+        XCTAssertEqual(SourceAnimeSkipIdentity.exactMatch(candidates, title: "Naruto: Shippūden")?.id, 2)
+        XCTAssertEqual(SourceAnimeSkipIdentity.exactMatch(candidates, title: "Detektiv Conan")?.idMal, 33)
+        XCTAssertNil(SourceAnimeSkipIdentity.exactMatch(candidates, title: "Naruto Movie"))
+        XCTAssertNil(SourceAnimeSkipIdentity.exactMatch(candidates, title: "Dexter"))
+    }
+
+    @MainActor
+    func testSourceOnlyAnimeCanRequestSkipMetadataButLiveActionCannot() {
+        func context(_ href: String) -> PlayerContext {
+            PlayerContext(mediaTitle: "Test", episodeNumber: 1, episodeTitle: nil, imageUrl: "",
+                aniListID: nil, malID: nil, moduleId: nil, totalEpisodes: nil,
+                availableEpisodes: nil, isAiring: nil, resumeFrom: nil,
+                detailHref: href, episodeHref: nil, streamTitle: nil, workingDetailHref: nil, thumbnailUrl: nil)
+        }
+        XCTAssertTrue(SourceAnimeSkipIdentity.canResolve(context("https://aniworld.to/anime/stream/naruto")))
+        XCTAssertFalse(SourceAnimeSkipIdentity.canResolve(context("https://serienstream.to/serie/dexter")))
+        XCTAssertFalse(SourceAnimeSkipIdentity.canResolve(context("https://www.southpark.de/seasons/south-park")))
+        XCTAssertFalse(SourceAnimeSkipIdentity.canResolve(context("https://aniworld.to.evil.example/anime/stream/naruto")))
+    }
+
+    func testOfficialSouthParkKeepsSeasonEpisodeAndResumeIdentity() {
+        let href = "https://www.southpark.de/folgen/940f8z/south-park-cartman-und-die-analsonde-staffel-1-ep-1"
+        XCTAssertEqual(ModuleSeasonRouting.seasonNumber(for: href), 1)
+        XCTAssertEqual(ModuleSeasonRouting.episodeNumber(for: href), 1)
+        XCTAssertEqual(SourceCatalogRouting.kind(for: href), .series)
+        XCTAssertTrue(DetailViewModel.isSeriesSource(href))
+        XCTAssertEqual(PlaybackHistoryIdentity.show(href), "https://www.southpark.de/seasons/south-park")
+        XCTAssertNil(SourceCatalogRouting.kind(for: "https://www.southpark.de.evil.example/folgen/test"))
+    }
+
+    func testSkipButtonsUseGermanLabelsAndRecapsRemainManuallySkippable() {
+        XCTAssertEqual(SkipSegmentType.intro.label, "Intro überspringen")
+        XCTAssertEqual(SkipSegmentType.credits.label, "Abspann überspringen")
+        XCTAssertEqual(SkipSegmentType.recap.label, "Rückblick überspringen")
+        let chapters = SkipSegments(recap: .init(startMs: 0, endMs: 40_000))
+        XCTAssertEqual(PlayerChapterTiming.activeSegment(at: 12, segments: chapters), .recap)
+        XCTAssertFalse(PlayerChapterTiming.shouldAutoSkip(.recap, segments: chapters))
+    }
+
+    func testDifferentLanguageCutsKeepManualChaptersWithoutAuthorizingAutoSkip() {
+        XCTAssertTrue(PlayerChapterTiming.matchesRuntime(1442, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.matchesRuntime(1500, playbackDuration: 1440))
+        XCTAssertTrue(PlayerChapterTiming.canOfferManualChapter(1500, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.canOfferManualChapter(2400, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.matchesRuntime(nil, playbackDuration: 1440))
+        XCTAssertTrue(PlayerChapterTiming.canOfferManualChapter(nil, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.canOfferManualChapter(.nan, playbackDuration: 1440))
+        XCTAssertFalse(PlayerChapterTiming.canOfferManualChapter(1440, playbackDuration: .infinity))
     }
 
 }

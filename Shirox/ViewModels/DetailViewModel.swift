@@ -45,24 +45,35 @@ final class DetailViewModel: ObservableObject {
     private(set) var detailHref: String?
     private var streamsTask: Task<Void, Never>?
 
+    nonisolated static func isSeriesSource(_ href: String) -> Bool {
+        guard let host = URL(string: href)?.host?.lowercased() else { return false }
+        return ["s.to", "www.s.to", "serienstream.to", "www.serienstream.to", "serienstream.cx", "www.serienstream.cx", "southpark.de", "www.southpark.de"].contains(host)
+    }
+
     func load(item: SearchItem) {
-        guard !isMatchingAniList else { return }
         guard !item.href.isEmpty else { return }
         detailHref = item.href
 
         // Check if we have a saved mapping first
-        if aniListID == nil {
+        let isSeriesSource = Self.isSeriesSource(item.href)
+        if isSeriesSource {
+            aniListID = nil
+            aniListMedia = nil
+            isMatchingAniList = false
+            isLoadingAniListMedia = false
+        }
+        if !isSeriesSource, aniListID == nil {
             if let savedID = AniListMappingManager.shared.getMapping(title: item.title) {
                 aniListID = savedID
             }
         }
 
         // If still no ID, try auto-matching
-        if aniListID == nil {
+        if !isSeriesSource, aniListID == nil {
             Task {
-                await autoMatch(title: item.title)
+                await autoMatch(title: item.title, href: item.href)
             }
-        } else if let aid = aniListID {
+        } else if !isSeriesSource, let aid = aniListID {
             // Already have ID (passed in or from mapping), fetch metadata
             fetchAniListMetadata(id: aid)
         }
@@ -71,11 +82,13 @@ final class DetailViewModel: ObservableObject {
             isLoadingDetail = true
             errorMessage = nil
             do {
-                var d = try await JSEngine.shared.fetchDetails(
+                var d = (try? await JSEngine.shared.fetchDetails(
                     url: item.href,
                     title: item.title,
                     image: item.image
-                )
+                )) ?? MediaDetail(title: item.title, image: item.image,
+                                  description: "", aliases: "", airdate: "", episodes: [])
+                guard detailHref == item.href else { return }
                 // Snapshot is authoritative for text fields: AniList synopsis/year are
                 // higher-quality than the module's, and an offline JS module that swallows
                 // its own network errors often returns the error string as `description`.
@@ -97,6 +110,7 @@ final class DetailViewModel: ObservableObject {
 
                 isLoadingEpisodes = true
                 let fetched = try await JSEngine.shared.fetchEpisodes(url: item.href)
+                guard detailHref == item.href else { return }
                 // Only overwrite the existing episode list when the fetched one looks
                 // strictly real. Modules that swallow their own network errors often
                 // return [] or [{href: "stub"}] which parses to episode-0 entries —
@@ -193,19 +207,24 @@ final class DetailViewModel: ObservableObject {
     #endif
 
     private func fetchAniListMetadata(id: Int) {
+        let href = detailHref
         Task {
             isLoadingAniListMedia = true
             if let raw = try? await AniListService.shared.detail(id: id) {
+                guard detailHref == href, aniListID == id else { return }
                 self.aniListMedia = AniListProvider.shared.mapMedia(raw)
             }
             isLoadingAniListMedia = false
         }
     }
 
-    private func autoMatch(title: String) async {
+    private func autoMatch(title: String, href: String) async {
+        guard detailHref == href, !Self.isSeriesSource(href) else { return }
         isMatchingAniList = true
+        defer { if detailHref == href { isMatchingAniList = false } }
         do {
             let results = try await AniListService.shared.search(keyword: title)
+            guard detailHref == href, !Self.isSeriesSource(href) else { return }
             // Look for a perfect match (case-insensitive) in the top 3 results
             let perfectMatch = results.prefix(3).first { media in
                 media.title.displayTitle.lowercased() == title.lowercased() ||
@@ -246,7 +265,7 @@ final class DetailViewModel: ObservableObject {
             title: detail?.title ?? "Episode", episode: Int(episode.number))
         PlayerPresenter.shared.presentResolvingEpisode(
             title: detail?.title ?? "Episode",
-            episode: Int(episode.number),
+            episode: ModuleSeasonRouting.episodeNumber(for: episode.href) ?? Int(episode.number),
             artwork: detail?.image ?? "",
             onResolve: { [weak self] in
                 guard let self else { throw CancellationError() }
@@ -256,7 +275,7 @@ final class DetailViewModel: ObservableObject {
                     throw NSError(
                         domain: "Shirox.InstantPlayback", code: 1,
                         userInfo: [NSLocalizedDescriptionKey:
-                            "No playable video was returned. Try another source."]
+                            "Die geprüfte Quelle liefert derzeit kein abspielbares Video."]
                     )
                 }
                 self.selectedEpisode = episode
@@ -326,13 +345,11 @@ final class DetailViewModel: ObservableObject {
             // A CF wall during the fetch leaves no streams but a flagged host — offer
             // a user-initiated "Verify Cloudflare" button instead of "No Streams Found".
             guard !Task.isCancelled else { return }
-            needsCloudflareVerification = pendingStream == nil
-                && streamOptions.isEmpty
-                && CloudflareBypassManager.shared.pendingVerificationURL != nil
+            needsCloudflareVerification = false
             if needsCloudflareVerification {
                 errorMessage = "This provider requires website verification before streaming."
             } else if pendingStream == nil && streamOptions.isEmpty && errorMessage == nil {
-                errorMessage = "No playable stream was returned. Try another source or retry."
+                errorMessage = "Die geprüften Quellen liefern derzeit kein abspielbares Video. Bitte später erneut versuchen."
             }
             isLoadingStreams = false
         }
@@ -366,8 +383,13 @@ final class DetailViewModel: ObservableObject {
     /// Fetches streams for the given episode and returns them sorted by title.
     /// Unlike loadStreams(for:), this does not affect UI state — safe to call from onWatchNext.
     func fetchStreams(for episode: EpisodeLink) async throws -> [StreamResult] {
-        let streams = try await JSEngine.shared.fetchStreams(episodeUrl: episode.href)
-        return streams.sorted { $0.title < $1.title }
+        guard let module = ModuleManager.shared.activeModule else { throw AutomaticPlaybackError.noSource }
+        let runner = ModuleJSRunner()
+        try await runner.load(module: module)
+        let saved = ContinueWatchingManager.shared.episodeRecord(aniListID: aniListID, moduleId: module.id,
+            mediaTitle: detail?.title ?? "", detailHref: detailHref, episodeNumber: Int(episode.number), episodeHref: episode.href)
+        return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: episode.href, legacyModule: module,
+            preferredStreamTitle: saved?.streamTitle, isResume: saved?.resumeSeconds != nil)
     }
 
     func pickStream(_ stream: StreamResult) {
@@ -467,7 +489,10 @@ final class DetailViewModel: ObservableObject {
                 ? resumeWatchedSeconds
                 // Anchor on the episode's unique href: on a flat multi-season list the numbers
                 // repeat, so a number-only lookup would resume S2 E5 from S1 E5's position.
-                : ContinueWatchingManager.shared.items.first(where: { $0.moduleId == ModuleManager.shared.activeModule?.id && $0.mediaTitle == (detail?.title ?? "") && $0.matchesEpisode(number: Int(selectedEpisode?.number ?? 1), href: selectedEpisode?.href) })?.watchedSeconds,
+                : ContinueWatchingManager.shared.episodeRecord(aniListID: aniListID,
+                    moduleId: ModuleManager.shared.activeModule?.id, mediaTitle: detail?.title ?? "",
+                    detailHref: detailHref, episodeNumber: Int(selectedEpisode?.number ?? 1),
+                    episodeHref: selectedEpisode?.href)?.resumeSeconds,
             detailHref: detailHref,
             episodeHref: selectedEpisode?.href,
             streamTitle: stream.title,
@@ -480,6 +505,19 @@ final class DetailViewModel: ObservableObject {
         // selected episode's unique href and track a forward-only index — otherwise
         // "next after S2 E1" resolves to S1 E2 (the first occurrence of number 2).
         let episodes = detail?.episodes ?? []
+        let streamRefetch: StreamRefetchLoader? = {
+            guard let module = ModuleManager.shared.activeModule else { return nil }
+            return { number, href in
+                guard let episode = EpisodeNavigator.resolve(href: href, orNumber: number, in: episodes) else {
+                    return []
+                }
+                // A new resolution obtains fresh signed URLs for the exact playing
+                // episode. Never fall back to another season's episode number.
+                let runner = ModuleJSRunner()
+                try await runner.load(module: module)
+                return try await AutomaticPlaybackCoordinator.shared.streams(runner: runner, episodeHref: episode.href, legacyModule: module)
+            }
+        }()
         let watchNextLoader: WatchNextLoader? = {
             guard !episodes.isEmpty else { return nil }
 
@@ -520,9 +558,9 @@ final class DetailViewModel: ObservableObject {
         }()
 
         #if os(iOS)
-        PlayerPresenter.shared.presentPlayer(stream: stream, streams: streamOptions, context: context, onWatchNext: watchNextLoader, onSequelNeeded: onSequelNeeded, onSequelAdvanced: onSequelAdvanced, onFinished: onFinished)
+        PlayerPresenter.shared.presentPlayer(stream: stream, streams: streamOptions, context: context, onWatchNext: watchNextLoader, onStreamExpired: streamRefetch, onSequelNeeded: onSequelNeeded, onSequelAdvanced: onSequelAdvanced, onFinished: onFinished)
         #elseif os(macOS)
-        MacPlayerWindowManager.shared.open(stream: stream, streams: streamOptions, context: context, onWatchNext: watchNextLoader, onSequelNeeded: onSequelNeeded, onSequelAdvanced: onSequelAdvanced, onFinished: onFinished)
+        MacPlayerWindowManager.shared.open(stream: stream, streams: streamOptions, context: context, onWatchNext: watchNextLoader, onStreamExpired: streamRefetch, onSequelNeeded: onSequelNeeded, onSequelAdvanced: onSequelAdvanced, onFinished: onFinished)
         #endif
     }
 }

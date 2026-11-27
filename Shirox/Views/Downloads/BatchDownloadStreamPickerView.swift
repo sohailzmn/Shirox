@@ -24,7 +24,7 @@ struct BatchDownloadStreamPickerView: View {
                 if isLoading {
                     VStack(spacing: 14) {
                         ProgressView()
-                        Text("Fetching streams…")
+                        Text("Videos werden geprüft …")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -70,7 +70,7 @@ struct BatchDownloadStreamPickerView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { onDismiss() }
+                    Button("Abbrechen") { onDismiss() }
                 }
             }
             .tint(.primary)

@@ -34,7 +34,7 @@ struct PosterViewer<Content: View>: View {
     var body: some View {
         ZStack {
             Color.black
-                .opacity(1 - dismissProgress * 0.55)
+                .opacity(1 - Double(dismissProgress) * 0.55)
                 .ignoresSafeArea()
 
             zoomableContent
@@ -42,7 +42,7 @@ struct PosterViewer<Content: View>: View {
                 .offset(dragOffset)
 
             closeButton
-                .opacity(1 - dismissProgress)
+                .opacity(1 - Double(dismissProgress))
         }
         #if !os(tvOS)
         .simultaneousGesture(dismissDrag)

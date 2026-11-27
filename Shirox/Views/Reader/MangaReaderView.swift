@@ -570,7 +570,7 @@ struct MangaReaderView: View {
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.8))
                 .multilineTextAlignment(.center)
-            Button("Retry") {
+            Button("Erneut versuchen") {
                 let chapterIdx = displayedChapterIndex
                 Task { await loadChapter(chapterIdx) }
             }

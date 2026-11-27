@@ -1,0 +1,111 @@
+name: Verify automatic series playback
+on:
+  push:
+    branches: [codex/automatic-series-playback-20261121]
+  workflow_dispatch:
+    inputs:
+      runner_image:
+        description: Standard hosted Mac image
+        type: choice
+        options: [macos-26-intel, macos-26, macos-15, macos-15-intel]
+        default: macos-26-intel
+      live_source_probe:
+        description: Probe one real AniWorld episode through native WebKit and media preflight
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  ios-tests:
+    runs-on: ${{ inputs.runner_image || 'macos-26-intel' }}
+    env:
+      SHIROX_LIVE_SOURCE_PROBE: ${{ (github.event_name == 'push' || inputs.live_source_probe) && '1' || '0' }}
+      SIMULATOR_FAMILY: ${{ startsWith(inputs.runner_image, 'macos-15') && 'iOS-18' || 'iOS-26' }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select compatible Xcode on the fallback image
+        if: startsWith(inputs.runner_image, 'macos-15')
+        run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
+      - name: Verify website gate submission
+        run: node scripts/test-browser-gate.cjs
+      - name: Select available iOS simulator
+        run: |
+          xcodebuild -version
+          python3 - <<'PY'
+          import json, subprocess, os
+          # CoreSimulator's first runtime scan can exceed a minute on fresh runners.
+          # https://github.com/actions/runner-images/issues/15247
+          devices = json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j'], timeout=300))['devices']
+          selected = next(d['udid'] for runtime, group in sorted(devices.items(), reverse=True) if os.environ['SIMULATOR_FAMILY'] in runtime for d in group if d.get('isAvailable'))
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write('SIMULATOR_ID=' + selected + '\n')
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'simulator-boot.log'), 'w') as log:
+              subprocess.run(['xcrun', 'simctl', 'boot', selected], timeout=60, check=False, stdout=log, stderr=subprocess.STDOUT)
+              subprocess.run(['xcrun', 'simctl', 'bootstatus', selected, '-b'], timeout=180, check=True, stdout=log, stderr=subprocess.STDOUT)
+          PY
+      - name: Pass live probe flag into the XCTest app
+        run: |
+          python3 - <<'PY'
+          import os, xml.etree.ElementTree as ET
+          path = 'Shirox.xcodeproj/xcshareddata/xcschemes/Shirox_iOS.xcscheme'
+          tree = ET.parse(path)
+          action = tree.getroot().find('LaunchAction')
+          variables = action.find('EnvironmentVariables')
+          if variables is None:
+              variables = ET.SubElement(action, 'EnvironmentVariables')
+          ET.SubElement(variables, 'EnvironmentVariable', key='SHIROX_LIVE_SOURCE_PROBE',
+                        value=os.environ['SHIROX_LIVE_SOURCE_PROBE'], isEnabled='YES')
+          tree.write(path, encoding='UTF-8', xml_declaration=True)
+          PY
+      - name: Build and test actual source without legacy patches
+        run: |
+          set -o pipefail
+          xcodebuild test -project Shirox.xcodeproj -scheme Shirox_iOS \
+            -configuration Debug -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath "$RUNNER_TEMP/SeriesTests" -skipPackagePluginValidation \
+            -parallel-testing-enabled NO \
+            -test-timeouts-enabled YES -default-test-execution-time-allowance 150 -maximum-test-execution-time-allowance 180 \
+            -only-testing:ShiroxTests/PlaybackRoutingTests \
+            -only-testing:ShiroxTests/CloudflareBypassClearanceTests \
+            -only-testing:ShiroxTests/EpisodeNavigatorTests \
+            -only-testing:ShiroxTests/PlayerForegroundRecoveryTests \
+            -only-testing:ShiroxTests/ContinueWatchingSeasonMatchTests \
+            -only-testing:ShiroxTests/BackupProgressSectionTests \
+            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGN_ENTITLEMENTS="" CODE_SIGNING_ALLOWED=NO \
+            > "$RUNNER_TEMP/series-tests.log" 2>&1 || {
+              tail -150 "$RUNNER_TEMP/series-tests.log"
+              exit 1
+            }
+          grep -E '(Executed|TEST SUCCEEDED)' "$RUNNER_TEMP/series-tests.log" | tail -10
+      - name: Collect catalogue visual snapshot
+        if: always()
+        run: |
+          if [ ! -d "$RUNNER_TEMP/SeriesTests/Logs/Test" ]; then
+            echo "No test result bundle exists; simulator startup did not reach XCTest."
+            exit 0
+          fi
+          find "$HOME/Library/Developer/CoreSimulator/Devices" -name 'website-gate-*.png' -type f -exec cp {} "$RUNNER_TEMP/" \;
+          find "$HOME/Library/Developer/CoreSimulator/Devices" -name 'catalog-detail-*.png' -type f -exec cp {} "$RUNNER_TEMP/" \;
+          SNAPSHOT=$(find "$HOME/Library/Developer/CoreSimulator/Devices" -name catalog-detail-ipad.png -type f -print -quit)
+          if [ -n "$SNAPSHOT" ]; then
+            cp "$SNAPSHOT" "$RUNNER_TEMP/catalog-detail-ipad.png"
+          else
+            RESULT=$(find "$RUNNER_TEMP/SeriesTests/Logs/Test" -maxdepth 1 -name '*.xcresult' -type d -print -quit)
+            xcrun xcresulttool export attachments --path "$RESULT" --output-path "$RUNNER_TEMP/visual-attachments"
+            SNAPSHOT=$(find "$RUNNER_TEMP/visual-attachments" -name '*.png' -type f -print -quit)
+            test -n "$SNAPSHOT"
+            cp "$SNAPSHOT" "$RUNNER_TEMP/catalog-detail-ipad.png"
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: automatic-series-test-log
+          path: |
+            ${{ runner.temp }}/simulator-boot.log
+            ${{ runner.temp }}/series-tests.log
+            ${{ runner.temp }}/catalog-detail-*.png
+            ${{ runner.temp }}/website-gate-*.png

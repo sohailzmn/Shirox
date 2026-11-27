@@ -32,7 +32,7 @@ struct BackupSettingsView: View {
             importSection
             if let report { reportSection(report) }
         }
-        .navigationTitle("Backup")
+        .navigationTitle("Sicherung")
         // One importer only: two `.fileImporter` modifiers in a single view conflict —
         // see the note in SearchView.swift.
         .fileImporter(isPresented: $showImporter,
@@ -44,7 +44,7 @@ struct BackupSettingsView: View {
                                                  set: { if !$0 { clearPendingImport() } }),
                             titleVisibility: .visible) {
             Button("Replace Data on This Device", role: .destructive) { runRestore() }
-            Button("Cancel", role: .cancel) { clearPendingImport() }
+            Button("Abbrechen", role: .cancel) { clearPendingImport() }
         } message: {
             if let pendingSummary { Text(Self.confirmationMessage(pendingSummary)) }
         }
@@ -99,7 +99,7 @@ struct BackupSettingsView: View {
 
     @ViewBuilder
     private var importSection: some View {
-        Section("Restore") {
+        Section("Wiederherstellen") {
             Button("Restore from Backup") { showImporter = true }
                 .disabled(isRestoring)
             Text("Replaces the progress, library, settings and modules on this device with the ones in the backup. Downloaded episodes and chapters are left alone.")

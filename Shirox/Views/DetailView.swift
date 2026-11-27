@@ -12,8 +12,15 @@ enum ModuleSeasonRouting {
         }
         return nil
     }
-    static func seasonNumber(for href: String) -> Int? { pathNumber(href, prefix: "staffel-") }
-    static func episodeNumber(for href: String) -> Int? { pathNumber(href, prefix: "episode-") }
+    private static func officialEpisodePart(_ href: String, group: Int) -> Int? {
+        guard let url = URL(string: href), ["southpark.de", "www.southpark.de"].contains(url.host?.lowercased() ?? ""),
+              let regex = try? NSRegularExpression(pattern: "-staffel-([0-9]+)-ep-([0-9]+)$"),
+              let match = regex.firstMatch(in: url.path, range: NSRange(url.path.startIndex..., in: url.path)),
+              let range = Range(match.range(at: group), in: url.path) else { return nil }
+        return Int(url.path[range])
+    }
+    static func seasonNumber(for href: String) -> Int? { pathNumber(href, prefix: "staffel-") ?? officialEpisodePart(href, group: 1) }
+    static func episodeNumber(for href: String) -> Int? { pathNumber(href, prefix: "episode-") ?? officialEpisodePart(href, group: 2) }
 
     static func groups(_ episodes: [EpisodeLink]) -> [[EpisodeLink]] {
         guard let first = episodes.first else { return [] }
@@ -456,10 +463,8 @@ struct DetailView: View {
     // MARK: - Continue Watching Helpers
     private func continueWatchingItem(for detail: MediaDetail) -> ContinueWatchingItem? {
         let moduleId = effectiveModuleId
-        return continueWatching.items
-            .filter { $0.moduleId == moduleId && $0.mediaTitle == detail.title }
-            .sorted { $0.lastWatchedAt > $1.lastWatchedAt }
-            .first
+        return continueWatching.latestItem(aniListID: vm.aniListID ?? aniListID, moduleId: moduleId,
+                                           mediaTitle: detail.title, detailHref: item.href)
     }
 
     private func loadWatchOrder() async {
@@ -580,7 +585,7 @@ struct DetailView: View {
         let nextEp = hasTarget ? (requestedEpisode ?? 1) : (item?.episodeNumber ?? 1)
         let label = hasTarget
             ? "Watch S\(requestedSeason ?? 1) E\(nextEp)"
-            : (item != nil && !item!.streamUrl.isEmpty ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)")
+            : (item != nil && !item!.isPlaceholder ? "Continue Ep \(nextEp)" : "Watch Ep \(nextEp)")
 
         Button {
             if let season = requestedSeason, let number = requestedEpisode {
@@ -722,7 +727,7 @@ struct DetailView: View {
                 : cw.moduleId == moduleId && cw.mediaTitle == currentTitle
             // Anchor on the episode's unique href so tapping S2 E5 doesn't resume S1 E5's
             // stream when their numbers collide on a flat multi-season list.
-            return showMatches && cw.matchesEpisode(number: epNum, href: episode.href) && !cw.streamUrl.isEmpty
+            return showMatches && cw.matchesEpisode(number: epNum, href: episode.href) && !cw.isPlaceholder
         }
         if let item = cwItem {
             resumeWatching(item: item)
@@ -732,7 +737,8 @@ struct DetailView: View {
     }
 
     private func resumeWatching(item: ContinueWatchingItem) {
-        if item.streamUrl.isEmpty {
+        if item.sourceReferenceOnly == true || item.usesSourceResume { AutomaticPlaybackCoordinator.shared.resume(item); return }
+        if item.isPlaceholder {
             if let episode = vm.detail?.episodes.first(where: { Int($0.number) == item.episodeNumber }) {
                 vm.loadStreams(for: episode)
             }
@@ -1182,7 +1188,7 @@ struct DetailView: View {
     @ViewBuilder
     private var tabSelector: some View {
         Picker("Section", selection: $selectedTab) {
-            Text("Episodes").tag(0)
+            Text("Folgen").tag(0)
             Text("Relations").tag(1)
         }
         .pickerStyle(.segmented)
@@ -1278,7 +1284,7 @@ struct DetailView: View {
             Text(error)
                 .font(.headline)
                 .multilineTextAlignment(.center)
-            Button("Retry") {
+            Button("Erneut versuchen") {
                 vm.load(item: item)
             }
             .buttonStyle(.bordered)
@@ -1318,7 +1324,7 @@ struct DetailView: View {
     private func synopsisSection(detail: MediaDetail) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Text("Synopsis")
+                Text("Beschreibung")
                     .font(.title3.weight(.bold))
             }
             .padding(.horizontal, 16)
@@ -1382,7 +1388,7 @@ struct DetailView: View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
                 HStack(spacing: 8) {
-                    Text("Episodes")
+                    Text("Folgen")
                         .font(.title3.weight(.bold))
                     #if os(iOS)
                     if !isSelectionMode {
@@ -1733,12 +1739,12 @@ struct DetailView: View {
             }
         }
         .alert("Reset Progress", isPresented: $showResetConfirmation) {
-            Button("Reset", role: .destructive) {
+            Button("Zurücksetzen", role: .destructive) {
                 let moduleId = effectiveModuleId
                 ContinueWatchingManager.shared.resetProgress(
                     aniListID: nil, moduleId: moduleId, mediaTitle: detail.title)
             }
-            Button("Cancel", role: .cancel) {}
+            Button("Abbrechen", role: .cancel) {}
         } message: {
             Text("This will clear all watched history and progress for \(detail.title).")
         }
@@ -2055,6 +2061,11 @@ private struct ModuleEpisodeRowContainer: View {
         #endif
     }
 
+    private var progressDetail: EpisodePlaybackProgress? {
+        continueWatching.episodeRecord(aniListID: aniListID, moduleId: moduleId, mediaTitle: mediaTitle,
+            detailHref: detailHref, episodeNumber: epNum, episodeHref: episode.href)
+    }
+
     private var progress: Double? {
         // Reconcile the season-unique href marker with the legacy number key so completing
         // S1 E5 doesn't light up S2 E5 on a flat multi-season list (see isEpisodeWatched).
@@ -2066,6 +2077,7 @@ private struct ModuleEpisodeRowContainer: View {
             showUsesHrefTracking: showUsesHrefTracking,
             numberIsAmbiguous: numberIsAmbiguous)
         if watched { return 1.0 }
+        if let progressDetail { return progressDetail.fraction }
 
         let mid = moduleId
         // Match on the unique episode href, not the number: on a flat multi-season list the
@@ -2131,6 +2143,7 @@ private struct ModuleEpisodeRowContainer: View {
                     airdate: aniMapEpisode?.airdate,
                     episodeDescription: aniMapEpisode?.description,
                     progress: progress,
+                    progressDetail: progressDetail,
                     onTap: onTap,
                     onMarkWatched: {
                         Task {
@@ -2163,6 +2176,7 @@ private struct ModuleEpisodeRowContainer: View {
                     episode: episode,
                     displayNumber: displayEpisodeNumber,
                     progress: progress,
+                    progressDetail: progressDetail,
                     onTap: onTap,
                     onMarkWatched: {
                         Task {
@@ -2201,7 +2215,7 @@ private struct ModuleEpisodeRowContainer: View {
                 Task { await d.confirm(); pendingDowngrade = nil }
             }
             Button("This device only") { d.localOnly(); pendingDowngrade = nil }
-            Button("Cancel", role: .cancel) { pendingDowngrade = nil }
+            Button("Abbrechen", role: .cancel) { pendingDowngrade = nil }
         } message: { d in
             let parts = [
                 d.anilistFrom.map { "AniList: \($0) → \(d.newProgress)" },

@@ -17,9 +17,14 @@ enum ModuleStreamResolutionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .websiteVerificationRequired:
-            return "This source requires website verification. Choose another available source."
+            return "Diese Quelle wird durch eine Website-Bestätigung blockiert. Es wurde kein Video freigegeben."
         }
     }
+}
+
+enum SourceRequestError: LocalizedError {
+    case unavailable
+    var errorDescription: String? { "Die Quelle ist derzeit nicht erreichbar oder liefert keine verwertbaren Daten." }
 }
 
 /// A short-lived, standalone JS runner for a single module.
@@ -29,6 +34,7 @@ final class ModuleJSRunner {
 
     private var context: JSContext?
     private var moduleCacheKey = ""
+    private var loadedModule: ModuleDefinition?
 
     // Browsing a series, playing several episodes and Auto Next previously
     // re-downloaded the complete season list on every new runner. Only catalog
@@ -42,6 +48,7 @@ final class ModuleJSRunner {
     /// Host-scoped to this module, so the picker only offers verification for the module
     /// that's actually Cloudflare-protected (not every visible module).
     var lastTurnstileURL: URL?
+    var allowsVerificationPrompt = true
 
     // Ephemeral config gives each runner its own isolated cookie store so bypass
     // cookies from search persist through to fetchEpisodes without bleeding into
@@ -58,7 +65,10 @@ final class ModuleJSRunner {
     // MARK: - Load module
 
     func load(module: ModuleDefinition) async throws {
-        moduleCacheKey = module.id + "|" + module.scriptUrl
+        let module = SourceModuleRevision.effective(module)
+        Logger.shared.log("[Modules] Playback resolver \(module.sourceName) version=\(module.version)", type: "General")
+        loadedModule = module
+        moduleCacheKey = module.id + "|" + module.version + "|" + module.scriptUrl
         // Never globally wipe shared WKWebView cookies just because a new
         // episode is starting. It added I/O and invalidated legitimate website
         // verification from prior sessions. This runner still has its own session.
@@ -95,12 +105,10 @@ final class ModuleJSRunner {
 
     // MARK: - Search
 
-    func search(keyword: String) async throws -> [SearchItem] {
-        let json = try await callAsyncJS("searchResults", args: [keyword])
-        guard let data = json.data(using: .utf8),
-              let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-            throw JSEngineError.parseError("Could not parse search results")
-        }
+    func search(keyword: String, kind: CatalogKind? = nil) async throws -> [SearchItem] {
+        let args: [Any] = kind.map { [keyword, ["kind": $0.rawValue]] } ?? [keyword]
+        let json = try await callAsyncJS("searchResults", args: args)
+        let array = try Self.decodeSourceRows(json)
         return array.compactMap { item in
             guard let title = item["title"] as? String,
                   let image = item["image"] as? String,
@@ -111,14 +119,78 @@ final class ModuleJSRunner {
 
     // MARK: - Episodes
 
-    func fetchEpisodes(url: String) async throws -> [EpisodeLink] {
+    func sourceCatalog(kind: CatalogKind) async throws -> [SearchItem] {
+        let json = try await callAsyncJS("extractCatalog", args: [["kind": kind.rawValue]])
+        let array = try Self.decodeSourceRows(json)
+        return array.compactMap {
+            guard let title = $0["title"] as? String, let href = $0["href"] as? String else { return nil }
+            return SearchItem(title: title, image: $0["image"] as? String ?? "", href: href, description: $0["description"] as? String, backdrop: $0["backdrop"] as? String)
+        }
+    }
+
+    static func decodeSourceRows(_ json: String) throws -> [[String: Any]] {
+        guard let data = json.data(using: .utf8) else {
+            throw JSEngineError.parseError("Ungültige Quelldaten")
+        }
+        let value = try JSONSerialization.jsonObject(with: data)
+        if let rows = value as? [[String: Any]] { return rows }
+        if let result = value as? [String: Any] {
+            if result["blockedReason"] as? String == "website_verification_required" {
+                throw ModuleStreamResolutionError.websiteVerificationRequired
+            }
+            if result["errorCode"] != nil { throw SourceRequestError.unavailable }
+            if let rows = result["items"] as? [[String: Any]] { return rows }
+        }
+        throw JSEngineError.parseError("Ungültige Quelldaten")
+    }
+
+    struct SourceMetadata: Sendable {
+        let synopsis: String?
+        let image: String?
+        var aliases: String? = nil
+        var backdrop: String? = nil
+    }
+    private static var metadataCache: [String: (Date, SourceMetadata)] = [:]
+    func sourceMetadata(url: String) async throws -> SourceMetadata {
         let key = moduleCacheKey + "|" + url
+        if let cached = Self.metadataCache[key], Date().timeIntervalSince(cached.0) < 3600 { return cached.1 }
+        let json = try await callAsyncJS("extractDetails", args: [url])
+        let row = try Self.decodeSourceRows(json).first ?? [:]
+        let text = (row["description"] as? String ?? "")
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let image = (row["image"] as? String).flatMap { value -> String? in
+            guard let parsed = URL(string: value), StreamPreflight.validRemoteURL(parsed) else { return nil }
+            return value
+        }
+        let backdrop = (row["backdrop"] as? String).flatMap { value -> String? in
+            guard let parsed = URL(string: value), StreamPreflight.validRemoteURL(parsed) else { return nil }
+            return value
+        }
+        let result = SourceMetadata(synopsis: text.count > 30 ? text : nil, image: image,
+                                    aliases: row["aliases"] as? String, backdrop: backdrop)
+        if result.synopsis != nil || result.image != nil || result.aliases?.isEmpty == false {
+            if Self.metadataCache.count >= 300 { Self.metadataCache.removeAll() }
+            Self.metadataCache[key] = (Date(), result)
+        }
+        return result
+    }
+    func sourceDescription(url: String) async throws -> String? { try await sourceMetadata(url: url).synopsis }
+
+    func fetchEpisodes(url: String, season: Int? = nil) async throws -> [EpisodeLink] {
+        // The official provider returns its complete, globally numbered catalogue.
+        // Reuse it for targeted playback and Auto Next instead of fetching every
+        // season again after the detail screen has already loaded them.
+        let official = ["southpark.de", "www.southpark.de"].contains(URL(string: url)?.host?.lowercased() ?? "")
+        let scopedSeason = official ? nil : season
+        let key = moduleCacheKey + "|" + url + (scopedSeason.map { "|season=\($0)" } ?? "")
         if let cached = Self.episodesCache[key],
-           Date().timeIntervalSince(cached.storedAt) < Self.episodesTTL {
+           Date().timeIntervalSince(cached.storedAt) < (official ? 3600 : Self.episodesTTL) {
             PlaybackPerformance.shared.cacheHit(script: false)
             return cached.episodes
         }
-        let json = try await callAsyncJS("extractEpisodes", args: [url])
+        let args: [Any] = season.map { [url, ["season": $0]] } ?? [url]
+        let json = try await callAsyncJS("extractEpisodes", args: args)
         guard let data = json.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw JSEngineError.parseError("Could not parse episodes")
@@ -151,8 +223,16 @@ final class ModuleJSRunner {
 
     // MARK: - Streams
 
-    func fetchStreams(episodeUrl: String) async throws -> [StreamResult] {
-        let json = try await callAsyncJS("extractStreamUrl", args: [episodeUrl])
+    func fetchStreams(episodeUrl: String, languagePriority: Int? = nil, preflight: Bool = true,
+                      preferredStreamTitle: String? = nil) async throws -> [StreamResult] {
+        if preflight, loadedModule?.isLocalPlayback != true, loadedModule?.isJellyfin != true {
+            return try await AutomaticPlaybackCoordinator.shared.streams(runner: self, episodeHref: episodeUrl, legacyModule: loadedModule)
+        }
+        var options: [String: Any] = [:]
+        if let languagePriority { options["languagePriority"] = languagePriority }
+        if let preferredStreamTitle { options["preferredProvider"] = preferredStreamTitle }
+        let args: [Any] = options.isEmpty ? [episodeUrl] : [episodeUrl, options]
+        let json = try await callAsyncJS("extractStreamUrl", args: args)
         let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if let url = URL(string: trimmed), url.scheme != nil, !trimmed.hasPrefix("{") {
@@ -164,10 +244,7 @@ final class ModuleJSRunner {
             throw JSEngineError.parseError("Could not parse stream result")
         }
 
-        if obj["blockedReason"] as? String == "website_verification_required" {
-            throw ModuleStreamResolutionError.websiteVerificationRequired
-        }
-        return parseStreamResults(from: obj)
+        return try parseResolvedStreamResults(from: obj)
     }
 
     // MARK: - Promise resolution
@@ -347,7 +424,9 @@ final class ModuleJSRunner {
                             responseText = String(data: recovered.data, encoding: .utf8) ?? ""
                         } else {
                             self.lastTurnstileURL = cfResponseURL
-                            await CloudflareBypassManager.shared.flagPendingVerification(for: cfResponseURL)
+                            if self.allowsVerificationPrompt {
+                                await CloudflareBypassManager.shared.flagPendingVerification(for: cfResponseURL)
+                            }
                         }
                     }
 

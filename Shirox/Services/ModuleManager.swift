@@ -2,6 +2,25 @@ import Foundation
 import SwiftUI
 import Combine
 
+/// The bundled resolver is a minimum revision for this app, including when a
+/// detail view still holds a value copied before the launch migration.
+enum SourceModuleRevision {
+    static func effective(_ module: ModuleDefinition) -> ModuleDefinition {
+        guard var bundled = BundledUnifiedSource.module, module.id == bundled.id,
+              module.version.compare(bundled.version, options: .numeric) != .orderedDescending else { return module }
+        bundled.jsonUrl = module.jsonUrl
+        return bundled
+    }
+
+    static func acceptsRemote(_ fresh: ModuleDefinition, replacing old: ModuleDefinition) -> Bool {
+        guard fresh.id == old.id else { return false }
+        if old.id == BundledUnifiedSource.module?.id {
+            return fresh.version.compare(effective(old).version, options: .numeric) == .orderedDescending
+        }
+        return fresh.version != old.version
+    }
+}
+
 /// Mirror of MangaModuleResolver's preference, for the anime side: keep the active
 /// module if it's an anime (non-manga) module, else fall back to the first anime
 /// module, else nil.
@@ -53,6 +72,12 @@ final class ModuleManager: ObservableObject {
         didCheckUnifiedGermanThisLaunch = true
 
         let task = Task { @MainActor in
+            if installBundledSource() {
+                // The app and its tested resolver ship together. A remote update
+                // is optional and must never delay the first playback attempt.
+                Task { await self.refreshUnifiedGermanSource() }
+                return
+            }
             // Already installed? Pick up a repaired manifest/script at launch.
             // Respect explicit user removal: do not silently reinstall it.
             if UserDefaults.standard.bool(forKey: unifiedGermanInstalledKey) {
@@ -74,6 +99,28 @@ final class ModuleManager: ObservableObject {
         unifiedGermanBootstrapTask = nil
     }
 
+    @discardableResult
+    private func installBundledSource() -> Bool {
+        guard var bundled = BundledUnifiedSource.module else { return false }
+        bundled.jsonUrl = unifiedGermanURL
+        if let index = modules.firstIndex(where: { $0.id == bundled.id || $0.jsonUrl == unifiedGermanURL }) {
+            if bundled.version.compare(modules[index].version, options: .numeric) == .orderedDescending {
+                let active = activeModule?.id == modules[index].id
+                modules[index] = bundled
+                saveToStorage()
+                if active { selectModule(bundled) }
+            }
+            return true
+        }
+        // An explicit removal remains respected across app upgrades.
+        guard !UserDefaults.standard.bool(forKey: unifiedGermanInstalledKey) else { return false }
+        modules.append(bundled)
+        UserDefaults.standard.set(true, forKey: unifiedGermanInstalledKey)
+        saveToStorage()
+        if activeModule == nil { selectModule(bundled) }
+        return true
+    }
+
     /// Refresh only the bundled unified source, not unrelated third-party
     /// modules. A cached working script remains installed if GitHub is offline.
     private func refreshUnifiedGermanSource() async {
@@ -87,7 +134,7 @@ final class ModuleManager: ObservableObject {
             guard (response as? HTTPURLResponse)?.statusCode == 200 else { return }
             var fresh = try JSONDecoder().decode(ModuleDefinition.self, from: data)
             guard let old = modules.first(where: { $0.jsonUrl == unifiedGermanURL }),
-                  old.version != fresh.version,
+                  fresh.version.compare(old.version, options: .numeric) == .orderedDescending,
                   fresh.scriptUrl == old.scriptUrl else { return }
 
             fresh.jsonUrl = unifiedGermanURL
@@ -149,6 +196,7 @@ final class ModuleManager: ObservableObject {
     // MARK: - Select Module
 
     func selectModule(_ module: ModuleDefinition) {
+        let module = SourceModuleRevision.effective(module)
         activeModule = module
         UserDefaults.standard.set(module.id, forKey: activeKey)
         
@@ -166,6 +214,7 @@ final class ModuleManager: ObservableObject {
     /// Returns false when the script failed to load. Used by flows that must
     /// call into the module immediately after switching (Continue Reading).
     func selectAndAwaitReady(_ module: ModuleDefinition) async -> Bool {
+        let module = SourceModuleRevision.effective(module)
         activeModule = module
         UserDefaults.standard.set(module.id, forKey: activeKey)
         do {
@@ -193,6 +242,7 @@ final class ModuleManager: ObservableObject {
     // MARK: - Restore Active Module on Launch
 
     func restoreActiveModule() async {
+        await ensureUnifiedGermanSource()
         guard let savedId = UserDefaults.standard.string(forKey: activeKey),
               let module = modules.first(where: { $0.id == savedId }) else { return }
         selectModule(module)
@@ -231,17 +281,24 @@ final class ModuleManager: ObservableObject {
     // MARK: - Auto-Update
 
     func checkForUpdates() async {
+        await ensureUnifiedGermanSource()
         var didUpdate = false
-        for i in modules.indices {
-            guard let jsonUrlStr = modules[i].jsonUrl,
+        for installed in modules {
+            guard let jsonUrlStr = installed.jsonUrl,
                   let jsonURL = URL(string: jsonUrlStr),
                   let (data, _) = try? await URLSession.shared.data(from: jsonURL),
                   var fresh = try? JSONDecoder().decode(ModuleDefinition.self, from: data),
-                  fresh.version != modules[i].version else { continue }
+                  SourceModuleRevision.acceptsRemote(fresh, replacing: installed) else { continue }
             fresh.jsonUrl = jsonUrlStr
             
             // Cache fresh assets
             await cacheAssets(for: &fresh)
+
+            // Network awaits allow removal or another update. Recheck the live
+            // revision and never replace a working resolver with an empty cache.
+            guard fresh.scriptContent?.isEmpty == false,
+                  let i = modules.firstIndex(where: { $0.id == installed.id }),
+                  SourceModuleRevision.acceptsRemote(fresh, replacing: modules[i]) else { continue }
             
             let wasActive = activeModule?.id == modules[i].id
             modules[i] = fresh
