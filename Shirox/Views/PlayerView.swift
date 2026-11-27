@@ -118,7 +118,7 @@ struct PlayerView: View {
     @State private var skip85ButtonFrame: CGRect = .zero
     // Netflix/Crunchyroll-style: show Skip Intro by default; automatic seeks
     // remain opt-in under the existing player setting.
-    @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = true
+    @AppStorage("autoSkipSegments") private var autoSkipSegments: Bool = false
 
     // AniList tracking
     @ObservedObject private var aniListAuth = AniListAuthManager.shared

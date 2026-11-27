@@ -147,6 +147,7 @@ final class ModuleJSRunner {
     struct SourceMetadata: Sendable {
         let synopsis: String?
         let image: String?
+        var aliases: String? = nil
     }
     private static var metadataCache: [String: (Date, SourceMetadata)] = [:]
     func sourceMetadata(url: String) async throws -> SourceMetadata {
@@ -161,8 +162,8 @@ final class ModuleJSRunner {
             guard let parsed = URL(string: value), StreamPreflight.validRemoteURL(parsed) else { return nil }
             return value
         }
-        let result = SourceMetadata(synopsis: text.count > 30 ? text : nil, image: image)
-        if result.synopsis != nil || result.image != nil {
+        let result = SourceMetadata(synopsis: text.count > 30 ? text : nil, image: image, aliases: row["aliases"] as? String)
+        if result.synopsis != nil || result.image != nil || result.aliases?.isEmpty == false {
             if Self.metadataCache.count >= 300 { Self.metadataCache.removeAll() }
             Self.metadataCache[key] = (Date(), result)
         }

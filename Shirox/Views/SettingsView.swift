@@ -21,7 +21,7 @@ struct SettingsView: View {
     @State private var previewDirection: LibrarySyncService.Direction?
     @State private var replacePlan: LibraryReplacePlan?
     @AppStorage("autoNextEpisode") private var autoNextEpisode = true
-    @AppStorage("autoSkipSegments") private var autoSkipSegments = true
+    @AppStorage("autoSkipSegments") private var autoSkipSegments = false
     @AppStorage("watchedPercentage") private var watchedPercentage = 90.0
     @AppStorage("playerLiquidGlass") private var playerLiquidGlass = true
     @AppStorage("readerLiquidGlass") private var readerLiquidGlass = true

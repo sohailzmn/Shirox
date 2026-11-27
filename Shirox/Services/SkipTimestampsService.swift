@@ -398,13 +398,40 @@ final class SourceAnimeSkipIdentity {
         guard Self.canResolve(context) else { return nil }
         let key = Self.normalized(context.mediaTitle)
         if let cached = cache[key] { return cached }
-        do {
-            let candidates = try await AniListService.shared.search(keyword: context.mediaTitle)
-            guard !Task.isCancelled,
-                  let match = Self.exactMatch(candidates, title: context.mediaTitle) else { return nil }
-            let identity = Identity(aniListID: match.id, malID: match.idMal)
+        if let savedID = AniListMappingManager.shared.getMapping(title: context.mediaTitle) {
+            let identity = Identity(aniListID: savedID, malID: IDMappingService.shared.cachedMalId(forAnilistId: savedID))
             cache[key] = identity
             return identity
-        } catch { return nil }
+        }
+        var queries = [context.mediaTitle]
+        var index = 0
+        while index < min(queries.count, 4), !Task.isCancelled {
+            let query = queries[index]
+            if let candidates = try? await AniListService.shared.search(keyword: query),
+               let match = Self.exactMatch(candidates, title: query) {
+                let identity = Identity(aniListID: match.id, malID: match.idMal)
+                cache[key] = identity
+                return identity
+            }
+            if index == 0, let detail = context.workingDetailHref ?? context.detailHref,
+               let module = ModuleManager.shared.modules.first(where: { $0.id == context.moduleId }) ?? BundledUnifiedSource.module {
+                // Source titles can be German while AniList uses Japanese/English.
+                // Consult the source's own alternative titles before giving up.
+                let metadata = try? await PlaybackDeadline.run(seconds: 6) {
+                    let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false
+                    try await runner.load(module: module)
+                    return try await runner.sourceMetadata(url: detail)
+                }
+                if let aliases = metadata?.aliases {
+                    let variants = [aliases] + aliases.components(separatedBy: CharacterSet(charactersIn: ",;|\n"))
+                    for alias in variants.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+                        where !alias.isEmpty && !queries.contains(where: { Self.normalized($0) == Self.normalized(alias) }) {
+                        queries.append(alias)
+                    }
+                }
+            }
+            index += 1
+        }
+        return nil
     }
 }
