@@ -37,7 +37,9 @@ jobs:
           xcodebuild -version
           python3 - <<'PY'
           import json, subprocess, os
-          devices = json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j'], timeout=60))['devices']
+          # CoreSimulator's first runtime scan can exceed a minute on fresh runners.
+          # https://github.com/actions/runner-images/issues/15247
+          devices = json.loads(subprocess.check_output(['xcrun','simctl','list','devices','available','-j'], timeout=300))['devices']
           selected = next(d['udid'] for runtime, group in sorted(devices.items(), reverse=True) if os.environ['SIMULATOR_FAMILY'] in runtime for d in group if d.get('isAvailable'))
           with open(os.environ['GITHUB_ENV'], 'a') as f:
               f.write('SIMULATOR_ID=' + selected + '\n')
