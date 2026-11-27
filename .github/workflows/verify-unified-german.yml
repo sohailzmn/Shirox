@@ -22,7 +22,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
       - name: Select compatible Xcode on the fallback image
-        if: startsWith(inputs.runner_image, 'macos-15')
+        if: startsWith(inputs.runner_image || 'macos-15-intel', 'macos-15')
         run: sudo xcode-select --switch /Applications/Xcode_26.3.app/Contents/Developer
       - name: Build iOS IPA without signing
         run: |
