@@ -160,7 +160,8 @@ struct CatalogDetailScreen: View {
     @State private var sourceMetadata: ModuleJSRunner.SourceMetadata?
     private var displayedTitle: CatalogTitle {
         var value = title
-        if let image = sourceMetadata?.image { value.poster = image }
+        if let image = sourceMetadata?.image, value.poster?.isEmpty != false { value.poster = image }
+        if let backdrop = sourceMetadata?.backdrop { value.backdrop = backdrop }
         if let synopsis = sourceMetadata?.synopsis { value.synopsis = synopsis }
         return value
     }

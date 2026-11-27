@@ -96,7 +96,8 @@ final class SourceCatalog: ObservableObject {
                     guard item.id == title.id else { return item }
                     var enriched = item
                     if let value = details.synopsis { enriched.synopsis = value }
-                    if let value = details.image { enriched.poster = value }
+                    if let value = details.image, enriched.poster?.isEmpty != false { enriched.poster = value }
+                    if let value = details.backdrop { enriched.backdrop = value }
                     return enriched
                 })
             }
