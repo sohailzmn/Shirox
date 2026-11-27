@@ -172,9 +172,14 @@ final class ModuleJSRunner {
     func sourceDescription(url: String) async throws -> String? { try await sourceMetadata(url: url).synopsis }
 
     func fetchEpisodes(url: String, season: Int? = nil) async throws -> [EpisodeLink] {
-        let key = moduleCacheKey + "|" + url + (season.map { "|season=\($0)" } ?? "")
+        // The official provider returns its complete, globally numbered catalogue.
+        // Reuse it for targeted playback and Auto Next instead of fetching every
+        // season again after the detail screen has already loaded them.
+        let official = ["southpark.de", "www.southpark.de"].contains(URL(string: url)?.host?.lowercased() ?? "")
+        let scopedSeason = official ? nil : season
+        let key = moduleCacheKey + "|" + url + (scopedSeason.map { "|season=\($0)" } ?? "")
         if let cached = Self.episodesCache[key],
-           Date().timeIntervalSince(cached.storedAt) < Self.episodesTTL {
+           Date().timeIntervalSince(cached.storedAt) < (official ? 3600 : Self.episodesTTL) {
             PlaybackPerformance.shared.cacheHit(script: false)
             return cached.episodes
         }
