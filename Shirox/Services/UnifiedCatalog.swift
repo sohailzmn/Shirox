@@ -21,6 +21,7 @@ enum SourceCatalogRouting {
         let name = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
         if ["aniworld.to", "aniworld.cc"].contains(name), url.path.hasPrefix("/anime/stream/") { return .anime }
         if ["s.to", "serienstream.to", "serienstream.cx"].contains(name), url.path.hasPrefix("/serie/") { return .series }
+        if name == "southpark.de", url.path == "/seasons/south-park" || url.path.hasPrefix("/folgen/") { return .series }
         return nil
     }
     static func accepts(_ href: String, kind: CatalogKind) -> Bool { self.kind(for: href) == kind }
@@ -42,6 +43,7 @@ final class SourceCatalog: ObservableObject {
     @Published var errors: [String] = []
     @Published var loading = false
     private var loadedAt: Date?
+    private var enrichmentTask: Task<Void, Never>?
     private var failures: [CatalogKind: String] = [:]
     func load() async {
         guard !loading else { return }
@@ -58,6 +60,9 @@ final class SourceCatalog: ObservableObject {
         publish(seriesTitles, kind: .series)
         rows.sort { $0.id < $1.id }
         loadedAt = errors.isEmpty ? Date() : nil
+        enrichmentTask?.cancel()
+        let featured = rows.sorted { $0.id > $1.id }.flatMap { Array($0.titles.prefix(8)) }
+        enrichmentTask = Task { await enrich(featured, module: module) }
     }
     private func fetchTitles(kind: CatalogKind, module: ModuleDefinition) async -> [CatalogTitle] {
         do {
@@ -69,7 +74,7 @@ final class SourceCatalog: ObservableObject {
             }
             return items.filter { SourceCatalogRouting.accepts($0.href, kind: kind) }.map { item in
                 CatalogTitle(id: "source-" + item.href, remoteID: 0, kind: kind, name: item.title,
-                             poster: item.image, sourceHref: item.href, moduleID: module.id)
+                             poster: item.image, backdrop: item.backdrop, synopsis: item.description, sourceHref: item.href, moduleID: module.id)
             }
         } catch {
             let name = kind == .anime ? "AniWorld" : "SerienStream"
@@ -77,13 +82,34 @@ final class SourceCatalog: ObservableObject {
             return []
         }
     }
+    private func enrich(_ titles: [CatalogTitle], module: ModuleDefinition) async {
+        for title in titles {
+            guard !Task.isCancelled, let href = title.sourceHref else { return }
+            let details = try? await PlaybackDeadline.run(seconds: 6) {
+                let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false
+                try await runner.load(module: module)
+                return try await runner.sourceMetadata(url: href)
+            }
+            guard !Task.isCancelled, let details else { continue }
+            rows = rows.map { row in
+                CatalogRow(id: row.id, name: row.name, titles: row.titles.map { item in
+                    guard item.id == title.id else { return item }
+                    var enriched = item
+                    if let value = details.synopsis { enriched.synopsis = value }
+                    if let value = details.image { enriched.poster = value }
+                    return enriched
+                })
+            }
+        }
+    }
+
     private func publish(_ titles: [CatalogTitle], kind: CatalogKind) {
         let rowID = "source-" + kind.rawValue
         rows.removeAll { $0.id == rowID }
         if titles.isEmpty {
             errors.append(failures[kind] ?? (kind == .anime ? "AniWorld liefert derzeit keine Titel." : "SerienStream liefert derzeit keine Titel."))
         } else {
-            rows.append(CatalogRow(id: rowID, name: kind == .anime ? "Auf AniWorld" : "Auf SerienStream", titles: titles))
+            rows.append(CatalogRow(id: rowID, name: kind == .anime ? "Auf AniWorld" : "Serien · SerienStream und South Park", titles: titles))
         }
     }
 

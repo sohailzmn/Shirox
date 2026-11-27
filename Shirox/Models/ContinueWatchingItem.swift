@@ -120,6 +120,9 @@ enum PlaybackHistoryIdentity {
 
     static func show(_ href: String) -> String {
         let value = canonical(href)
+        if let url = URL(string: value), url.host == "southpark.de" || url.host == "www.southpark.de" {
+            return "https://www.southpark.de/seasons/south-park"
+        }
         return value.components(separatedBy: "/staffel-").first ?? value
     }
 

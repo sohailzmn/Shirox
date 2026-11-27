@@ -124,7 +124,7 @@ final class ModuleJSRunner {
         let array = try Self.decodeSourceRows(json)
         return array.compactMap {
             guard let title = $0["title"] as? String, let href = $0["href"] as? String else { return nil }
-            return SearchItem(title: title, image: $0["image"] as? String ?? "", href: href)
+            return SearchItem(title: title, image: $0["image"] as? String ?? "", href: href, description: $0["description"] as? String, backdrop: $0["backdrop"] as? String)
         }
     }
 
@@ -144,14 +144,31 @@ final class ModuleJSRunner {
         throw JSEngineError.parseError("Ungültige Quelldaten")
     }
 
-    func sourceDescription(url: String) async throws -> String? {
-        let json = try await callAsyncJS("extractDetails", args: [url])
-        guard let data = json.data(using: .utf8),
-              let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              let value = array.first?["description"] as? String,
-              value.count > 30 else { return nil }
-        return value.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+    struct SourceMetadata: Sendable {
+        let synopsis: String?
+        let image: String?
     }
+    private static var metadataCache: [String: (Date, SourceMetadata)] = [:]
+    func sourceMetadata(url: String) async throws -> SourceMetadata {
+        let key = moduleCacheKey + "|" + url
+        if let cached = Self.metadataCache[key], Date().timeIntervalSince(cached.0) < 3600 { return cached.1 }
+        let json = try await callAsyncJS("extractDetails", args: [url])
+        let row = try Self.decodeSourceRows(json).first ?? [:]
+        let text = (row["description"] as? String ?? "")
+            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let image = (row["image"] as? String).flatMap { value -> String? in
+            guard let parsed = URL(string: value), StreamPreflight.validRemoteURL(parsed) else { return nil }
+            return value
+        }
+        let result = SourceMetadata(synopsis: text.count > 30 ? text : nil, image: image)
+        if result.synopsis != nil || result.image != nil {
+            if Self.metadataCache.count >= 300 { Self.metadataCache.removeAll() }
+            Self.metadataCache[key] = (Date(), result)
+        }
+        return result
+    }
+    func sourceDescription(url: String) async throws -> String? { try await sourceMetadata(url: url).synopsis }
 
     func fetchEpisodes(url: String, season: Int? = nil) async throws -> [EpisodeLink] {
         let key = moduleCacheKey + "|" + url + (season.map { "|season=\($0)" } ?? "")

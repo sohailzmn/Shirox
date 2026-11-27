@@ -18,6 +18,7 @@ struct AniListMedia: Identifiable, Codable {
     let relations: AniListRelations?
     let type: String?
     let format: String?
+    var synonyms: [String]? = nil
 
     var plainDescription: String? {
         guard let desc = description else { return nil }

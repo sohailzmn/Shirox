@@ -331,8 +331,7 @@ struct PlayerView: View {
 
             if !castManager.isConnected, skip85ButtonFrame != .zero,
                activeSkipSegment != nil || showNextEpisodePrompt {
-                ZStack(alignment: .topLeading) {
-                    Color.clear
+                GeometryReader { geometry in
                     HStack(spacing: 10) {
                         if let segment = activeSkipSegment {
                             PlayerSkipButton(segmentType: segment, onSkip: skipToSegmentEnd)
@@ -352,10 +351,10 @@ struct PlayerView: View {
                                     .clipShape(RoundedRectangle(cornerRadius: 7))
 
                                     VStack(alignment: .leading, spacing: 2) {
-                                        Text("UP NEXT · EP \((currentContext?.episodeNumber ?? 0) + 1)")
+                                        Text("ALS NÄCHSTES · FOLGE \((currentContext?.sourceEpisodeNumber ?? 0) + 1)")
                                             .font(.caption2.weight(.bold))
                                             .foregroundStyle(.white.opacity(0.8))
-                                        Text(upcomingEpisodeTitle ?? "Play Next Episode")
+                                        Text(upcomingEpisodeTitle ?? "Nächste Folge abspielen")
                                             .font(.subheadline.weight(.semibold))
                                             .foregroundStyle(.white)
                                             .lineLimit(1)
@@ -369,7 +368,11 @@ struct PlayerView: View {
                             .buttonStyle(.plain)
                         }
                     }
-                    .offset(x: skip85ButtonFrame.minX, y: skip85ButtonFrame.minY)
+                    .frame(maxWidth: min(geometry.size.width - 40, 560), alignment: .trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.horizontal, 20)
+                    .padding(.top, max(20, min(skip85ButtonFrame.minY - geometry.frame(in: .global).minY - 62,
+                                               geometry.size.height - 100)))
                 }
                 .ignoresSafeArea()
                 .allowsHitTesting(true)
@@ -1622,7 +1625,8 @@ struct PlayerView: View {
     private func requestSkipMetadataIfNeeded() {
         guard !didRequestSkipSegments, skipLookupAttempts < 2,
               nextSkipLookupAt.map({ Date() >= $0 }) ?? true,
-              let ctx = currentContext, ctx.aniListID != nil || ctx.malID != nil,
+              let ctx = currentContext,
+              ctx.aniListID != nil || ctx.malID != nil || SourceAnimeSkipIdentity.canResolve(ctx),
               let item = player?.currentItem, item.status == .readyToPlay else { return }
 
         // A hoster swap can leave the previous episode's duration in SwiftUI until
@@ -1645,6 +1649,30 @@ struct PlayerView: View {
             // Recover a missing MAL mapping so AniSkip can deliver verified
             // opening/ending times. Older module contexts often carry only AniList ID.
             var malID = initialMalID
+            var firstLookupEpisode = ep
+            if aniListID == nil, malID == nil,
+               let identity = await SourceAnimeSkipIdentity.shared.resolve(ctx) {
+                aniListID = identity.aniListID
+                malID = identity.malID
+                // Source episodes are franchise-global; resolve the season before
+                // querying AniSkip, whose episode numbers restart for each entry.
+                let sourceGlobal = await SourceAnimeSkipIdentity.shared.globalEpisode(ctx)
+                if let sourceGlobal, let mapped = await SeasonChainMapper.shared.resolve(
+                    globalEpisode: sourceGlobal, anchorAniListID: aniListID, anchorMALID: malID) {
+                    aniListID = mapped.aniListID ?? aniListID
+                    malID = mapped.malID ?? aniListID.flatMap {
+                        IDMappingService.shared.cachedMalId(forAnilistId: $0)
+                    }
+                    firstLookupEpisode = mapped.relativeEpisode
+                } else if (ctx.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? 1) > 1 {
+                    // Never apply the first season's intro to an unmapped sequel.
+                    guard !Task.isCancelled, player?.currentItem === item,
+                          currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
+                    didRequestSkipSegments = false
+                    nextSkipLookupAt = Date().addingTimeInterval(18)
+                    return
+                }
+            }
             if malID == nil, let aniListID {
                 malID = await IDMappingService.shared.malId(forAnilistId: aniListID)
             }
@@ -1653,7 +1681,7 @@ struct PlayerView: View {
 
             if let malID, malID > 0 {
                 let fast = await SkipTimestampsService.shared.fetchFastSegments(
-                    malID: malID, episode: ep, playbackDuration: actualDuration,
+                    malID: malID, episode: firstLookupEpisode, playbackDuration: actualDuration,
                     refreshIncomplete: retryIncomplete)
                 guard !Task.isCancelled, player?.currentItem === item,
                       currentContext?.episodeNumber == ep, currentStream.url == streamURL else { return }
@@ -1669,8 +1697,8 @@ struct PlayerView: View {
             // tracking, but skip metadata previously never used it. Only attempt
             // the slower season mapping after the instant raw lookup was
             // incomplete. Never change the actual playback/progress episode.
-            var lookupEpisode = ep
-            if ep > 1, let mapped = await SeasonChainMapper.shared.resolve(
+            var lookupEpisode = firstLookupEpisode
+            if firstLookupEpisode == ep, ep > 1, let mapped = await SeasonChainMapper.shared.resolve(
                 globalEpisode: ep, anchorAniListID: aniListID, anchorMALID: malID
             ) {
                 guard !Task.isCancelled, player?.currentItem === item,

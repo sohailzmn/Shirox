@@ -12,8 +12,15 @@ enum ModuleSeasonRouting {
         }
         return nil
     }
-    static func seasonNumber(for href: String) -> Int? { pathNumber(href, prefix: "staffel-") }
-    static func episodeNumber(for href: String) -> Int? { pathNumber(href, prefix: "episode-") }
+    private static func officialEpisodePart(_ href: String, group: Int) -> Int? {
+        guard let url = URL(string: href), ["southpark.de", "www.southpark.de"].contains(url.host?.lowercased() ?? ""),
+              let regex = try? NSRegularExpression(pattern: "-staffel-([0-9]+)-ep-([0-9]+)$"),
+              let match = regex.firstMatch(in: url.path, range: NSRange(url.path.startIndex..., in: url.path)),
+              let range = Range(match.range(at: group), in: url.path) else { return nil }
+        return Int(url.path[range])
+    }
+    static func seasonNumber(for href: String) -> Int? { pathNumber(href, prefix: "staffel-") ?? officialEpisodePart(href, group: 1) }
+    static func episodeNumber(for href: String) -> Int? { pathNumber(href, prefix: "episode-") ?? officialEpisodePart(href, group: 2) }
 
     static func groups(_ episodes: [EpisodeLink]) -> [[EpisodeLink]] {
         guard let first = episodes.first else { return [] }

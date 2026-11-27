@@ -5,10 +5,10 @@ enum SkipSegmentType: String, CaseIterable, Hashable {
 
     var label: String {
         switch self {
-        case .intro:   return "Skip Intro"
-        case .recap:   return "Skip Recap"
-        case .credits: return "Skip Credits"
-        case .preview: return "Skip Preview"
+        case .intro:   return "Intro überspringen"
+        case .recap:   return "Rückblick überspringen"
+        case .credits: return "Abspann überspringen"
+        case .preview: return "Vorschau überspringen"
         }
     }
 }

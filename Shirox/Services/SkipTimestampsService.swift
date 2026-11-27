@@ -340,3 +340,71 @@ private struct AniSkipResponse: Decodable {
     let found: Bool
     let results: [Item]
 }
+
+
+/// Resolve only source-backed anime. A live-action series must never acquire
+/// unrelated anime skip markers from a similarly named AniList search result.
+@MainActor
+final class SourceAnimeSkipIdentity {
+    static let shared = SourceAnimeSkipIdentity()
+    struct Identity { let aniListID: Int; let malID: Int? }
+    private var cache: [String: Identity] = [:]
+
+    static func canResolve(_ context: PlayerContext) -> Bool {
+        [context.detailHref, context.workingDetailHref, context.episodeHref]
+            .compactMap { $0 }.contains { SourceCatalogRouting.kind(for: $0) == .anime }
+    }
+
+    static func normalized(_ title: String) -> String {
+        title.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }
+            .map(String.init).joined()
+    }
+
+    static func exactMatch(_ candidates: [AniListMedia], title: String) -> AniListMedia? {
+        let expected = normalized(title)
+        guard !expected.isEmpty else { return nil }
+        let matches = candidates.filter { media in
+            ([media.title.english, media.title.romaji, media.title.native].compactMap { $0 } + (media.synonyms ?? []))
+                .contains { normalized($0) == expected }
+        }
+        // Exclude similarly titled films, specials and later seasons when a TV
+        // franchise's original entry is available. No fuzzy first-result fallback.
+        let tv = matches.filter { $0.format == "TV" }
+        let eligible = tv.isEmpty ? matches : tv
+        return eligible.sorted {
+            if $0.seasonYear != $1.seasonYear { return ($0.seasonYear ?? Int.max) < ($1.seasonYear ?? Int.max) }
+            return $0.id < $1.id
+        }.first
+    }
+
+    /// A targeted source-season response starts numbering at one. Recover the
+    /// franchise-global index from the full catalogue before season ID mapping.
+    func globalEpisode(_ context: PlayerContext) async -> Int? {
+        let season = context.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? 1
+        if season == 1 { return context.sourceEpisodeNumber }
+        guard let href = context.episodeHref,
+              let detail = context.workingDetailHref ?? context.detailHref,
+              let module = ModuleManager.shared.modules.first(where: { $0.id == context.moduleId }) ?? BundledUnifiedSource.module else { return nil }
+        return try? await PlaybackDeadline.run(seconds: 12) {
+            let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false
+            try await runner.load(module: module)
+            let episodes = try await runner.fetchEpisodes(url: detail)
+            return episodes.first { PlaybackHistoryIdentity.canonical($0.href) == PlaybackHistoryIdentity.canonical(href) }.map { Int($0.number) }
+        }
+    }
+
+    func resolve(_ context: PlayerContext) async -> Identity? {
+        guard Self.canResolve(context) else { return nil }
+        let key = Self.normalized(context.mediaTitle)
+        if let cached = cache[key] { return cached }
+        do {
+            let candidates = try await AniListService.shared.search(keyword: context.mediaTitle)
+            guard !Task.isCancelled,
+                  let match = Self.exactMatch(candidates, title: context.mediaTitle) else { return nil }
+            let identity = Identity(aniListID: match.id, malID: match.idMal)
+            cache[key] = identity
+            return identity
+        } catch { return nil }
+    }
+}

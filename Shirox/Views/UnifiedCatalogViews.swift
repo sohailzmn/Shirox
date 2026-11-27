@@ -112,6 +112,9 @@ struct CatalogPoster: View {
             }.aspectRatio(2.0 / 3.0, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
             Text(title.name).font(.subheadline.weight(.semibold)).lineLimit(2)
+            if let synopsis = title.synopsis, !synopsis.isEmpty {
+                Text(synopsis).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+            }
             Text(availability.state(title.id).label).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
         }.foregroundStyle(.primary)
     }
@@ -154,6 +157,13 @@ struct CatalogDetailScreen: View {
     @State private var error: String?
     @State private var playTask: Task<Void, Never>?
     @State private var sourceSynopsis: String?
+    @State private var sourceMetadata: ModuleJSRunner.SourceMetadata?
+    private var displayedTitle: CatalogTitle {
+        var value = title
+        if let image = sourceMetadata?.image { value.poster = image }
+        if let synopsis = sourceMetadata?.synopsis { value.synopsis = synopsis }
+        return value
+    }
     @State private var sourceEpisodes: [EpisodeLink] = []
     @ObservedObject private var availability = CatalogAvailabilityStore.shared
     @ObservedObject private var watchlist = CatalogWatchlist.shared
@@ -192,7 +202,7 @@ struct CatalogDetailScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                CatalogHero(title: title, showsAction: false)
+                CatalogHero(title: displayedTitle, showsAction: false)
                 VStack(alignment: .leading, spacing: 16) {
                     Text(title.name).font(.title.bold())
                     Text([title.kind.label, title.year].compactMap { $0 }.joined(separator: " · ")).foregroundStyle(.secondary)
@@ -201,7 +211,7 @@ struct CatalogDetailScreen: View {
                         Label(watchlist.contains(title) ? "Aus Merkliste entfernen" : "Zur Merkliste hinzufügen",
                               systemImage: watchlist.contains(title) ? "checkmark" : "plus")
                     }.buttonStyle(.bordered)
-                    if let synopsis = title.synopsis ?? sourceSynopsis, !synopsis.isEmpty { Text(synopsis) }
+                    if let synopsis = sourceMetadata?.synopsis ?? title.synopsis ?? sourceSynopsis, !synopsis.isEmpty { Text(synopsis) }
                     else { Text("Deutsche Beschreibung nicht verfügbar.").foregroundStyle(.secondary) }
                     if let media = title.anime {
                         NavigationLink("Anime-Details und Merkliste") { AniListDetailView(mediaId: media.id, preloadedMedia: media) }
@@ -257,12 +267,12 @@ struct CatalogDetailScreen: View {
             if let href = title.sourceHref, let module = BundledUnifiedSource.module {
                 do {
                     let runner = ModuleJSRunner(); runner.allowsVerificationPrompt = false; try await runner.load(module: module)
+                    sourceMetadata = try? await runner.sourceMetadata(url: href)
                     sourceEpisodes = try await PlaybackDeadline.run(seconds: 25) { try await runner.fetchEpisodes(url: href) }
                     let groups = Dictionary(grouping: sourceEpisodes) { ModuleSeasonRouting.seasonNumber(for: $0.href) ?? 1 }
                     seasons = groups.keys.sorted().map { CatalogSeason(number: $0, name: "Staffel \($0)", episodeCount: groups[$0]?.count ?? 0) }
                     season = savedItem?.sourceSeason ?? savedItem?.episodeHref.flatMap { ModuleSeasonRouting.seasonNumber(for: $0) } ?? seasons.first?.number ?? 1
                     await loadEpisodes()
-                    sourceSynopsis = try? await runner.sourceDescription(url: href)
                     if sourceEpisodes.isEmpty { error = "Die Quelle hat keine Folgen geliefert. Bitte später erneut versuchen." }
                 } catch { self.error = error.localizedDescription }
                 return
@@ -288,7 +298,7 @@ struct CatalogDetailScreen: View {
     private func loadEpisodes() async {
         if title.sourceHref != nil {
             episodes = sourceEpisodes.filter { (ModuleSeasonRouting.seasonNumber(for: $0.href) ?? 1) == season }.map { link in
-                let number = Int((link.href.range(of: #"/episode-(\d+)"#, options: .regularExpression)).map { String(link.href[$0]).replacingOccurrences(of: "/episode-", with: "") } ?? "") ?? Int(link.number)
+                let number = ModuleSeasonRouting.episodeNumber(for: link.href) ?? Int(link.number)
                 return CatalogEpisode(number: number, name: "Folge \(number)", airDate: nil, knownReleased: true)
             }
             return

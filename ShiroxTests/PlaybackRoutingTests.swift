@@ -635,4 +635,47 @@ final class PlaybackRoutingTests: XCTestCase {
             duration: 1440, hasEpisodeContext: true, isLocalPlayback: false))
     }
 
+    @MainActor
+    func testSourceAnimeSkipIdentityRequiresAnExactTitleOrAlias() throws {
+        let data = Data(#"[{"id":1,"idMal":11,"title":{"english":"Naruto"},"coverImage":{},"format":"TV","seasonYear":2002},{"id":2,"idMal":22,"title":{"english":"Naruto Shippuden"},"coverImage":{},"format":"TV","seasonYear":2007},{"id":3,"idMal":33,"title":{"romaji":"Detective Conan"},"synonyms":["Detektiv Conan"],"coverImage":{},"format":"TV","seasonYear":1996}]"#.utf8)
+        let candidates = try JSONDecoder().decode([AniListMedia].self, from: data)
+        XCTAssertEqual(SourceAnimeSkipIdentity.exactMatch(candidates, title: "Naruto: Shippūden")?.id, 2)
+        XCTAssertEqual(SourceAnimeSkipIdentity.exactMatch(candidates, title: "Detektiv Conan")?.idMal, 33)
+        XCTAssertNil(SourceAnimeSkipIdentity.exactMatch(candidates, title: "Naruto Movie"))
+        XCTAssertNil(SourceAnimeSkipIdentity.exactMatch(candidates, title: "Dexter"))
+    }
+
+    @MainActor
+    func testSourceOnlyAnimeCanRequestSkipMetadataButLiveActionCannot() {
+        func context(_ href: String) -> PlayerContext {
+            PlayerContext(mediaTitle: "Test", episodeNumber: 1, episodeTitle: nil, imageUrl: "",
+                aniListID: nil, malID: nil, moduleId: nil, totalEpisodes: nil,
+                availableEpisodes: nil, isAiring: nil, resumeFrom: nil,
+                detailHref: href, episodeHref: nil, streamTitle: nil, workingDetailHref: nil, thumbnailUrl: nil)
+        }
+        XCTAssertTrue(SourceAnimeSkipIdentity.canResolve(context("https://aniworld.to/anime/stream/naruto")))
+        XCTAssertFalse(SourceAnimeSkipIdentity.canResolve(context("https://serienstream.to/serie/dexter")))
+        XCTAssertFalse(SourceAnimeSkipIdentity.canResolve(context("https://www.southpark.de/seasons/south-park")))
+        XCTAssertFalse(SourceAnimeSkipIdentity.canResolve(context("https://aniworld.to.evil.example/anime/stream/naruto")))
+    }
+
+    func testOfficialSouthParkKeepsSeasonEpisodeAndResumeIdentity() {
+        let href = "https://www.southpark.de/folgen/940f8z/south-park-cartman-und-die-analsonde-staffel-1-ep-1"
+        XCTAssertEqual(ModuleSeasonRouting.seasonNumber(for: href), 1)
+        XCTAssertEqual(ModuleSeasonRouting.episodeNumber(for: href), 1)
+        XCTAssertEqual(SourceCatalogRouting.kind(for: href), .series)
+        XCTAssertTrue(DetailViewModel.isSeriesSource(href))
+        XCTAssertEqual(PlaybackHistoryIdentity.show(href), "https://www.southpark.de/seasons/south-park")
+        XCTAssertNil(SourceCatalogRouting.kind(for: "https://www.southpark.de.evil.example/folgen/test"))
+    }
+
+    func testSkipButtonsUseGermanLabelsAndRecapsRemainManuallySkippable() {
+        XCTAssertEqual(SkipSegmentType.intro.label, "Intro überspringen")
+        XCTAssertEqual(SkipSegmentType.credits.label, "Abspann überspringen")
+        XCTAssertEqual(SkipSegmentType.recap.label, "Rückblick überspringen")
+        let chapters = SkipSegments(recap: .init(startMs: 0, endMs: 40_000))
+        XCTAssertEqual(PlayerChapterTiming.activeSegment(at: 12, segments: chapters), .recap)
+        XCTAssertFalse(PlayerChapterTiming.shouldAutoSkip(.recap, segments: chapters))
+    }
+
 }

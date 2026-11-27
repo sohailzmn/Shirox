@@ -141,6 +141,10 @@ final class AniListService {
           Page(page: 1, perPage: \(DataSaver.rowLength(25))) {
             media(search: $search, type: ANIME, sort: SEARCH_MATCH, isAdult: false) {
               id
+              idMal
+              synonyms
+              format
+              seasonYear
               title { romaji english native }
               coverImage { large extraLarge }
               averageScore

@@ -73,7 +73,6 @@ struct PlayerBottomBar: View {
                                 .lineLimit(1)
                         }
                     }
-                    skip85Button
                 }
                 // Without this the button group wins the width contest and the title collapses
                 // to a few characters even when most of the bar is empty.
@@ -81,6 +80,7 @@ struct PlayerBottomBar: View {
 
                 Spacer(minLength: 8)
 
+                skip85Button
                 rightButtonGroup
             }
             .padding(.horizontal, isPad ? 30 : 20)
